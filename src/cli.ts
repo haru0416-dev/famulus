@@ -33,6 +33,7 @@ import { AUTONOMOUS_ROLE, BUDGET, Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
 import { Memory, renderRecall } from "./services/Memory.ts"
+import { Notify } from "./services/Notify.ts"
 import { type ProposalRow, type ProposalStatus, Proposals } from "./services/Proposals.ts"
 
 const short = (id: string) => id.slice(0, 8)
@@ -122,6 +123,7 @@ const program = (argv: readonly string[]) =>
           day.startIso,
           day.endIso,
         )
+        const notify = yield* Notify
         const last = yield* db.meta("tick:last")
         const lastActive = yield* db.meta("tick:last_active")
         // 台帳が溜まっているか。**器があることと中身があることは別**で、
@@ -144,6 +146,9 @@ const program = (argv: readonly string[]) =>
             : "心拍: まだ一度も回っていない — systemctl --user status open-zero-tick.timer",
           `台帳: ${Number(mem?.n ?? 0)} 件(うち取り込み ${Number(mem?.imported ?? 0)} セッション)`,
           `裁可待ち: ${pending.length} 件`,
+          // 通知先が無いことは実行時に何も起こさない(黙って false になる)ので、ここで出さないと
+          // 「静かなのは用が無いからか、宛先が空だからか」が分からない。
+          notify.configured() ? "通知: 出せる" : "通知: 宛先が無い(.env の OPEN_ZERO_NTFY_TOPIC が空)",
         ].join("\n")
       }
 
