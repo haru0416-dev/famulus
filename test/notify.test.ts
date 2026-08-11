@@ -53,6 +53,18 @@ const configured = Effect.gen(function* () {
   return notify.configured()
 })
 
+const inbox = (since: string) =>
+  Effect.gen(function* () {
+    const notify = yield* Notify
+    return yield* notify.inbox(since)
+  })
+
+/** 押し戻しの設定は個別に立てる。立てっぱなしにすると、前のテストのボタンが次の本文に混ざる。 */
+const noReply = () => {
+  process.env.OPEN_ZERO_NTFY_TOPIC_IN = ""
+  process.env.OPEN_ZERO_NTFY_PUBLIC_URL = ""
+}
+
 test("トピックが無ければ何もしない — 押さないし落ちない", async () => {
   const ntfy = await fakeNtfy()
   process.env.OPEN_ZERO_NTFY_URL = ntfy.url
@@ -131,4 +143,103 @@ test("繋がらなくても落ちない — 心拍は通知の失敗で止まら
   await withHarness(async (h) => {
     assert.equal(await h.run(push({ title: "見出し", body: "本文" })), false)
   })
+})
+
+test("ボタンは受信箱へ発行する http action になる", async () => {
+  const ntfy = await fakeNtfy()
+  process.env.OPEN_ZERO_NTFY_URL = ntfy.url
+  process.env.OPEN_ZERO_NTFY_TOPIC = "oz-test"
+  process.env.OPEN_ZERO_NTFY_TOPIC_IN = "oz-test-in"
+  process.env.OPEN_ZERO_NTFY_PUBLIC_URL = "https://vps.example:8443"
+  try {
+    await withHarness(async (h) => {
+      await h.run(
+        push({ title: "見出し", body: "本文", actions: [{ label: "止める", reply: "止めて: 見出し" }] }),
+      )
+      assert.deepEqual(ntfy.got[0]?.body.actions, [
+        {
+          action: "http",
+          label: "止める",
+          // 端末が踏む URL。127.0.0.1 のままだとスマホは自分自身を叩く。
+          url: "https://vps.example:8443",
+          method: "POST",
+          body: JSON.stringify({ topic: "oz-test-in", message: "止めて: 見出し" }),
+          clear: true,
+        },
+      ])
+    })
+  } finally {
+    noReply()
+    await ntfy.close()
+  }
+})
+
+test("受信トピックが無ければボタンごと落とす — 押しても何も起きないボタンは出さない", async () => {
+  const ntfy = await fakeNtfy()
+  process.env.OPEN_ZERO_NTFY_URL = ntfy.url
+  process.env.OPEN_ZERO_NTFY_TOPIC = "oz-test"
+  noReply()
+  try {
+    await withHarness(async (h) => {
+      await h.run(push({ title: "見出し", body: "本文", actions: [{ label: "止める", reply: "止めて" }] }))
+      assert.equal(ntfy.got[0]?.body.actions, undefined)
+    })
+  } finally {
+    await ntfy.close()
+  }
+})
+
+test("受信箱は message の行だけ拾う", async () => {
+  const lines = [
+    '{"id":"a1","event":"open","topic":"oz-test-in"}',
+    '{"id":"a2","event":"message","topic":"oz-test-in","message":"止めて: e8370fe2"}',
+    '{"id":"a3","event":"keepalive","topic":"oz-test-in"}',
+    '{"id":"a4","event":"message","topic":"oz-test-in","message":"来週にして"}',
+    "",
+  ].join("\n")
+  const server = createServer((_req, res) => res.writeHead(200).end(lines))
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const { port } = server.address() as AddressInfo
+  process.env.OPEN_ZERO_NTFY_URL = `http://127.0.0.1:${port}`
+  process.env.OPEN_ZERO_NTFY_TOPIC = "oz-test"
+  process.env.OPEN_ZERO_NTFY_TOPIC_IN = "oz-test-in"
+  try {
+    await withHarness(async (h) => {
+      assert.deepEqual(await h.run(inbox("all")), [
+        { id: "a2", text: "止めて: e8370fe2" },
+        { id: "a4", text: "来週にして" },
+      ])
+    })
+  } finally {
+    noReply()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+test("受信トピックが無ければ受信箱は空", async () => {
+  const ntfy = await fakeNtfy()
+  process.env.OPEN_ZERO_NTFY_URL = ntfy.url
+  process.env.OPEN_ZERO_NTFY_TOPIC = "oz-test"
+  noReply()
+  try {
+    await withHarness(async (h) => {
+      assert.deepEqual(await h.run(inbox("all")), [])
+      assert.equal(ntfy.got.length, 0)
+    })
+  } finally {
+    await ntfy.close()
+  }
+})
+
+test("受信箱が読めなくても空を返す — 心拍は返事が読めないだけで止まらない", async () => {
+  process.env.OPEN_ZERO_NTFY_URL = "http://127.0.0.1:1"
+  process.env.OPEN_ZERO_NTFY_TOPIC = "oz-test"
+  process.env.OPEN_ZERO_NTFY_TOPIC_IN = "oz-test-in"
+  try {
+    await withHarness(async (h) => {
+      assert.deepEqual(await h.run(inbox("all")), [])
+    })
+  } finally {
+    noReply()
+  }
 })

@@ -148,7 +148,9 @@ const program = (argv: readonly string[]) =>
           `裁可待ち: ${pending.length} 件`,
           // 通知先が無いことは実行時に何も起こさない(黙って false になる)ので、ここで出さないと
           // 「静かなのは用が無いからか、宛先が空だからか」が分からない。
-          notify.configured() ? "通知: 出せる" : "通知: 宛先が無い(.env の OPEN_ZERO_NTFY_TOPIC が空)",
+          notify.configured()
+            ? `通知: 出せる${notify.canReply() ? " / 押し戻しも受けられる" : "(押し戻しは受けられない)"}`
+            : "通知: 宛先が無い(.env の OPEN_ZERO_NTFY_TOPIC が空)",
         ].join("\n")
       }
 

@@ -30,6 +30,7 @@ import { Attention, type Digest, type ObservedEvent } from "./services/Attention
 import { Db } from "./services/Db.ts"
 import { buildFencedPrompt, Governance, type UntrustedBlock } from "./services/Governance.ts"
 import { Memory } from "./services/Memory.ts"
+import { Notify } from "./services/Notify.ts"
 
 // **モジュール直下の設定より先に読む。** 下の const は評価時に env を見るので、順番が意味を持つ。
 loadEnv()
@@ -160,6 +161,30 @@ const blocked = Effect.gen(function* () {
     )
 })
 
+/**
+ * 受信箱を台帳に移す。**digest より先に呼ぶ** — 届いていた文がそのまま未読の入力になり、
+ * 「持ち主から言われた」ことが起きる理由になる。ここが後だと、返事は次の心拍まで読まれない。
+ *
+ * 位置を持っていない初回は**取り込まずに位置だけ進める**。ntfy は数十時間ぶん抱えているので、
+ * 位置なしで引くと昨日の返事が今日の指示として流れ込む。
+ *
+ * source は owner。tailnet の中に居るのは持ち主の端末だけで、鍵は Tailscale が持っている。
+ * 仮に別の端末から投げられても、外に出る行為は予告を経るので実行前に持ち主の目を通る。
+ */
+const drainInbox = Effect.gen(function* () {
+  const notify = yield* Notify
+  const db = yield* Db
+  const mem = yield* Memory
+  const cursor = yield* db.meta("ntfy:in_cursor")
+  const msgs = yield* notify.inbox(cursor ?? "all")
+  const last = msgs.at(-1)
+  if (!last) return 0
+  yield* db.setMeta("ntfy:in_cursor", last.id)
+  if (!cursor) return 0
+  for (const m of msgs) yield* mem.remember({ source: "owner", content: m.text, at: nowIso() })
+  return msgs.length
+})
+
 /** 心拍の回数だけ数えておく。行を増やさずに「生きているか」が分かる最小の痕跡。 */
 const bumpCount = (key: string) =>
   Effect.gen(function* () {
@@ -172,6 +197,8 @@ const bumpCount = (key: string) =>
 async function tick(): Promise<string> {
   const d = await run(
     Effect.gen(function* () {
+      const arrived = yield* drainInbox
+      if (arrived > 0) log(`受信箱から ${arrived} 件`)
       const att = yield* Attention
       return yield* att.digest()
     }),
