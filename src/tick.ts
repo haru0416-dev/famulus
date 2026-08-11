@@ -21,6 +21,7 @@
 import { init } from "@flue/runtime"
 import { sqlite, start } from "@flue/runtime/node"
 import { Effect } from "effect"
+import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
 import { claudeMaxProvider } from "./model/provider.ts"
@@ -29,6 +30,9 @@ import { Attention, type Digest, type ObservedEvent } from "./services/Attention
 import { Db } from "./services/Db.ts"
 import { buildFencedPrompt, Governance, type UntrustedBlock } from "./services/Governance.ts"
 import { Memory } from "./services/Memory.ts"
+
+// **モジュール直下の設定より先に読む。** 下の const は評価時に env を見るので、順番が意味を持つ。
+loadEnv()
 
 /** Flue の会話永続化。対話(`flue run`)とは別の口にしておく — 履歴が混ざると起点が読めない。 */
 const FLUE_DB = process.env.OPEN_ZERO_FLUE_DB ?? ".data/flue-tick.db"
@@ -102,8 +106,8 @@ function buildPrompt(d: Digest): string {
   if (d.pending.length > 0) {
     sections.push(
       [
-        "## 裁可待ちの提案(あなたは決められない。持ち主の裁可を待っている)",
-        ...d.pending.map((p) => `- ${short(p.id)} ${p.summary}(あと ${p.daysLeft} 日で期限切れ)`),
+        "## 返事待ちの提案(あなたは決められない。持ち主が見るのを待っている)",
+        ...d.pending.map((p) => `- ${short(p.id)} ${p.summary}(あと ${p.daysLeft} 日で流れる)`),
       ].join("\n"),
     )
   }
@@ -111,8 +115,13 @@ function buildPrompt(d: Digest): string {
   sections.push(
     [
       "## 今回やること",
-      "台帳の中(remember / watch / unwatch / ask / answer)は自分の判断で書いてよい。裁可は要らない。",
-      "外に出る行為(送信・予約・購入・削除)は propose で提案として置く。実行はしない。",
+      "自分の記録(remember / watch / unwatch / ask / answer)は自分の判断で書いてよい。確認は要らない。",
+      "外に出る行為(送信・予約・購入・削除)は propose で置く。実行はしない。",
+      "",
+      "**書いても届かない。** ここで書いたものは自分の側に残るだけで、持ち主は読みに来ない。",
+      "読んでほしいものがあるなら `tell` で持ち主の手元へ押す。ただし**用があるときだけ**",
+      "— 動いた結果、知らないと選べないこと、期限が迫っているもの。経過や気付きは押さない。",
+      "鳴る回数が増えるほど、次に鳴ったときに読まれなくなる。",
       "",
       "**何もしないのが正解であることが多い。** 動かす必要が無ければ道具を1つも呼ばず、",
       "「今は動かない。理由は〜」と一行で書いて終えてよい。それは失敗ではない。",

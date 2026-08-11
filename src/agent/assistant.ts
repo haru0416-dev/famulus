@@ -25,6 +25,7 @@ import {
 } from "@flue/runtime"
 import { Effect } from "effect"
 import * as v from "valibot"
+import { loadEnv } from "../core/env.ts"
 import { localStamp, nowIso } from "../core/time.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "../model/claude-cli.ts"
 import { CLAUDE_MAX_PROVIDER_ID, claudeMaxProvider, lane } from "../model/provider.ts"
@@ -33,10 +34,14 @@ import { Attention } from "../services/Attention.ts"
 import { buildFencedPrompt, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { Memory, renderRecall } from "../services/Memory.ts"
+import { Notify } from "../services/Notify.ts"
 import { Proposals } from "../services/Proposals.ts"
 import { defaultSources, renderHits, SOURCE_MENU, searchWeb } from "../services/Search.ts"
 import { fetchPage } from "../services/Web.ts"
 import { soulInstruction } from "./soul.ts"
+
+// `flue run` から起きる経路。ここも systemd/シェルを通らないので、自分で `.env` を読む。
+loadEnv()
 
 // Flue のモデル解決は pi-ai の Models に丸ごと委譲されている。ここで差すのが定額枠への唯一の橋。
 setProvider(claudeMaxProvider())
@@ -556,6 +561,49 @@ export default function Assistant() {
           const att = yield* Attention
           const closed = yield* att.answer(id, answer, { confirmed })
           return `問い ${closed.slice(0, 8)} を閉じた(${confirmed ? "確認済み" : "未確認"})。`
+        }),
+      ),
+  })
+
+  /**
+   * 持ち主に届ける口。**記録に書くのと届けるのは別のこと。**
+   *
+   * `remember` は自分の側に残すだけで、持ち主は `oz recall` を打たない限り一生読まない。
+   * 調べたことが役に立つのは相手が読んだときなので、読ませたいものはここから外へ押す。
+   * 承認は要らない — 出るのは持ち主自身の端末だけで、外の誰にも届かない。
+   */
+  useTool({
+    name: "tell",
+    description:
+      "持ち主のスマホに直接届ける。**用があるときだけ**。相手が今すぐ知りたいこと・知らないと選べないこと・" +
+      "こちらが動いた結果だけを出す。作業の経過、気付きの共有、起きた報告は出さない — " +
+      "鳴った回数が増えるほど次に鳴ったとき読まれなくなる。届いて困らないかではなく、**鳴らす価値があるか**で決める。",
+    input: v.object({
+      title: v.pipe(
+        v.string(),
+        v.description("1行目。ロック画面ではここまでしか読めないので、これだけで用が分かる形にする。"),
+      ),
+      body: v.pipe(v.string(), v.description("本文。名前・日付・URL・金額は省かずそのまま入れる。")),
+      urgent: v.optional(
+        v.pipe(v.boolean(), v.description("今日中に動かないと手遅れになるものだけ true。既定は false。")),
+      ),
+    }),
+    run: async ({ data: { title, body, urgent } }) =>
+      run(
+        Effect.gen(function* () {
+          const notify = yield* Notify
+          const mem = yield* Memory
+          const sent = yield* notify.push({ title, body, ...(urgent ? { priority: 4 } : {}) })
+          // 押した事実は自分の側にも残す。**届いたかどうかまで残す** — 届いていない通知を
+          // 「伝えた」として次のターンで前提にすると、持ち主だけが知らない話が進む。
+          yield* mem.remember({
+            source: "system",
+            content: { told: title, body, sent },
+            text: `${title}\n${body}`,
+          })
+          return sent
+            ? `送った: ${title}`
+            : "送れなかった(通知先が未設定か、ntfy に届かない)。中身は記録に残したので、次に会ったとき口で伝える。"
         }),
       ),
   })

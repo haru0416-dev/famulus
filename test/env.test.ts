@@ -1,0 +1,52 @@
+/**
+ * `.env` の読み込みの検査。**外から渡した値が勝つか**だけを見る。
+ *
+ * 逆向き(ファイルが勝つ)にすると、`FOO=x oz ...` で一度だけ差し替えることができなくなり、
+ * テストも本番の `.env` に引きずられる。順序が壊れても実行時には何も起きないので、
+ * ここで固定していないと壊れたことに気づけない。
+ *
+ * 読み込み済みフラグはモジュール単位なので、1テスト1インスタンス
+ * (`?case=` を付けた動的 import)で読み込み直している。
+ */
+import assert from "node:assert/strict"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { test } from "node:test"
+
+const dir = mkdtempSync(join(tmpdir(), "oz-env-"))
+
+const envFile = (name: string, body: string): string => {
+  const path = join(dir, name)
+  writeFileSync(path, body)
+  return path
+}
+
+/** 毎回まっさらな env.ts を得る。`OUTER` は import 時の環境を捕まえるので、先に差してから呼ぶ。 */
+const fresh = (label: string) =>
+  import(`../src/core/env.ts?case=${label}`) as Promise<typeof import("../src/core/env.ts")>
+
+test("外から渡した値は .env に上書きされない", async () => {
+  process.env.OZ_TEST_OUTER = "外から"
+  const { loadEnv } = await fresh("outer")
+  loadEnv(envFile("outer.env", "OZ_TEST_OUTER=ファイルから\nOZ_TEST_NEW=ファイルから\n"))
+  assert.equal(process.env.OZ_TEST_OUTER, "外から")
+  assert.equal(process.env.OZ_TEST_NEW, "ファイルから")
+})
+
+test(".env が無くても失敗しない", async () => {
+  const { loadEnv } = await fresh("missing")
+  loadEnv(join(dir, "ここには何も置いていない.env"))
+})
+
+test("壊れた .env でも失敗しない", async () => {
+  const { loadEnv } = await fresh("broken")
+  loadEnv(envFile("broken.env", "これは = の無い行\n"))
+})
+
+test("2回目以降は読まない", async () => {
+  const { loadEnv } = await fresh("twice")
+  loadEnv(envFile("first.env", "OZ_TEST_TWICE=1回目\n"))
+  loadEnv(envFile("second.env", "OZ_TEST_TWICE=2回目\n"))
+  assert.equal(process.env.OZ_TEST_TWICE, "1回目")
+})

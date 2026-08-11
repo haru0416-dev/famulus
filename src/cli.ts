@@ -22,6 +22,7 @@
  * 「裁可済み・未実行」で止まる。ここを実行したことにするのが一番大きい嘘なので、そうしない。
  */
 import { Cause, Effect, Exit } from "effect"
+import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
 import { dayRange, localStamp, nowIso } from "./core/time.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "./model/claude-cli.ts"
@@ -353,6 +354,7 @@ function describe(e: unknown): string {
 }
 
 const main = async (): Promise<void> => {
+  loadEnv()
   const rt = runtime()
   try {
     // runPromise は失敗を FiberFailure で包んで投げてくる(message が "An error has occurred" になる)。

@@ -17,6 +17,7 @@ import { Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
 import { Memory } from "./services/Memory.ts"
+import { Notify } from "./services/Notify.ts"
 import { Proposals } from "./services/Proposals.ts"
 
 /** Db の上に載る素のサービス群。 */
@@ -27,6 +28,7 @@ const services = Layer.mergeAll(
   Proposals.Default,
   Attention.Default,
   Intake.Default,
+  Notify.Default,
 )
 
 /**
@@ -83,7 +85,7 @@ export function isRefusal(e: unknown): e is Refusal {
  * — フックが throw すると Flue はモデルを呼ぶ前に submission を落とすので、
  * **ゲートが実際にモデル呼び出しを止める**のはここ。
  */
-export type AppServices = Db | Governance | Memory | Ledger | Proposals | Attention | Intake | Runner
+export type AppServices = Db | Governance | Memory | Ledger | Proposals | Attention | Intake | Notify | Runner
 
 export function run<A, E>(effect: Effect.Effect<A, E, AppServices>, rt: AppRuntime = runtime()): Promise<A> {
   return rt.runPromise(
