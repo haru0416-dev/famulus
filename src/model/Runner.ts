@@ -51,7 +51,7 @@ export interface RunnerRequest {
   readonly role: Role | (string & {})
   readonly prompt: string
   readonly systemPrompt?: string
-  /** 与えると構造化応答を要求する(claude-cli の 904 tok 経路)。 */
+  /** 与えると構造化応答を要求する(claude-cli の StructuredOutput 経路)。 */
   readonly schema?: unknown
   readonly onText?: (delta: string) => void
   readonly signal?: AbortSignal

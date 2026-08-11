@@ -208,7 +208,7 @@ export interface ClaudeCallOptions {
   readonly prompt: string
   readonly model: string
   readonly systemPrompt?: string
-  /** 与えると構造化応答を要求する(`--tools "StructuredOutput"` 経路、904 tok)。 */
+  /** 与えると構造化応答を要求する(`--tools "StructuredOutput"` 経路)。 */
   readonly jsonSchema?: unknown
   readonly timeoutMs?: number
   readonly bin?: string
@@ -276,7 +276,7 @@ export async function callClaude(opts: ClaudeCallOptions): Promise<ClaudeCallRes
 
   const cwd = mkdtempSync(join(tmpdir(), "open-zero-run-"))
   // **prompt は argv に載せない。** Linux は argv の1要素を 128KB (MAX_ARG_STRLEN) に制限するので、
-  // 会話が伸びると `spawn E2BIG` で落ちる(ツール結果が1件 12,000字あるので数往復で越える)。
+  // ツール結果を抱えた会話はすぐそこを越えるので、argv に載せると `spawn E2BIG` で落ちる。
   // `-p` に値を付けなければ stdin から読む(claude・rmod どちらも)。
   const args = [
     "-p",
