@@ -17,7 +17,7 @@ import type { Meter } from "./Governance.ts"
 
 /**
  * **入力は3つに割れる。** `inTok` はキャッシュに載らなかった分だけで、system やスキーマ定義は
- * `cacheWrite`(初回)か `cacheRead`(2回目以降)に入る。実測で `inTok: 2` / `cacheWrite: 904`。
+ * `cacheWrite`(初回)か `cacheRead`(2回目以降)に入る。
  * どれか1つを「入力」として読むと桁が変わるので、見るときは必ず3つ足す。
  */
 export interface Usage {
@@ -83,7 +83,7 @@ export class Ledger extends Effect.Service<Ledger>()("Ledger", {
         const day = dayRange(at)
         const month = monthRange(at)
         const r = yield* db.get(
-          // 入力は3列の和で出す。in_tok だけを「入力」として出すと、実測で 1/450 の数字が表に出る。
+          // 入力は3列の和で出す。in_tok だけを「入力」として出すと、桁の違う数字が表に出る。
           `SELECT COUNT(*) runs, COALESCE(SUM(usd),0) usd, COALESCE(SUM(unpriced),0) unpriced,
                   COALESCE(SUM(in_tok + cache_read + cache_write),0) in_tok,
                   COALESCE(SUM(out_tok),0) out_tok

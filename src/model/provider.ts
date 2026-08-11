@@ -16,8 +16,8 @@
  * それを `ToolCall` コンテンツブロックに翻訳して Pi のハーネスに返す。
  * 実行するのは Pi/Flue 側(= `useTool` フックの統治が効く)。内側の claude は道具を持たない。
  *
- * 費用は claude-cli.ts のヘッダの実測どおり、テキスト 184 tok / 構造化 904 tok。
- * ツール定義そのものはこちらの system prompt に載るので、その分だけ上乗せになる。
+ * **構造化提出はテキスト応答より入力が重い**(StructuredOutput の定義が載るため)。
+ * ツール定義そのものもこちらの system prompt に載るので、その分だけ上乗せになる。
  */
 
 import type {
@@ -65,7 +65,7 @@ function model(id: string, name: string, contextWindow: number, maxTokens: numbe
  * `claude` の CLI 面をそのまま出しながら中身を OpenAI Responses API に差し替える。
  * つまりこちらは**アダプタを1本も書かなくていい** — `OPEN_ZERO_CLAUDE_BIN=~/.local/bin/rmod`
  * を立てて、モデル id をここに載せるだけで claude-cli.ts がそのまま通る
- * (`--json-schema` による構造化出力も通ることを実測で確認済み)。
+ * (`--json-schema` による構造化出力も含めて)。
  *
  * 認証は ChatGPT の OAuth(`~/.codex/auth.json`、auth_mode=chatgpt)。API キーではないので
  * 限界費用 0 の前提は Claude 側と変わらない。ただし**枠は別**で、`quotaCooldown` が見ているのは
@@ -146,11 +146,8 @@ function toolInstruction(context: PiContext): string {
   return [
     "",
     // **見出しを「ツール」にしない。** 内側の claude はツール一覧を「今この場で呼べるもの」と読み、
-    // ネイティブに呼びに行って CLI に `No such tool available: researcher` で弾かれ、
-    // そこで「使えない」と結論して toolCalls を空のまま返す(実測、haiku・同一問い n=10):
-    //   見出し「使えるツール」+ 従来の言い回し … **2/10** しか提出できなかった
-    //   見出し「提出できる依頼(ツールではない)」+ 下の弾かれ方の明示 … **10/10**
-    // 直したのは能力ではなく**名前の付け方**で、呼び方が1つしかないことを先に言う形にしてある。
+    // ネイティブに呼びに行って CLI に `No such tool available` で弾かれ、そこで「使えない」と
+    // 結論して toolCalls を空のまま返す。呼び方が1つしかないことを見出しの側で先に言う。
     "## 提出できる依頼(**ツールではない**)",
     list,
     "",
@@ -159,9 +156,8 @@ function toolInstruction(context: PiContext): string {
     "要らなければ `toolCalls` を空配列にして `text` だけ返す。",
     "",
     "**この場に実行系のツールは1つも無い。** 上の名前をツールとして呼ぼうとすると",
-    "`No such tool available` で弾かれる(実測)。弾かれても「使えない」と結論しない — 提出していないだけ。",
-    // 実測(`--tools ""` で封じた素の CLI に「呼べるツールを列挙して」と訊いた):
-    // `- Read - Edit - Write - Glob - Grep - PowerShell` と返った。**封じてもこの前置きは消えない**。
+    "`No such tool available` で弾かれる。弾かれても「使えない」と結論しない — 提出していないだけ。",
+    // ツールを封じても CLI の前置きは消えないので、素で訊けば Read / Edit / Write が並ぶ。
     "実行系が Read / Edit / Write / Glob / Grep / Bash のような一覧を見せることがあるが、**それは幻**で、",
     "この経路では1つも動かない。MCP・ファイル・カレンダーも最初から無い。",
     "上に載っているものについて「使えない」「載っていない」「権限が無い」とは書かない。",
@@ -172,7 +168,7 @@ function toolInstruction(context: PiContext): string {
 /**
  * 提出されたツール名を実在のツールに寄せる。
  * 自由記述のスキーマなので `budget ` のような揺れが混ざる。名前が1文字違うだけで
- * 「そんなツールは無い」と返り、モデルは「接続されていない」と誤診する — 実際に一度起きた。
+ * 「そんなツールは無い」と返り、モデルは「接続されていない」と誤診する。
  * 完全一致 → 前後空白除去 → 大文字小文字無視、まで寄せて、それでも無ければ原文のまま返す
  * (存在しないツールを黙って別のツールに読み替えるのは、直すより悪い)。
  */
@@ -189,7 +185,7 @@ function normalizeToolName(raw: string | undefined, context: PiContext): string 
  * 取り直すか。**言い方だけに頼らない**ための歯止め。
  *
  * 内側の claude が提出用の名前をネイティブに呼んで CLI に弾かれ、そのまま「使えなかった」と
- * 手ぶらで戻ってくることがある(実測、旧い言い回しで haiku 8/10)。
+ * 手ぶらで戻ってくることがある。
  * 判定に使うのは CLI が流した tool_use_error だけで、応答の文面は読まない —
  * 「ツールが無い」と書いてあるかどうかで決めると、正しく諦めた回まで焚き直す。
  */
