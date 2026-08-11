@@ -1,0 +1,127 @@
+/**
+ * マイグレーションの検査。**中身の入った DB で確かめる。**
+ *
+ * `schema.sql` は全部 `CREATE TABLE IF NOT EXISTS` なので、空の DB では新旧どちらの形も
+ * 同じように「通ってしまう」。壊れるのは既に行がある DB のときだけで、しかも壊れ方は静かで、
+ * 気付くのは持ち主が古い事実を喋られたときになる。だから旧い形を手で作ってから掛ける。
+ */
+import assert from "node:assert/strict"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
+import { after, before, test } from "node:test"
+import { Effect } from "effect"
+import { migrate } from "../src/db/migrate.ts"
+import { RunnerStub } from "../src/model/Runner.ts"
+import { makeRuntime } from "../src/runtime.ts"
+import { Db, DbLive } from "../src/services/Db.ts"
+import { Memory } from "../src/services/Memory.ts"
+
+let ROOT = ""
+before(() => {
+  ROOT = mkdtempSync(join(tmpdir(), "oz-migrate-"))
+})
+after(() => {
+  if (ROOT) rmSync(ROOT, { recursive: true, force: true })
+})
+
+/** v1 の形(slot が PRIMARY KEY、区間を持たない)を、行ごと手で作る。 */
+function makeV1(path: string): void {
+  const d = new DatabaseSync(path)
+  d.exec("PRAGMA foreign_keys = ON;")
+  d.exec(`
+    CREATE TABLE events (
+      id TEXT PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL,
+      taint INTEGER NOT NULL DEFAULT 0, exposure TEXT NOT NULL DEFAULT 'private',
+      supersedes TEXT, provenance TEXT NOT NULL DEFAULT '[]', content TEXT
+    );
+    CREATE TABLE belief_slots (
+      slot TEXT PRIMARY KEY,
+      value TEXT,
+      exposure TEXT NOT NULL,
+      resolved_from TEXT NOT NULL REFERENCES events(id),
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO events (id, at, kind, source, content)
+      VALUES ('ev1', '2026-01-01T00:00:00Z', 'belief', 'system', '{"slot":"home.city"}');
+    INSERT INTO belief_slots (slot, value, exposure, resolved_from, updated_at)
+      VALUES ('home.city', '"札幌"', 'private', 'ev1', '2026-01-01T00:00:00Z');
+  `)
+  d.close()
+}
+
+test("旧い形の DB は開くだけで新しい形になる — 行は落ちない", async () => {
+  const path = join(ROOT, "v1.db")
+  makeV1(path)
+
+  const rt = makeRuntime(DbLive(path), RunnerStub([{ text: "ok" }]).layer)
+  try {
+    const out = await rt.runPromise(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const cur = yield* mem.belief("home.city")
+        // 区間を継げること = 新しい形として本当に動いていること。
+        yield* mem.believe("home.city", "東京", { validFrom: "2026-06-01T00:00:00Z" })
+        return { cur, after: yield* mem.belief("home.city"), hist: yield* mem.beliefHistory("home.city") }
+      }),
+    )
+    assert.equal(out.cur?.value, "札幌", "既にあった行が消えていない")
+    // **いつから真だったかは旧い形には無い。** 推測せず「台帳が知った時刻」をそのまま置く。
+    assert.equal(out.cur?.validFrom, "2026-01-01T00:00:00Z")
+    assert.equal(out.cur?.validUntil, null)
+    assert.equal(out.after?.value, "東京")
+    assert.equal(out.hist.length, 2, "移行後の DB でも区間が継げる")
+  } finally {
+    await rt.dispose()
+  }
+})
+
+test("掛かっている DB に二度掛けても何も起きない", () => {
+  const path = join(ROOT, "twice.db")
+  makeV1(path)
+  const d = new DatabaseSync(path)
+  assert.deepEqual(migrate(d), ["belief_slots:bitemporal"], "1回目は掛かる")
+  assert.deepEqual(migrate(d), [], "2回目は何もしない")
+  const rows = d.prepare("SELECT slot, valid_from FROM belief_slots").all() as { slot: string }[]
+  assert.equal(rows.length, 1, "二度掛けても行が増えない・消えない")
+  d.close()
+})
+
+test("cache_write の無い ledger は列が足され、既存の行は残る", () => {
+  const path = join(ROOT, "ledger-v1.db")
+  const d = new DatabaseSync(path)
+  d.exec(`
+    CREATE TABLE ledger (
+      id TEXT PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL, role TEXT, model TEXT,
+      in_tok INTEGER NOT NULL DEFAULT 0, out_tok INTEGER NOT NULL DEFAULT 0,
+      cache_read INTEGER NOT NULL DEFAULT 0, usd REAL NOT NULL DEFAULT 0,
+      unpriced INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO ledger (id, at, kind, role, in_tok, out_tok)
+      VALUES ('l1', '2026-08-01T00:00:00Z', 'run', 'dialogue', 2, 500);
+  `)
+  assert.deepEqual(migrate(d), ["ledger:cache_write"], "1回目は掛かる")
+  assert.deepEqual(migrate(d), [], "2回目は何もしない")
+  const row = d.prepare("SELECT in_tok, out_tok, cache_write FROM ledger").get() as Record<string, number>
+  // **過去の行は復元できない。** 当時の cache_creation は残っていないので 0 のまま置く(推測で埋めない)。
+  assert.deepEqual([row.in_tok, row.out_tok, row.cache_write], [2, 500, 0])
+  d.close()
+})
+
+test("空の DB では移行するものが無い(新規は schema.sql がそのまま作る)", async () => {
+  const rt = makeRuntime(DbLive(":memory:"), RunnerStub([{ text: "ok" }]).layer)
+  try {
+    const cols = await rt.runPromise(
+      Effect.gen(function* () {
+        const db = yield* Db
+        return yield* db.all("PRAGMA table_info(belief_slots)")
+      }),
+    )
+    const names = cols.map((c) => String(c.name))
+    assert.ok(names.includes("valid_from") && names.includes("valid_until"))
+    assert.ok(names.includes("invalidated_by") && names.includes("invalidated_reason"))
+  } finally {
+    await rt.dispose()
+  }
+})
