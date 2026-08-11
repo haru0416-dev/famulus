@@ -7,14 +7,14 @@
  * それは claude.ai ログインを別クライアントに載せる経路で、上の判断とは別物なので**使わない**。
  *
  * ---
- * 実測(2026-08-10、この経路そのもので測り直し。CLI 2.1.223 / haiku-4-5 / 同一 prompt /
+ * 実測(この経路そのもので測り直し。CLI 2.1.223 / haiku-4-5 / 同一 prompt /
  * 総入力 = input_tokens + cache_read + cache_creation。各 n=2):
  *
  *   `--tools ""`                              →   **7,058 tok**   テキスト応答(ほぼ全部 cache_read)
  *   `--tools "StructuredOutput" --json-schema` →  **14,4xx tok**   構造化応答(= ツール呼び出しの搬送路)
  *   参考: 同じ問いを rmod 経由の gpt-5.6-luna    →     **293 tok**
  *
- * ここに前は 184 / 904 tok と書いてあった(2026-08-08、`/tmp` のシェルから)。**その数字は捨てる。**
+ * ここに前は 184 / 904 tok と書いてあった(`/tmp` のシェルから)。**その数字は捨てる。**
  * 当時の測定シェルには `ANTHROPIC_BASE_URL` が立っていて、CLI は本人のサブスクではなく別の宛先を
  * 叩いていた(このコードは `sanitizedEnv` で ANTHROPIC_* を剥がすので、同じ形にならない)。
  * CLI の版が上がった影響と切り分けられていないが、**どちらにせよ本番経路の値は上の桁**。
@@ -290,7 +290,7 @@ export async function callClaude(opts: ClaudeCallOptions): Promise<ClaudeCallRes
 
   const cwd = mkdtempSync(join(tmpdir(), "open-zero-run-"))
   // **prompt は argv に載せない。** Linux は argv の1要素を 128KB (MAX_ARG_STRLEN) に制限するので、
-  // 会話が伸びると `spawn E2BIG` で落ちる(実測 2026-08-10: researcher の2回目の呼び出しが死んだ。
+  // 会話が伸びると `spawn E2BIG` で落ちる(実測: researcher の2回目の呼び出しが死んだ。
   // ツール結果が1件 12,000字あるので数往復で越える)。`-p` に値を付けなければ stdin から読む
   // (claude・rmod どちらも確認済み)。
   const args = [

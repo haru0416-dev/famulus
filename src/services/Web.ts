@@ -16,7 +16,7 @@ import { isIP } from "node:net"
 /**
  * 1回の取得で読む上限。
  *
- * **頭だけで足りるという前提は、JS で組み立てる頁では崩れる。** 実測(2026-08-10)では、
+ * **頭だけで足りるという前提は、JS で組み立てる頁では崩れる。** 実測では、
  * 400KB で切ると本文は1文字も入らず、上限を上げると入った:
  * 東京都 38字 → 5,962字(全 860KB)、メルカリ 32字 → 206字(全 533KB)、
  * YouTube 0字 → 426字(全 1.3〜1.4MB。`<title>` が 68万バイト目にある)。
@@ -151,7 +151,7 @@ function trimChrome(html: string): string {
   }
   // 本文らしさの目安。全体の 15% にも満たない塊は「本文」ではなく部品。
   if (best.length < html.length * 0.15) {
-    // **`<main>`/`<article>` が無い頁のほうが多い。** 実測(2026-08-10、実サイト16件):
+    // **`<main>`/`<article>` が無い頁のほうが多い。** 実測(実サイト16件):
     // はてブ・価格.com はどちらも1つも持っていない(`<ul>` が 260 / 123 個)。頁ごと使うと
     // 窓の頭が絞り込みメニューで尽きた。Readability は class/id に点を付けて本文を選ぶので、
     // その入口だけ借りる。一般語のみで測った差(目的の語が本文の何字目に出るか):
@@ -179,7 +179,7 @@ function trimChrome(html: string): string {
 
 /**
  * 名前付きの実体のうち、実際に本文へ出てくるもの。全部は載せない(HTML5 の表は 2,000 以上ある)。
- * 実測(2026-08-10、実サイト14件の窓12,000字)で残っていたのは `&yen;` `&#x27;` `&#x2F;` の3種だけ。
+ * 実測(実サイト14件の窓12,000字)で残っていたのは `&yen;` `&#x27;` `&#x2F;` の3種だけ。
  * 数値の実体は下で一括して戻すので、ここに要るのは名前のものに限る。日本語の頁で使われる約物を足した。
  */
 const NAMED: Readonly<Record<string, string>> = {
@@ -221,7 +221,7 @@ const NAMED: Readonly<Record<string, string>> = {
 /**
  * 実体参照を戻す。タグを剥がすより先にやると `&lt;script&gt;` が復活するので、必ず後。
  *
- * **数値の実体を戻さないと本文に `&#x27;` が生で残る。** 実測(2026-08-10): Hacker News の
+ * **数値の実体を戻さないと本文に `&#x27;` が生で残る。** 実測: Hacker News の
  * 見出しに `&#x27;`(アポストロフィ)と `&#x2F;`(スラッシュ)が5個、価格.com の値段欄に `&yen;` が3個。
  * 読み手はそれを文字として読むので、引用すると壊れた綴りのまま台帳に載る。
  *
@@ -278,7 +278,7 @@ export function renderFeed(xml: string): string | undefined {
     // Atom の link は href 属性。RSS は要素の中身。
     const link = pick(body, "link") ?? /<link\b[^>]*href=["']([^"']+)/i.exec(body)?.[1]
     const desc = pick(body, "description") ?? pick(body, "summary")
-    // **書き手を落とさない。** 実測(2026-08-11): Zenn のトピック feed は1件ごとに
+    // **書き手を落とさない。** 実測: Zenn のトピック feed は1件ごとに
     // `<dc:creator>fits</dc:creator>` を持っているのに、ここで拾っていなかった。
     // 「記事と書き手を2本」と頼んだら、役は書き手が無いものと見て記事頁を2つ余計に開き(+60秒)、
     // それでも分からず「取れなかった」と返した。**答えは渡したバイト列の中に入っていた。**
@@ -323,7 +323,7 @@ export function toText(raw: string, contentType: string): string {
   const body = decodeEntities(
     trimChrome(html)
       // **閉じが無ければ末尾まで落とす。** 上限で切ると最後の `<script>` が閉じないまま終わる。
-      // 実測(2026-08-10、YouTube の視聴頁を 400KB で切ったとき): 開き 13 に対し閉じ 12。
+      // 実測(YouTube の視聴頁を 400KB で切ったとき): 開き 13 に対し閉じ 12。
       // 閉じない1つの中身がそのまま本文になり、返った 12,000字はすべて
       // `ytcfg.set({"CLIENT_CANARY_STATE":...` の JS で、題も説明も1字も入っていなかった。
       // 読み手はそれを頁の中身として読む。**上限を 1.5MB にした今も、それを超える頁では同じことが起きる。**
@@ -332,7 +332,7 @@ export function toText(raw: string, contentType: string): string {
       .replace(/<!--[\s\S]*?(?:-->|$)/g, " ")
       .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
       .replace(/<br\s*\/?>/gi, "\n")
-      // **属性値の中の `>` をタグの終わりと取り違えない。** 実測(2026-08-10、en.wikipedia の
+      // **属性値の中の `>` をタグの終わりと取り違えない。** 実測(en.wikipedia の
       // TypeScript): infobox が `data-mw='{"designer":{"wt":"[[Microsoft]],&lt;br />..."}}'` を
       // 属性に持っていて、`<[^>]+>` はその `&lt;br />` の `>` で閉じたと見なす。結果、
       // `[[Anders Hejlsberg]],<br />Luke Hoban"},"developer":{"wt":"Microsoft"}` から始まる
@@ -344,18 +344,18 @@ export function toText(raw: string, contentType: string): string {
   )
     .replace(/[ \t]+/g, " ")
     // **行頭・行末の空白を先に落とす。** これが無いと、タグを剥がした跡が空白1つだけの行として残り、
-    // `\n{3,}` の畳み込みに当たらない。実測(2026-08-10、実サイト8件): 返した本文に占める空白行の割合は
+    // `\n{3,}` の畳み込みに当たらない。実測(実サイト8件): 返した本文に占める空白行の割合は
     // GitHub 42% / PyPI 28% / はてブ 27% / 価格.com 21%。12,000字の枠のそれだけが空白で埋まっていた。
     .replace(/[ \t]*\n[ \t]*/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-  // **本文だけを切り出すと、どの頁を読んでいるのかが消える。** 実測(2026-08-10):
+  // **本文だけを切り出すと、どの頁を読んでいるのかが消える。** 実測:
   // 本文の塊を選ぶようにした結果、日本語版 Wikipedia は「日本語 - Wikipedia」が、
   // はてブは「はてなブックマーク - 人気エントリー - テクノロジー」が先頭から落ちた。
   // 読み手は複数の頁を並べて読むので、見出しが無いとどれの話か取り違える。頭に戻す。
   const title = pick(html, "title")
   const headed = title && !body.slice(0, 200).includes(title) ? `${title}\n\n${body}` : body
-  // **本文が組み上がらない頁でも、`<meta>` には題と説明が入っている。** 実測(2026-08-10):
+  // **本文が組み上がらない頁でも、`<meta>` には題と説明が入っている。** 実測:
   // YouTube の視聴頁は `<title>` すら HTML に無く(JS が後から入れる)、返せる文字が 0 だった。
   // og: と description を拾うと題・投稿者・説明が 250字ほど返る。ニコニコ・note・Bluesky も同じ形。
   // **本文が取れている頁では触らない** — 拾った説明は本文の要約で、並べると同じ話が二重になる。
@@ -406,7 +406,7 @@ export function isReadableType(contentType: string): boolean {
  * 優先順は Content-Type の charset → HTML の meta 宣言 → utf-8。
  *
  * **末尾が文字の途中で切れていたら、その分は捨てる。** 上限の打ち切りはバイト数で入れるので、
- * 日本語の頁では 3 バイト文字の 1〜2 バイト目で終わることがある。実測(2026-08-10):
+ * 日本語の頁では 3 バイト文字の 1〜2 バイト目で終わることがある。実測:
  * クックパッドと食べログで置換文字が 1 個ずつ本文に残った。`stream: true` で復号すると、
  * 復号器は不完全な列を出力せずに持ち越すので、そのまま捨てられる。
  */
@@ -468,7 +468,7 @@ export function detour(url: string): string | undefined {
   if (isHost(u, "github.com")) return githubDetour(u, seg)
 
   if (isHost(u, "zenn.dev")) {
-    // **記事の頁(zenn.dev/x/articles/y)は素で読める**ので触らない(実測 2026-08-10: 2,316字)。
+    // **記事の頁(zenn.dev/x/articles/y)は素で読める**ので触らない(実測: 2,316字)。
     // 詰まるのは一覧のほう。トピック 79字 → /feed 8,376字(20件)、書き手 105字 → /feed 8,638字。
     if (seg[0] === "topics" && seg[1] && seg.length === 2)
       return `一覧は JS で組み立てるので HTML には無い。https://zenn.dev/topics/${seg[1]}/feed を開く`
@@ -492,14 +492,14 @@ export function detour(url: string): string | undefined {
     return `npmjs.com は 403 で弾かれる。https://registry.npmjs.org/${pkg ?? "<パッケージ名>"}/latest を開く`
   }
   if (isHost(u, "x.com") || isHost(u, "twitter.com")) {
-    // **取りに行く前に断る**(`refusedBeforeFetch`)。理由は2つあって、どちらも実測(2026-08-11)。
+    // **取りに行く前に断る**(`refusedBeforeFetch`)。理由は2つあって、どちらも実測。
     // 1) 取れない: `/status/` を直に引くと 307 のあと JS の殻が 40KB 返るだけで本文が無い。
     // 2) 断られている: `x.com/robots.txt` が `User-agent: * / Disallow: /` で、
     //    本文の取れる口も全部同じ — `cdn.syndication.twimg.com`(本文込みの JSON が 200 で返る)も
     //    `Disallow: /`、**X 公式の埋め込み API である `publish.x.com/oembed` も `Disallow: /oembed`**。
     // 投稿の中身は `search` の `x` から読む。あれは索引の要約で、X を叩いていない。
     const who = /^\/([A-Za-z0-9_]{1,15})\/status\/\d+/.exec(u.pathname)?.[1]
-    // **「取れない」で終わらせない。** 実測(2026-08-11)で、そう書いた回に外を見る役は
+    // **「取れない」で終わらせない。** 実測で、そう書いた回に外を見る役は
     // 「X の本文は取れなかった」と結論して、search に出ていた投稿本文を使わずに終えた。
     // 本文は search の `x` に出ている、と行き先まで言う。
     return (
@@ -553,7 +553,7 @@ export function detour(url: string): string | undefined {
 function githubDetour(u: URL, seg: readonly string[]): string | undefined {
   const [owner, repo, kind, ref] = seg
   if (seg[0] === "search") {
-    // 実測 2026-08-10: 検索結果の HTML は 164KB に対し 456字で、当たりが1件も入っていない。
+    // 実測: 検索結果の HTML は 164KB に対し 456字で、当たりが1件も入っていない。
     // リポジトリ検索の API は鍵無しで 200 が返るが、**コード検索の API は 401**(Requires authentication)。
     const q = u.searchParams.get("q") ?? ""
     return u.searchParams.get("type") === "code"
@@ -564,20 +564,20 @@ function githubDetour(u: URL, seg: readonly string[]): string | undefined {
   if (seg.length === 2) {
     // **「README は HTML に入っていない」と書いていたのは、こちらの不具合を見ての誤診だった。**
     // 閉じない `<script>` を末尾まで落とすようにした後で測り直すと、README は入っていた
-    // (実測 2026-08-10: Effect-TS/effect 1,131字・sindresorhus/got 6,045字・vercel/next.js 2,148字。
+    // (実測: Effect-TS/effect 1,131字・sindresorhus/got 6,045字・vercel/next.js 2,148字。
     // どれも raw の README と同じ中身)。入っていないのはファイル一覧のほうで、頁には
     // 「Folders and files / Name Last commit message」の枠だけが残り、ファイル名が1つも無い。
     return `README は入っている(この頁で読めている)。無いのはファイル一覧 — 要るなら https://api.github.com/repos/${owner}/${repo}/contents を開く`
   }
   if ((kind === "issues" || kind === "pull") && ref) {
-    // これも誤診だった。実測 2026-08-10、issue #4700: HTML に「Description / 投稿者 / opened on /
+    // これも誤診だった。実測、issue #4700: HTML に「Description / 投稿者 / opened on /
     // Summary」と本文が入っている(1,920字)。ただし星の数やフォークの数が本文より先に並ぶので、
     // 本文だけ要るなら API のほうが短い。
     const api = kind === "pull" ? "pulls" : "issues"
     return `題と本文は入っている。飾りを外して本文だけ読むなら https://api.github.com/repos/${owner}/${repo}/${api}/${ref} を開く`
   }
   if (kind === "tree" && ref) {
-    // 実測 2026-08-10: /tree/main/packages は 227KB の HTML に対し 499字で、中身は
+    // 実測: /tree/main/packages は 227KB の HTML に対し 499字で、中身は
     // 「There was an error while loading」。ファイル名は1つも入っていない。API は 5,451字で全部返す。
     const path = seg.slice(4).join("/")
     return `ファイル一覧は JS で差し込むので HTML には無い。https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref} を開く`
@@ -602,7 +602,7 @@ async function pace(host: string): Promise<void> {
 /**
  * 一度開いた頁を、**全文のまま**覚えておく。速さのためではなく、同じものを取りに行かないため。
  *
- * 実測(2026-08-10、「effect の最新安定版と公開日」を1問投げた1回の対話):
+ * 実測(「effect の最新安定版と公開日」を1問投げた1回の対話):
  * 外へ出た 10 回が**全部 `https://registry.npmjs.org/effect`** だった。この JSON は 12,000字に
  * 収まらないので、続きを読むたびに頭から取り直していた(`offset` 違いは別の取得だった)。
  * 全文を持てば、続きを読むのは切り出すだけで済む。
@@ -695,12 +695,12 @@ async function readCapped(res: Response): Promise<{ buf: Uint8Array; cut: boolea
  *
  * 判定を三段に分けた理由は、どれも実測で外したから:
  *
- * - **HTML の大きさだけで測ると、小さい頁の空振りを見逃す。** 実測(2026-08-10): ジョルダンの乗換
+ * - **HTML の大きさだけで測ると、小さい頁の空振りを見逃す。** 実測: ジョルダンの乗換
  *   48字(JS の転送頁)、e-Gov 法令検索 10字、Bluesky 20字。どれも HTML が 50KB に届かないまま
  *   200 で空同然に返っていた。**返した字数そのもの**でも引っかける。
  * - **疑う相手は script のある HTML だけ。** JSON の API は 200 バイトで正しく答えるし、
  *   素の HTML が短いのは単に短い頁で、疑う理由が無い。
- * - **無いのと少ないのを言い分ける。** 一段の判定だと(2026-08-10、86件)tenki.jp 1,719字・
+ * - **無いのと少ないのを言い分ける。** 一段の判定だと(86件)tenki.jp 1,719字・
  *   Yahoo 天気 1,954字・JR東 運行情報 1,146字・みんかぶ 1,559字に「別の出典を当たったほうが早い」が
  *   付いた。どれも目的の語(天気・運転・ドル)は本文に入っていた。
  *   **読めた頁に諦めろと言うのは、読めない頁を黙って返すのと同じくらい悪い。**
@@ -743,7 +743,7 @@ function thinNote(p: {
 /**
  * 全文から語を探して、当たりの前後だけを返す。
  *
- * 実測(2026-08-10、「effect の最新安定版と公開日」1問):`registry.npmjs.org/effect` は 40万字あり、
+ * 実測(「effect の最新安定版と公開日」1問):`registry.npmjs.org/effect` は 40万字あり、
  * 役が offset を 300,000 → 408,000 まで 12,000字刻みで**10ターン**進めた。1ターンごとにモデル呼び出しが
  * 要るので、この10回だけで約130秒。窓で舐めるのは大きな頁に対して手段が足りていない。
  */
@@ -844,7 +844,7 @@ export async function fetchPage(raw: string, opts: FetchOptions = {}): Promise<F
  */
 async function fetchFresh(raw: string): Promise<CachedDoc> {
   // **断られていると分かっている先へは、確かめに行かない。** `detour` は普通は取ってから
-  // (4xx・読めない形式・本文が薄い)出すが、ここだけは出る前に出す。実測(2026-08-11)で
+  // (4xx・読めない形式・本文が薄い)出すが、ここだけは出る前に出す。実測で
   // 端から端まで動かした回に x.com を3回叩いて 307 と JS の殻を受け取り、2秒を捨てていた。
   if (refusedBeforeFetch(new URL(raw)))
     return { url: raw, status: 0, full: "", cut: false, note: detour(raw) ?? "" }
@@ -923,7 +923,7 @@ async function fetchFresh(raw: string): Promise<CachedDoc> {
  * 足音(`pace`)・上限(`readCapped`)・転送の検査は同じものを通す。**内側への転送を
  * 素通りさせないため、`redirect: "follow"` にはしない**(宛先が定数でも、転送先は相手が決める)。
  *
- * `timeoutMs` の既定は 1頁ぶんの 20 秒。**同時に何本も出す側は短くする** — 実測(2026-08-11):
+ * `timeoutMs` の既定は 1頁ぶんの 20 秒。**同時に何本も出す側は短くする** — 実測:
  * 6先へ同時に出したうち marginalia が返らず、20 秒の制限に当たるまで全体が待った。
  * 残り5先は 0.9 秒で揃っていたので、遅い1本のために 22 倍待ったことになる。
  *
