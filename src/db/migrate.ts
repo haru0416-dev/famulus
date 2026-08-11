@@ -54,10 +54,11 @@ function bitemporalBeliefSlots(d: DatabaseSync): boolean {
 /**
  * ledger に cache_write を足す。
  *
- * 入力トークンは3つに割れて返るのに、台帳は2つしか持っていなかった。**落ちていたのが一番大きい列**で、
- * 実測では `input_tokens: 2` / `cache_creation_input_tokens: 904` — 台帳の in_tok=2 は嘘ではないが、
- * これを「入力」として読むと実際の 1/450 になる。既存行は当時の値が復元できないので 0 のまま置く
- * (**推測で埋めない**)。0 と「本当に 0 だった」の区別が要るなら at で切る。
+ * 入力トークンは3つに割れて返るのに、台帳は2つしか持っていなかった。落ちていたのは
+ * `cache_creation_input_tokens` で、ここが素の `input_tokens` を桁で上回る。
+ * これが無いと `in_tok` を「入力」として読んだ人が実際よりはるかに小さい値を見る。
+ * 既存行は当時の値が復元できないので 0 のまま置く(**推測で埋めない**)。
+ * 0 と「本当に 0 だった」の区別が要るなら at で切る。
  */
 function ledgerCacheWrite(d: DatabaseSync): boolean {
   const cols = columns(d, "ledger")

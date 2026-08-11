@@ -1,7 +1,7 @@
 /**
  * `claude` CLI を叩く唯一の場所。**ここだけが推論の実体**で、他は全部この上の層。
  *
- * なぜ SDK でも API キーでもなく CLI か(famulus-zero ADR 0003 の判断を継承):
+ * なぜ SDK でも API キーでもなく CLI か:
  * ここでやるのは「本人が本人のサブスクで、第一者クライアント(`claude`)を、自分専用の自動化から呼ぶ」形。
  * pi-ai は Claude Pro/Max の OAuth を内蔵しているが、それは claude.ai ログインを別クライアントに
  * 載せる経路で、上の判断とは別物なので**使わない**。
@@ -71,9 +71,9 @@ export function sanitizedEnv(source: NodeJS.ProcessEnv = process.env): Record<st
 
 /**
  * `claude` の置き場所。**PATH に頼らない**。
- * systemd --user から起動すると子に渡る PATH は systemd の既定で `~/.local/bin` を含まない。
- * famulus-zero はこの見落としで Claude Max 枠が毎回 `Executable not found` で落ち、
- * 2枠フォールバックがそれを隠して朝会が静かに片肺で走っていた。
+ * systemd --user から起動すると子に渡る PATH は systemd の既定で `~/.local/bin` を含まないので、
+ * PATH 解決にすると心拍からの呼び出しだけが `Executable not found` で落ちる。
+ * フォールバックがあるとその失敗は表に出ず、片方の枠だけで走り続ける。
  */
 const BIN_CANDIDATES = [".local/bin/claude", ".claude/local/claude", ".bun/bin/claude"]
 const RMOD_CANDIDATES = [".local/bin/rmod", "dev/code/rmod/bin/rmod"]

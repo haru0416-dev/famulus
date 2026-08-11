@@ -1,12 +1,11 @@
 /**
  * 統治された推論の唯一の入口。**precheck → 実行 → 枠記帳 → 会計** を1本にまとめる。
  *
- * famulus-zero では governance・runner・ledger が別々に呼ばれていて、
- * 「ゲートを通さずに走らせる経路」が型の上では常に可能だった(実際に朝会が片肺で走った事故もこの形)。
- * ここでは Runner を通す以外にモデルへ届く道を作らない。Layer が差し替え点なので、
- * テストは `RunnerStub` を積むだけで API キーも `claude` バイナリも要らない。
+ * governance・runner・ledger を別々に呼ぶ形にすると「ゲートを通さずに走らせる経路」が
+ * 型の上で常に可能になる。ここでは Runner を通す以外にモデルへ届く道を作らない。
+ * Layer が差し替え点なので、テストは `RunnerStub` を積むだけで API キーも `claude` バイナリも要らない。
  *
- * 役割→モデルは**静的表**。LLM にモデル選択と課金経路を開かない(famulus-zero config/models.ts の原則)。
+ * 役割→モデルは**静的表**。LLM にモデル選択と課金経路を開かない。
  */
 import { Context, Effect, Layer } from "effect"
 import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown, UnpricedModel } from "../core/errors.ts"
@@ -77,8 +76,8 @@ export interface RunnerResult {
 
 /**
  * run が失敗しうる理由の全部。**呼び出し側はこれを網羅しないとコンパイルが通らない**。
- * famulus-zero では全部 `{ ok:false, reason:string }` に潰れていて、
- * 「枠クールダウン(待てば戻る)」と「halt(人間の解除が要る)」の区別が呼び出し側から消えていた。
+ * `{ ok:false, reason:string }` に潰すと「枠クールダウン(待てば戻る)」と
+ * 「halt(人間の解除が要る)」の区別が呼び出し側から消える。
  */
 export type RunError = RunnerFailed | Halt | QuotaCooldown | DailyRunLimit | UnpricedModel | DbFailed
 

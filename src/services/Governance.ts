@@ -1,12 +1,11 @@
 /**
- * governance サービス。famulus-zero `src/governance/{budget,quota,fence,egress}.ts` の移植。
+ * governance サービス。モデルを呼ぶ前の関門を層に分けて順に見る。
  *
- * **移植で変えたのは戻り値の型だけで、判定の順序と閾値の意味は変えていない。**
- * 元は `{ ok: false, layer, detail }` の直和だったので、呼び出し側が拒否を無視しても型が通った。
- * ここでは拒否ごとに別タグの失敗にして、`Effect.catchTag` で個別に扱わせる
- * (握り潰すには `catchAll` を明示的に書くしかなくなる、というのが Effect に載せた唯一の理由)。
+ * 拒否は `{ ok: false, layer, detail }` のような直和ではなく**拒否ごとに別タグの失敗**にしてある。
+ * 直和だと呼び出し側が拒否を無視しても型が通るが、失敗チャネルに載っていれば
+ * 握り潰すのに `catchAll` を明示的に書くしかなくなる(Effect に載せた唯一の理由)。
  *
- * 層の順序(元の budget.ts のまま):
+ * 層の順序:
  *   halt → 枠クールダウン → 日次 run 数 → (USD 会計のときだけ) 単価未登録 → 日次/月次 USD
  * `meter === "quota"` の run は限界費用 0 なので USD 層を**飛ばす**。ここを飛ばさないと
  * 「窓が空いているのに金額で止まる」= サブスクを買った意味を捨てることになる。
@@ -16,7 +15,7 @@ import { DailyRunLimit, EgressDenied, Halt, QuotaCooldown, UnpricedModel } from 
 import { dayRange, monthRange } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
-/** この run のコストをどう会計するか(famulus-zero runner/index.ts の Meter と同義)。 */
+/** この run のコストをどう会計するか。 */
 export type Meter = "usd" | "quota"
 
 export interface QuotaSignal {
@@ -53,11 +52,11 @@ const envInt = (key: string, fallback: number): number => {
 }
 
 /**
- * 既定値。famulus-zero src/config/budget.ts 相当 + 自走の仕切り。
+ * 既定値。
  *
- * **`dailyRuns` は予算ではなく暴走の歯止め**。元の 200 は「1回ごとに課金される」前提の数字で、
- * 定額枠に移った時点で意味が変わっている(USD 上限が無意味なのと同じ理由 — precheck の 4 番を見よ)。
- * 定額枠でも無料ではないが、消えているのは金ではなく**持ち主自身の Claude の枠**で、
+ * **`dailyRuns` は予算ではなく暴走の歯止め**。1回ごとに課金されるなら run 数が金額の代理になるが、
+ * 定額枠ではならない(USD 上限が無意味なのと同じ理由 — precheck の 4 番を見よ)。
+ * 定額枠でも無料ではなく、消えているのは金ではなく**持ち主自身の Claude の枠**で、
  * それを測るのは run 数ではなく `quotaCooldown`(実際の使用率)。run 数は
  * 「同じことを無限に繰り返している」を止めるための上限として、実運用より十分高く置く。
  */
@@ -98,7 +97,7 @@ export interface UntrustedBlock {
 
 /**
  * 不信データを構造的に隔離する。**フレーズ検知ではなく境界マーカーで分離**する
- * (文字列フィルタは破られる、という famulus-zero guard の教訓をそのまま継承)。
+ * — 文字列フィルタは書き換えられた言い回しで破られる。
  * 純粋関数なのでサービスに入れない — Effect に載せる意味が無いものは載せない。
  */
 export function buildFencedPrompt(ownerInstruction: string, blocks: readonly UntrustedBlock[]): string {
@@ -203,8 +202,8 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         // 3. 日次 run 数 — 暴走の歯止め。境界は**持ち主の1日**(core/time.ts)。
         // UTC で切ると日本時間の朝9時に枠が戻る。
         //
-        // **halt は立てない。** 元実装は立てていたが、それは1回ごとに課金される前提での判断で、
-        // 上限に当たること自体が「金が漏れている」の合図だった。定額枠ではそうではない。
+        // **halt は立てない。** 1回ごとに課金される前提なら上限に当たること自体が
+        // 「金が漏れている」の合図になるが、定額枠ではそうではない。
         // ここで halt を立てると、翌日には自動で戻るはずの上限が、人が `oz resume` を打つまで
         // **対話まで含めた全停止**として残る(3b の自走枠で halt を立てないのと同じ判断)。
         const day = dayRange(opts.at)

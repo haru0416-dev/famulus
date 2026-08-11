@@ -46,9 +46,8 @@ export type AppRuntime = ReturnType<typeof makeRuntime>
 
 /**
  * 既定のランタイム。プロセスに1つ。
- * 差し替えの口は `run(effect, rt)` の第2引数だけにしてある — 前は `setRuntime` も置いていたが、
- * 「テスト・CLI から差し替える」と書いてあるだけで**どこからも呼ばれていなかった**。
- * 入口が2つあると、どちらが効いているのかを読んで確かめる必要が出る。
+ * 差し替えの口は `run(effect, rt)` の第2引数だけにしてある。
+ * 入口を2つ持つと、どちらが効いているのかを読んで確かめないと分からなくなる。
  */
 let current: AppRuntime | undefined
 export const runtime = (): AppRuntime => {

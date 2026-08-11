@@ -1,10 +1,10 @@
 /**
- * DB サービス。famulus-zero の `src/db/schema.sql` を**そのまま正本として**使う。
+ * DB サービス。`src/db/schema.sql` が正本で、アプリ側はそれを書き換えない。
  *
- * schema.sql を書き換えないのが移行の成否条件。events の append-only はアプリ側のお行儀ではなく
- * SQL トリガで強制されていて(DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)、
- * 冪等性は `execution_attempts.idempotency_key` と `outbox.destination_key` の UNIQUE で担保されている。
- * この不変条件は bun:sqlite でも node:sqlite でも同じように効く(検証済み: 22 テーブル)。
+ * events の append-only はアプリ側のお行儀ではなく **SQL トリガで強制**されていて
+ * (DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)、冪等性は
+ * `execution_attempts.idempotency_key` と `outbox.destination_key` の UNIQUE で担保されている。
+ * 不変条件を SQL 側に置いてあるので、どのドライバから触っても同じように掛かる。
  *
  * Tag + Layer にしてあるのは**接続先を積み替えられるようにするため**。
  * テストは `DbLive(":memory:")` を積むだけで、実 DB にもモックにも触らずに

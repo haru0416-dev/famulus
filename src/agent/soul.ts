@@ -38,8 +38,7 @@ export function readSoul(path: string = SOUL_PATH): string {
 }
 
 /**
- * 応対の規律。**声ではない**。SOUL.md が空でもここは常に効く。
- * famulus-zero の turn/voice.ts の役割で、人格が決まっても消さない層。
+ * 応対の規律。**声ではない**。SOUL.md が空でもここは常に効き、人格が決まっても消さない層。
  */
 export const CONDUCT = `## 応対の規律
 - 分からないことを分かったように書かない。根拠がないときは「分からない」と言う。

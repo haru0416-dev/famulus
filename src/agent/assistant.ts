@@ -255,9 +255,9 @@ const fetchTool = {
 /**
  * 外を見る役。**渡すのは `search` と `fetch` の2つ。**
  *
- * 前は `fetch` だけで、検索はモデル呼び出しの内側(rmod のサーバ側 web_search)に隠れていた。
- * それだと**何を検索したかが持ち主にも自分にも残らない**。`search` を手前に置いたのは、
- * 探した跡を外に出すため — どの索引を引いて何件見たかが、答えと一緒に台帳へ残る。
+ * 検索をモデル呼び出しの内側(rmod のサーバ側 web_search)に任せると、
+ * **何を検索したかが持ち主にも自分にも残らない**。`search` を手前に置いてあるのは
+ * 探した跡を外に出すためで、どの索引を引いて何件見たかが答えと一緒に台帳へ残る。
  * サーバ側の web_search も生きているので、この役は両方を使える。**その2つは見え方が違う**、
  * というのが指示に「引いた先」を書かせている理由。
  *
@@ -472,7 +472,7 @@ export default function Assistant() {
       run(
         Effect.gen(function* () {
           // 完全性ゲート5要素(what/when/who/how/howVerified)は入力スキーマが強制している。
-          // 名指しできない案は提案にしない、という famulus-zero の規律をそのまま schema に移した。
+          // **名指しできない案は提案にしない** — その規律を指示ではなく schema 側に置いてある。
           const proposals = yield* Proposals
           const id = yield* proposals.create({ kind: "plan", ...data })
           return `提案 ${id.slice(0, 8)} を登録した。実行はしていない — 裁可(oz approve)を待つ。`

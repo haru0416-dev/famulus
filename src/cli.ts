@@ -313,7 +313,7 @@ const program = (argv: readonly string[]) =>
         let stopped = ""
         for (const ref of refs) {
           // 途中で枠が閉じたら**そこで止めて、済んだぶんは残す**。
-          // 全体を1トランザクションにすると、80 セッション目の枠切れで 79 件が消える。
+          // 全体を1トランザクションにすると、最後の1件の枠切れでそれまで取り込んだぶんまで消える。
           const r = yield* intake.ingest(ref).pipe(
             Effect.catchAll((e) => {
               stopped = isRefusal(e) ? describeRefusal(e) : describe(e)

@@ -1,11 +1,11 @@
 /**
  * 拒否の型付きチャネル(Effect の error channel に載せる)。
  *
- * famulus-zero では governance の判定が `{ ok: false, reason: string }` の直和で返っていた。
- * 型としては全部同じ形なので、**呼び出し側が「どの拒否を握り潰したか」をコンパイラに問われない**。
- * Effect に載せる目的はここで、拒否ごとに別タグを持たせて `Effect.catchTag` で個別に扱わせる。
+ * `{ ok: false, reason: string }` で返すと型としては全部同じ形になり、
+ * **呼び出し側が「どの拒否を握り潰したか」をコンパイラに問われない**。
+ * 拒否ごとに別タグを持たせて `Effect.catchTag` で個別に扱わせる。
  *
- * 重要な区別(famulus-zero governance/budget.ts, quota.ts の設計をそのまま持ち上げる):
+ * 区別:
  *   - `Halt`          … 人間が明示解除するまで自動で明けない。全停止。
  *   - `QuotaCooldown` … 窓が明ければ自動で戻る。**その枠だけ**避ける。朝会を殺さないため halt にしない。
  * この2つを同じ `Error` にすると、フォールバック実装がうっかり halt をリトライしてしまう。
