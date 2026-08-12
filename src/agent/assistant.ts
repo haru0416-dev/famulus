@@ -568,6 +568,24 @@ export default function Assistant() {
       ),
   })
 
+  useTool({
+    name: "drop",
+    description:
+      "答えの出ないまま意味を失った問いを取り下げる。**追わないと決めたものは閉じる** — 開いたままだと心拍の机を埋め続け、新しい問いが載らなくなる。",
+    input: v.object({
+      id: v.pipe(v.string(), v.description("問いの id(先頭8文字でよい)。")),
+      why: v.pipe(v.string(), v.description("なぜ追わないのか。「向きが変わった」「重複」など。")),
+    }),
+    run: async ({ data: { id, why } }) =>
+      run(
+        Effect.gen(function* () {
+          const att = yield* Attention
+          const closed = yield* att.drop(id, why)
+          return `問い ${closed.slice(0, 8)} を取り下げた: ${why}`
+        }),
+      ),
+  })
+
   /**
    * 持ち主に届ける口。**記録に書くのと届けるのは別のこと。**
    *

@@ -157,6 +157,66 @@ test("未解決の問いは起こす理由にしない(自分では解消でき�
   })
 })
 
+/**
+ * 問いの出口。**答えるのと取り下げるのは別**で、片方しか無いと机が一方通行で埋まる。
+ * 起こす理由ではないぶん見落としやすいが、埋まった机は新しい問いを押し出す — そこまで見る。
+ */
+test("答えないまま取り下げられる。理由は残る", async () => {
+  await withHarness(async (h) => {
+    const left = await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        const id = yield* att.ask("現職の就業規則で副業は可能か")
+        yield* att.drop(id, "副業探し自体を中断した")
+        const q = yield* att.findQuestion(id)
+        assert.equal(q.status, "dropped")
+        assert.equal(q.answer, "副業探し自体を中断した")
+        return yield* att.openQuestions()
+      }),
+    )
+    assert.deepEqual(left, [], "取り下げた問いは心拍の材料から外れる")
+  })
+})
+
+test("死んだ問いが上限を埋めると新しい問いが心拍に届かない — 取り下げれば届く", async () => {
+  await withHarness(async (h) => {
+    const ids = await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        const dead: string[] = []
+        // 上限は古い順の 20 件。先に立てたものだけで埋める。
+        for (let i = 0; i < 20; i++) dead.push(yield* att.ask(`前の向きで立てた問い ${i}`))
+        yield* att.ask("いま追っている問い")
+        return dead
+      }),
+    )
+
+    const listOpen = Effect.gen(function* () {
+      return yield* (yield* Attention).openQuestions()
+    })
+
+    const before = await h.run(listOpen)
+    assert.equal(before.length, 20)
+    assert.equal(
+      before.some((q) => q.question === "いま追っている問い"),
+      false,
+      "上限が古いもので埋まっている間は新しい問いが載らない",
+    )
+
+    await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        for (const id of ids) yield* att.drop(id, "向きが変わった")
+      }),
+    )
+    const after = await h.run(listOpen)
+    assert.deepEqual(
+      after.map((q) => q.question),
+      ["いま追っている問い"],
+    )
+  })
+})
+
 test("同じ理由で起き続けると冷却が倍に伸びる。新しい入力が来れば元に戻る", async () => {
   await withHarness(async (h) => {
     await h.run(

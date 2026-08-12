@@ -227,7 +227,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         return id
       })
 
-    const answer = (idOrPrefix: string, text: string, opts?: { eventId?: string; confirmed?: boolean }) =>
+    const findQuestion = (idOrPrefix: string) =>
       Effect.gen(function* () {
         const rows = yield* db.all(
           "SELECT * FROM questions WHERE id = ? OR id LIKE ? || '%' LIMIT 5",
@@ -240,7 +240,12 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
             new ProposalConflict({ id: idOrPrefix, reason: `問いの id が ${rows.length} 件に当たる` }),
           )
         }
-        const q = rows[0] as unknown as QuestionRow
+        return rows[0] as unknown as QuestionRow
+      })
+
+    const answer = (idOrPrefix: string, text: string, opts?: { eventId?: string; confirmed?: boolean }) =>
+      Effect.gen(function* () {
+        const q = yield* findQuestion(idOrPrefix)
         yield* db.run(
           "UPDATE questions SET status = 'answered', answer = ?, confidence = ?, resolved_event_id = ? WHERE id = ?",
           text,
@@ -248,6 +253,22 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           opts?.eventId ?? null,
           q.id,
         )
+        return q.id
+      })
+
+    /**
+     * 答えないまま問いを畳む。**答えるのと取り下げるのは別の出口**。
+     *
+     * `answer` しか無いと、問いは正しい答えが出たときにしか消えない。持ち主の向きが変われば
+     * 前の向きで立てた問いは答える意味を失うが、出口が無いぶん開いたまま残り、
+     * 心拍が起きるたび机の上に載り続ける。`openQuestions` は古い順に上限件数だけ渡すので、
+     * 死んだ問いが上限を埋めると**新しく立てた問いは一度も心拍に届かない**。
+     * 理由を残して閉じる — 何を追わないと決めたかは、答えと同じくらい後から要る。
+     */
+    const drop = (idOrPrefix: string, why: string) =>
+      Effect.gen(function* () {
+        const q = yield* findQuestion(idOrPrefix)
+        yield* db.run("UPDATE questions SET status = 'dropped', answer = ? WHERE id = ?", why, q.id)
         return q.id
       })
 
@@ -400,6 +421,8 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       findWatch,
       ask,
       answer,
+      drop,
+      findQuestion,
       openQuestions,
       digest,
       commit,

@@ -10,6 +10,8 @@
  *   oz halt <理由>         … 全停止。自動では明けない
  *   oz resume              … 停止解除
  *   oz attention           … 心拍が今なにを見ているか(見張り・問い・次に起きる条件)
+ *   oz drop <id> <理由>    … 追わないと決めた問いを畳む(答えずに閉じる)
+ *   oz unwatch <id>        … 決着した見張りを閉じる
  *   oz list [status]       … 提案一覧(既定は裁可待ち)
  *   oz show <id>           … 裁可カード全文(id は前方一致でよい)
  *   oz approve <id>        … 承認。approvals 行を書き、payload を指紋で固定する
@@ -48,6 +50,8 @@ const USAGE = `oz — open-zero の裁可 CLI
   oz halt <理由>           全停止(自動解除しない)
   oz resume                停止解除
   oz attention             心拍の視野(見張り・未解決の問い・次に起きる条件)
+  oz drop <id> <理由>      問いを答えないまま取り下げる。理由は必須
+  oz unwatch <id>          見張りを閉じる
   oz list [status]         提案一覧。status は proposed(既定)/approved/denied/expired/all
   oz show <id>             裁可カード全文(id は前方一致可)
   oz approve <id>          承認(実行はされない — 実行器はまだ無い)
@@ -187,6 +191,28 @@ const program = (argv: readonly string[]) =>
             ? ["  なし"]
             : d.staleBeliefs.map((b) => `  ${b.slot} = ${b.value}(${localStamp(b.valid_from, false)} から)`)),
         ].join("\n")
+      }
+
+      /**
+       * 見ているものを畳む2本。**溜まったものを持ち主の側から下ろせないと、机は一方通行で埋まる。**
+       * 問いも見張りも増やす口はエージェント側にあるのに、減らす口が答えるときしか無かった。
+       */
+      case "drop": {
+        const [id, ...why] = rest
+        const reason = why.join(" ").trim()
+        if (!id || !reason) return yield* Effect.fail(new Error("id と理由が要る: oz drop <id> <理由>"))
+        const att = yield* Attention
+        const q = yield* att.findQuestion(id)
+        yield* att.drop(id, reason)
+        return `問いを取り下げた: ${short(q.id)} ${q.question}\n  理由: ${reason}`
+      }
+
+      case "unwatch": {
+        if (!rest[0]) return yield* Effect.fail(new Error("id が要る: oz unwatch <id>"))
+        const att = yield* Attention
+        const w = yield* att.findWatch(rest[0])
+        yield* att.closeWatch(rest[0])
+        return `見張りを閉じた: ${short(w.id)} ${w.subject}`
       }
 
       case "halt": {
