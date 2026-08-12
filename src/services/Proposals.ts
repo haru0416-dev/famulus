@@ -6,13 +6,18 @@
  * ここが2箇所に分かれた瞬間、片方だけが状態機械を守る、という壊れ方をする。
  *
  * 状態機械(schema.sql の CHECK と一致):
- *   proposed ─approve→ approved ─(実行経路)→ executing → executed / failed
+ *   proposed ─approve→ approved ・・・ここで止まる
  *      │ deny→ denied
  *      └ 期限切れ→ expired
- * `approve` は **approvals 行を必ず書く**。実行ゲートは approvals.payload_hash と
- * 現在の payload の一致を条件にするので、承認後に payload が差し替わったら実行は通らない。
- * (実行器そのものはまだ無い — コネクタが1つも無いので、approved は「裁可済み・未実行」で止まる。
- *  ここで実行したことにする方が嘘としては大きいので、止めたままにしてある。)
+ *
+ * **approved の先は無い。** 実行器もコネクタも1つも書かれていないので、`executing` /
+ * `executed` / `failed` には**どの経路からも到達しない**(CHECK には残っているだけ)。
+ * approved は「裁可済み・未実行」で止まり、実際に動かすのは持ち主。
+ * ここで実行したことにする方が嘘としては大きいので、止めたままにしてある。
+ *
+ * `approve` は **approvals 行を必ず書く**。承認した時点の payload の指紋を残すためで、
+ * 実行する側を作るときに「承認後に中身が差し替わっていないか」を照合できるようにしてある。
+ * **照合する側はまだ無い。** 今あるのは記録だけ。
  */
 import { createHash, randomUUID } from "node:crypto"
 import { Effect } from "effect"
@@ -84,7 +89,7 @@ export const MAX_PENDING_DAYS = 7
 const plusDays = (at: string, days: number) =>
   new Date(Date.parse(at) + days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z")
 
-/** 承認した時点の payload を指紋にする。承認後に中身が変わったら実行させないための鍵。 */
+/** 承認した時点の payload の指紋。**照合する側を作るまでは、ただの記録。** */
 export const payloadHash = (payload: string): string => createHash("sha256").update(payload).digest("hex")
 
 /** 裁可を受け付ける状態。executing 以降は人の裁可の対象ではない。 */
@@ -191,7 +196,7 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
 
     /**
      * 承認。**approvals 行と status 遷移を同一トランザクションで**行う
-     * (承認記録の無い approved を作らない = 実行ゲートが照合する相手を必ず残す)。
+     * (承認記録の無い approved を作らない = **後で照合する相手を必ず残す**)。
      */
     const approve = (idOrPrefix: string, opts?: { approverRef?: string; at?: string }) =>
       Effect.gen(function* () {
@@ -234,7 +239,7 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
         return { id: p.id, at }
       })
 
-    /** 承認記録。実行器が payload_hash を照合するときに引く。 */
+    /** 承認記録。payload_hash を照合する側を作ったときに、ここを引く。 */
     const approvalOf = (proposalId: string) =>
       db.get("SELECT * FROM approvals WHERE proposal_id = ? ORDER BY at DESC LIMIT 1", proposalId)
 

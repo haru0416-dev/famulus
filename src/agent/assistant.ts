@@ -4,8 +4,9 @@
  *   useAgentStart … モデルを呼ぶ前のゲート(halt / 枠クールダウン / 日次 run 数)。
  *                   ここで throw すると Flue は submission を落とすので、
  *                   「ゲートが実際にモデル呼び出しを止める」のはこの1点。
- *   useTool       … 実行を伴う道具を**直接実行させない**。`propose` は提案を1件書くだけで、
- *                   実行は裁可を経た別経路(execution_attempts の冪等 claim)に回る。
+ *   useTool       … 外に出る行為を**直接実行させない**。`propose` は提案を1件書くだけ。
+ *                   **その提案を実行する経路はまだ無い**(docs/adr/0007)。持ち主が自分で動かす。
+ *                   隔離した器の中で完結する `shell` はこの制限に掛からない。
  *   useDelivery   … 今答えている入力そのもの。observe イベントとして台帳に落とす。
  *
  * モデル id の頭は全部 `claude-max/`。**これは provider の名前であって、行き先ではない。**

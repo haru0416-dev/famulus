@@ -47,8 +47,8 @@ const RETRY_MS = 180_000
 /**
  * 心拍を起こす。
  *
- * **走っている最中に投げると systemd は併合する。** 実測(2026-08-12): 走行中の oneshot に
- * `start` を重ねると待ち行列に積まれず、2回目は実行されない。つまり「心拍が走っている間に
+ * **走っている最中に投げると systemd は併合する。** 走行中の oneshot に `start` を重ねても
+ * 待ち行列には積まれず、2回目は実行されない(docs/adr/0003)。つまり「心拍が走っている間に
  * 話しかけられた」ぶんは、この1回では読まれない。そこを塞ぐのが下の未読の見直しで、
  * 台帳に未読が残っている限り次の起動でもう一度起こす。
  */
@@ -57,7 +57,7 @@ async function wake(): Promise<{ started: boolean; note: string }> {
   if (!unit) return { started: true, note: "起こさない(検査)" }
   // 走行中なら投げない。投げても併合されて消えるだけで、投げた側からは成功に見える。
   //
-  // **`is-active` では見えない。** 実測(2026-08-12): Type=oneshot は ExecStart の間ずっと
+  // **`is-active` では見えない。** Type=oneshot は ExecStart の間ずっと
   // `activating` で、`is-active` はその文字列を終了コード 3 で返す — 走っている最中こそ
   // 「失敗」に見える。`show` なら状態がそのまま出て、終了コードは常に 0。
   const state = await exec("systemctl", ["--user", "show", unit, "-p", "ActiveState", "--value"])

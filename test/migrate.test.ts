@@ -109,6 +109,27 @@ test("cache_write の無い ledger は列が足され、既存の行は残る", 
   d.close()
 })
 
+test("読み書きする側の無い卓は、空なら落ちる", () => {
+  const path = join(ROOT, "unused.db")
+  const d = new DatabaseSync(path)
+  d.exec("CREATE TABLE outbox (id TEXT PRIMARY KEY, destination_key TEXT);")
+  d.exec("CREATE TABLE schedule (id TEXT PRIMARY KEY);")
+  assert.deepEqual(migrate(d), ["drop:outbox", "drop:schedule"])
+  assert.deepEqual(migrate(d), [], "落ちた後は何もしない")
+  d.close()
+})
+
+test("行が入っている卓は落とさない — 想定と違うことが起きている印なので残す", () => {
+  const path = join(ROOT, "unused-rows.db")
+  const d = new DatabaseSync(path)
+  d.exec("CREATE TABLE outbox (id TEXT PRIMARY KEY);")
+  d.exec("INSERT INTO outbox (id) VALUES ('o1')")
+  assert.deepEqual(migrate(d), [], "行があるので触らない")
+  const row = d.prepare("SELECT count(*) AS n FROM outbox").get() as { n: number }
+  assert.equal(row.n, 1)
+  d.close()
+})
+
 test("空の DB では移行するものが無い(新規は schema.sql がそのまま作る)", async () => {
   const rt = makeRuntime(DbLive(":memory:"), RunnerStub([{ text: "ok" }]).layer)
   try {

@@ -67,10 +67,41 @@ function ledgerCacheWrite(d: DatabaseSync): boolean {
   return true
 }
 
+/**
+ * 読み書きする側の無い卓を落とす(docs/adr/0007)。
+ *
+ * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、卓は残り続ける。
+ * 残ると `.schema` を読んだ側が「その仕組みが在る」と読む — 消したい理由がそれなので、実物も落とす。
+ *
+ * **空のときだけ落とす。** 行があるなら、それは想定と違うことが起きている印で、
+ * ここで消してよいものではない。名前を返さないので、残ったことは表に出ない。
+ */
+const DROPPED = [
+  "execution_attempts",
+  "outbox",
+  "schedule",
+  "thread_map",
+  "feedback_weights",
+  "owner_allowlist",
+]
+
+function dropUnusedTables(d: DatabaseSync): string[] {
+  const gone: string[] = []
+  for (const t of DROPPED) {
+    if (columns(d, t).length === 0) continue
+    const row = d.prepare(`SELECT count(*) AS n FROM ${t}`).get() as { n: number } | undefined
+    if ((row?.n ?? 0) > 0) continue
+    d.exec(`DROP TABLE ${t}`)
+    gone.push(t)
+  }
+  return gone
+}
+
 /** 適用したものの名前を返す。何も要らなければ空。 */
 export function migrate(d: DatabaseSync): string[] {
   const applied: string[] = []
   if (bitemporalBeliefSlots(d)) applied.push("belief_slots:bitemporal")
   if (ledgerCacheWrite(d)) applied.push("ledger:cache_write")
+  for (const t of dropUnusedTables(d)) applied.push(`drop:${t}`)
   return applied
 }

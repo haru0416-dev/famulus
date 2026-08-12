@@ -1,10 +1,10 @@
--- famulus-zero v1 DB スキーマ(G9 — 完全直列化・lineage・冪等性を型で固める)。
--- ストア: bun:sqlite(blueprint §5「正本は append-only events(SQLite テーブル)」/ §4.443)。
+-- open-zero の DB スキーマ。ストア: node:sqlite(`DatabaseSync`)。
 -- 設計原則:
---   1. 正本は events。belief_slots / events_fts / vault は projection(silent overwrite 禁止)。
+--   1. 正本は events。belief_slots / events_fts は projection(silent overwrite 禁止)。
 --   2. 時刻は ISO-8601 UTC 'Z'(src/core/brand.ts の IsoUtc)。TEXT で保持。
---   3. bool は INTEGER 0/1。直列化値は JSON を TEXT で保持し json_valid で守る(G41 JsonValue)。
---   4. 実行に触れる境界(承認・スケジュール・配達)は冪等性キーで二重実行を封じる(G20/G21/G37)。
+--   3. bool は INTEGER 0/1。直列化値は JSON を TEXT で保持し json_valid で守る。
+--   4. **ここに在るのは、読み書きする側が実際に書かれている卓だけ。**
+--      先取りで置いた卓は「その仕組みが在る」と読まれてしまうので置かない(docs/adr/0007)。
 -- 実行時の PRAGMA(接続時に適用、ここには書かない): journal_mode=WAL, foreign_keys=ON, busy_timeout。
 
 -- スキーマ版管理(移植・マイグレーションの土台)。
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 );
 
 -- ============================================================================
--- 1. メモリ正本: events(append-only、MemoryEvent と 1:1。src/memory/events.ts)
+-- 1. メモリ正本: events(append-only。読み書きは src/services/Memory.ts)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS events (
   id          TEXT PRIMARY KEY,                       -- ULID/UUID(生成は app)
@@ -31,7 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_events_at        ON events(at);
 CREATE INDEX IF NOT EXISTS idx_events_kind_at   ON events(kind, at);
 CREATE INDEX IF NOT EXISTS idx_events_supersedes ON events(supersedes);
 
--- append-only 不変条件(§5「silent overwrite 禁止」)。
+-- append-only 不変条件。**黙って上書きさせない。**
 -- DELETE は常に禁止。UPDATE は「content を NULL にする」redact 経路のみ許し、他列の変更は禁止。
 CREATE TRIGGER IF NOT EXISTS events_no_delete
 BEFORE DELETE ON events
@@ -84,9 +84,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_belief_current
 CREATE INDEX IF NOT EXISTS idx_belief_history
   ON belief_slots (slot, valid_from, valid_until);
 
--- 全文検索の projection。日本語は **trigram tokenizer**(G3)。unicode61 は日本語を分かち書きできず
+-- 全文検索の projection。日本語は **trigram tokenizer**。unicode61 は日本語を分かち書きできず
 -- 「会議」で「明日の会議資料」が引けない。trigram は3文字窓で部分一致する(2文字クエリは未対応=
--- vector 併用のハイブリッド(marble)は v1.5)。projection なので消して再導出できる。
+-- vector 併用のハイブリッドは**まだ無い**)。projection なので消して再導出できる。
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
   event_id UNINDEXED,
   text,
@@ -94,7 +94,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
 );
 
 -- ============================================================================
--- 3. proposals(提案。src/tasks/proposal.ts の Proposal と 1:1、状態機械 G25)
+-- 3. proposals(提案。状態機械の実装は src/services/Proposals.ts)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS proposals (
   id             TEXT PRIMARY KEY,
@@ -105,16 +105,16 @@ CREATE TABLE IF NOT EXISTS proposals (
   summary        TEXT NOT NULL,
   assessment     TEXT NOT NULL,
   ask            TEXT NOT NULL,
-  -- 完全性ゲート5要素(G26)。名指しできない案は提案にしない(C9)
+  -- 完全性ゲート5要素。名指しできない案は提案にしない
   c_what         TEXT NOT NULL,
   c_when         TEXT NOT NULL,
   c_who          TEXT NOT NULL CHECK (c_who IN ('famulus','human')),
   c_how          TEXT NOT NULL,
   c_how_verified TEXT NOT NULL,
-  -- 実行内容(完全直列化 G41)
+  -- 実行内容(JSON に直列化して丸ごと持つ)
   payload        TEXT NOT NULL CHECK (json_valid(payload)),
   provenance     TEXT NOT NULL CHECK (json_valid(provenance)),
-  -- 状態(G25)
+  -- **executing / executed / failed には今どの経路からも到達しない。** 実行器が無い(docs/adr/0007)。
   status         TEXT NOT NULL CHECK (status IN
                    ('proposed','approved','deferred','denied','expired','executing','executed','failed')),
   deferred_until TEXT,                                -- later 時のみ(IsoUtc)
@@ -125,8 +125,8 @@ CREATE INDEX IF NOT EXISTS idx_proposals_status  ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_expires ON proposals(expires_at) WHERE status = 'proposed';
 CREATE INDEX IF NOT EXISTS idx_proposals_deferred ON proposals(deferred_until) WHERE status = 'deferred';
 
--- 承認記録(G21 — 承認の権威境界)。誰が・いつ・何を(hash)承認したかを独立レコードに。
--- 実行ゲートは payload_hash 一致を条件にする(承認後に payload が変われば実行しない)。
+-- 承認記録。誰が・いつ・何を(hash)承認したかを独立レコードに。
+-- **照合する側はまだ無い。** 承認後に payload が差し替わっていないかを後から見られるように残すだけ。
 CREATE TABLE IF NOT EXISTS approvals (
   id             TEXT PRIMARY KEY,
   proposal_id    TEXT NOT NULL REFERENCES proposals(id),
@@ -140,56 +140,7 @@ CREATE TABLE IF NOT EXISTS approvals (
 CREATE INDEX IF NOT EXISTS idx_approvals_proposal ON approvals(proposal_id);
 
 -- ============================================================================
--- 4. 冪等性・クラッシュ境界(G20 blocker)
---    DB更新 → LLM/API実行 → Discord配達 の途中で落ちても二重実行しない。
---    execution_attempts = atomic claim + idempotency key、outbox = transactional outbox。
--- ============================================================================
-CREATE TABLE IF NOT EXISTS execution_attempts (
-  id              TEXT PRIMARY KEY,                   -- attempt id
-  proposal_id     TEXT NOT NULL REFERENCES proposals(id),
-  idempotency_key TEXT NOT NULL UNIQUE,               -- 同一 (proposal, approval) は1回だけ claim できる
-  claimed_at      TEXT NOT NULL,                      -- IsoUtc(claim 成功時刻)
-  state           TEXT NOT NULL CHECK (state IN ('claimed','succeeded','failed')),
-  finished_at     TEXT,                               -- succeeded/failed 到達時刻
-  attempt_no      INTEGER NOT NULL DEFAULT 1,         -- replan は1回まで(§4)
-  result          TEXT CHECK (result IS NULL OR json_valid(result)),  -- 実行結果/エラー要約
-  ledger_id       TEXT REFERENCES ledger(id)          -- 記帳との突合(下記 ledger)
-);
-CREATE INDEX IF NOT EXISTS idx_attempts_proposal ON execution_attempts(proposal_id);
-
--- transactional outbox(G20)。副作用(Discord/Gmail/Calendar 配達)は
--- 「DB 更新と同一トランザクションで outbox に積む」→ 別プロセスが配達して sent に遷移。
--- destination_key の UNIQUE が配達の二重化を封じる(例: 'briefing:2026-07-24' は1回だけ)。
-CREATE TABLE IF NOT EXISTS outbox (
-  id              TEXT PRIMARY KEY,
-  attempt_id      TEXT REFERENCES execution_attempts(id),  -- 朝会など提案外の配達は NULL 可
-  destination     TEXT NOT NULL CHECK (destination IN ('discord','gmail','calendar')),
-  destination_key TEXT NOT NULL UNIQUE,               -- 冪等キー(配達の一意性)
-  payload         TEXT NOT NULL CHECK (json_valid(payload)),
-  state           TEXT NOT NULL CHECK (state IN ('pending','sent','failed','canceled')),
-  created_at      TEXT NOT NULL,                      -- IsoUtc
-  sent_at         TEXT,                               -- sent 到達時刻
-  last_error      TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox(state) WHERE state = 'pending';
-
--- ============================================================================
--- 5. schedule(durable な時限配達。G10/G37 — 再起動を跨ぐ・TTL 誤発火を防ぐ)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS schedule (
-  id            TEXT PRIMARY KEY,
-  proposal_id   TEXT REFERENCES proposals(id),        -- リマインドの由来(朝会など固定枠は NULL)
-  fire_at       TEXT NOT NULL,                        -- IsoUtc(発火予定・絶対時刻。相対 TTL は保存時に絶対化 G37)
-  channel       TEXT NOT NULL,                        -- 配達先(Discord channel 論理名: morning/proposals/talk)
-  payload       TEXT NOT NULL CHECK (json_valid(payload)),
-  state         TEXT NOT NULL CHECK (state IN ('pending','fired','canceled','missed')),
-  fired_at      TEXT,                                 -- 実発火時刻
-  outbox_id     TEXT REFERENCES outbox(id)            -- 配達は outbox 経由(冪等)
-);
-CREATE INDEX IF NOT EXISTS idx_schedule_due ON schedule(fire_at) WHERE state = 'pending';
-
--- ============================================================================
--- 6. ledger(全 run・全 turn の記帳。§6 会計。unpriced も 0円にしない)
+-- 4. ledger(全 run・全 turn の記帳。unpriced も 0円にしない)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS ledger (
   id           TEXT PRIMARY KEY,
@@ -197,11 +148,11 @@ CREATE TABLE IF NOT EXISTS ledger (
   kind         TEXT NOT NULL,                         -- 'turn' | 'run' | 'briefing' | 'scout' ...
   role         TEXT,                                  -- src/config/models.ts の Role(任意)
   model        TEXT,                                  -- 使用モデル id
-  -- 入力は3つに割れて返る。**in_tok だけ見ると嘘になる**(実測 2026-08-10: in_tok=10 / cache_write=7,048)。
+  -- 入力は3つに割れて返る。**in_tok だけ見ると嘘になる**(docs/adr/0005)。
   -- 総入力 = in_tok + cache_read + cache_write。どれか1つを「入力」と呼ばない。
   in_tok       INTEGER NOT NULL DEFAULT 0,            -- キャッシュに載らなかった分だけ
   out_tok      INTEGER NOT NULL DEFAULT 0,
-  cache_read   INTEGER NOT NULL DEFAULT 0,            -- cache_read=0 監視(§6、対話経路のみ)
+  cache_read   INTEGER NOT NULL DEFAULT 0,            -- cache_read=0 監視(対話経路のみ)
   cache_write  INTEGER NOT NULL DEFAULT 0,            -- 初回に書いた分(定義文・system はここに入る)
   usd          REAL NOT NULL DEFAULT 0,
   unpriced     INTEGER NOT NULL DEFAULT 0 CHECK (unpriced IN (0,1)),  -- 単価不明を黙って0円にしない
@@ -213,7 +164,7 @@ CREATE INDEX IF NOT EXISTS idx_ledger_at   ON ledger(at);
 CREATE INDEX IF NOT EXISTS idx_ledger_kind ON ledger(kind, at);
 
 -- ============================================================================
--- 7. watchlist(監視中の未決事項。§8 朝会の材料・T1 の滞留検知)
+-- 5. watchlist(監視中の未決事項。滞留の検知は src/services/Attention.ts)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS watchlist (
   id              TEXT PRIMARY KEY,
@@ -227,7 +178,7 @@ CREATE TABLE IF NOT EXISTS watchlist (
 CREATE INDEX IF NOT EXISTS idx_watchlist_open ON watchlist(status) WHERE status = 'open';
 
 -- ============================================================================
--- 8. questions(問いレジストリ。quaere: belief と question を分ける。§5.5)
+-- 6. questions(問いレジストリ。belief と question を分けるための独立台帳)
 --    「未 probe の仮説」を belief に昇格させないための独立台帳。
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS questions (
@@ -243,20 +194,8 @@ CREATE TABLE IF NOT EXISTS questions (
 CREATE INDEX IF NOT EXISTS idx_questions_open ON questions(status) WHERE status = 'open';
 
 -- ============================================================================
--- 9. thread_map(Discord private thread ↔ 実体の対応表。§7 詳細展開)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS thread_map (
-  thread_id   TEXT PRIMARY KEY,                       -- Discord thread id
-  channel_id  TEXT NOT NULL,                          -- 親チャンネル
-  entity_kind TEXT NOT NULL CHECK (entity_kind IN ('proposal','watchlist','question','briefing')),
-  entity_id   TEXT NOT NULL,                          -- 対応する実体 id
-  created_at  TEXT NOT NULL                           -- IsoUtc
-);
-CREATE INDEX IF NOT EXISTS idx_thread_entity ON thread_map(entity_kind, entity_id);
-
--- ============================================================================
--- 10. feedback(裁可の学習信号。T1 approve 率飽和検知・deny 還流)
---     決定の生ログ(decisions)+ 集計重み(feedback_weights)。
+-- 7. decisions(裁可の生ログ。deny 還流・提示から親指までの所要)
+--     集計した重みの卓は持たない。要るときに events から数える(docs/adr/0007)。
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS decisions (
   id          TEXT PRIMARY KEY,
@@ -268,25 +207,8 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_at ON decisions(at);
 
-CREATE TABLE IF NOT EXISTS feedback_weights (
-  dimension    TEXT PRIMARY KEY,                      -- 例: 'kind:research', 'signal:calendar'
-  weight       REAL NOT NULL DEFAULT 0,
-  sample_count INTEGER NOT NULL DEFAULT 0,
-  updated_at   TEXT NOT NULL                          -- IsoUtc
-);
-
 -- ============================================================================
--- 11. owner_allowlist(Discord ingress。§7 owner-only。v1 は所有者1名)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS owner_allowlist (
-  platform  TEXT NOT NULL CHECK (platform IN ('discord')),
-  user_id   TEXT NOT NULL,
-  added_at  TEXT NOT NULL,                            -- IsoUtc
-  PRIMARY KEY (platform, user_id)
-);
-
--- ============================================================================
--- 12. turns(会話ターンのログ。working/episodic 補助・監査)
+-- 8. turns(会話ターンのログ。working/episodic 補助・監査)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS turns (
   id         TEXT PRIMARY KEY,

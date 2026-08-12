@@ -5,20 +5,11 @@
  * 自分で走らせないと出てこない。そのために任意のコマンドを動かす口が要るが、
  * このホストには持ち主の鍵も台帳(`.data/*.db`)も置いてある。**境界を先に引かないと口は開けられない。**
  *
- * 境界に docker を選んだのは、他の2つを実測して落としたから(2026-08-12 / x220-158-29-34):
+ * 境界に docker を選んだのは、srt(bubblewrap)と headless の `claude -p` を実測して落としたから。
+ * 前者は AppArmor が入れ子の userns を塞いでいて動かず、後者は作業場の中にも書けない。
+ * どちらの失敗も、越えるには sudo かサンドボックスの解除が要る。落とした経緯は docs/adr/0001。
  *
- *   - **srt(bubblewrap)は動かない。** `srt -c ...` は
- *     `apply-seccomp: write /proc/self/setgroups (nested userns is capability-restricted)` で落ちる。
- *     Ubuntu 26.04 は `kernel.apparmor_restrict_unprivileged_userns=1` で、bwrap の中から
- *     もう一段 userns を作ることを禁じている。sysctl を落とすか AppArmor のプロファイルを足すかで、
- *     どちらも sudo が要る = 心拍からは越えられない。
- *   - **headless の `claude -p --permission-mode auto` は書けない。** サンドボックスは効く
- *     (`~/.ssh` の ls は拒否)が、作業場の中への `echo hi > a.txt` も拒否される。
- *     `--add-dir` を足しても同じ。抜け道は `--allowedTools` にコマンド接頭辞を載せることだけで、
- *     任意のプロジェクトを動かすには書き込む全コマンドを載せる必要がある = 実質サンドボックスを外す。
- *     (`dontAsk` / `acceptEdits` は headless では Bash 自体が拒否される。)
- *
- * docker は sudo 無しで通り、実測で「作業場には書ける / `/home/haru` は見えない /
+ * docker は sudo 無しで通り、「作業場には書ける / `/home/haru` は見えない /
  * `--network none` なら外に出られない」が同時に成り立つ。中に資格情報を持ち込まないので、
  * 万一持ち出されて困るのは**そのランで自分が置いたものだけ**になる。
  */
@@ -26,7 +17,10 @@ import { spawn } from "node:child_process"
 import { mkdirSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 
-/** 走らせる器。`node` と `git` と `python3` が最初から入っている必要がある(拾い物は大抵どれかで動く)。 */
+/**
+ * 走らせる器。`node` と `git` と `python3` が最初から入っている必要がある(拾い物は大抵どれかで動く)。
+ * 中身の実測は docs/adr/0001 — jq・cargo・go・uv は**入っていない**ので、要るなら中で取る。
+ */
 const DEFAULT_IMAGE = "node:24-bookworm"
 /**
  * 1回の走行の上限。**依存の取得は分単位で掛かる**ので、web の 20 秒とは桁が違う。

@@ -1,10 +1,12 @@
 /**
  * DB サービス。`src/db/schema.sql` が正本で、アプリ側はそれを書き換えない。
  *
- * events の append-only はアプリ側のお行儀ではなく **SQL トリガで強制**されていて
- * (DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)、冪等性は
- * `execution_attempts.idempotency_key` と `outbox.destination_key` の UNIQUE で担保されている。
- * 不変条件を SQL 側に置いてあるので、どのドライバから触っても同じように掛かる。
+ * events の append-only はアプリ側のお行儀ではなく **SQL トリガで強制**されている
+ * (DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)。不変条件を SQL 側に置いてあるので、
+ * どのドライバから触っても同じように掛かる。
+ *
+ * **外に出る行為の冪等性は、いま担保されていない。** それ用の卓は作ってあったが読み書きする側が
+ * 一度も書かれなかったので落とした(docs/adr/0007)。予告→猶予→実行を作るときに改めて決める。
  *
  * Tag + Layer にしてあるのは**接続先を積み替えられるようにするため**。
  * テストは `DbLive(":memory:")` を積むだけで、実 DB にもモックにも触らずに
