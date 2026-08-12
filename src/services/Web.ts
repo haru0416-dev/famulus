@@ -538,13 +538,16 @@ function githubDetour(u: URL, seg: readonly string[]): string | undefined {
 /**
  * 同じホストを続けて叩かない。**巡回するなら間隔を空ける**、が礼儀の最低限。
  * プロセス内だけの記憶なので、再起動でリセットされる(それで困る規模では回さない)。
+ *
+ * 環境変数で縮められるのは**検査のため**。相手を差し替えた検査(fetch を stub したもの)は
+ * 誰にも迷惑を掛けないのに、同じホストを4回叩く1件で 4 秒待つ。外へ出る既定は動かさない。
  */
-const HOST_INTERVAL_MS = 1_000
+const hostIntervalMs = (): number => Number(process.env.OPEN_ZERO_HOST_INTERVAL_MS ?? 1_000)
 const lastHit = new Map<string, number>()
 async function pace(host: string): Promise<void> {
   const prev = lastHit.get(host)
   const now = Date.now()
-  const wait = prev === undefined ? 0 : prev + HOST_INTERVAL_MS - now
+  const wait = prev === undefined ? 0 : prev + hostIntervalMs() - now
   if (wait > 0) await new Promise((r) => setTimeout(r, wait))
   lastHit.set(host, Date.now())
 }

@@ -20,6 +20,9 @@ import {
   toText,
 } from "../src/services/Web.ts"
 
+// 同じホストへの間隔は既定 1 秒。**ここは fetch を差し替えてあるので誰も叩いていない** —
+// 待つぶんがそのままゲートの所要になるので 0 にする(src/services/Web.ts の hostIntervalMs)。
+process.env.OPEN_ZERO_HOST_INTERVAL_MS = "0"
 test("内側のアドレスは数値で弾く(前方一致では取り違える)", () => {
   for (const ip of [
     "127.0.0.1",
