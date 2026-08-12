@@ -38,6 +38,7 @@ import { Ledger } from "../services/Ledger.ts"
 import { Memory, renderRecall } from "../services/Memory.ts"
 import { Notify } from "../services/Notify.ts"
 import { Proposals } from "../services/Proposals.ts"
+import { runDir, runInSandbox } from "../services/Sandbox.ts"
 import { defaultSources, renderHits, SOURCE_MENU, searchWeb } from "../services/Search.ts"
 import { fetchPage } from "../services/Web.ts"
 import { DRAFT_MAX, findLeaks, findShape, findSmells } from "./drafting.ts"
@@ -598,6 +599,66 @@ export default function Assistant() {
    * 調べたことが役に立つのは相手が読んだときなので、読ませたいものはここから外へ押す。
    * 承認は要らない — 出るのは持ち主自身の端末だけで、外の誰にも届かない。
    */
+  /**
+   * 拾ったものを**実際に動かす**口。下書きの材料は、ここを通ったものだけが自分の言葉になる。
+   *
+   * 境界と、他の道を落とした理由は src/services/Sandbox.ts の頭に書いてある。
+   * ここで足しているのは**止める条件**だけ: halt が立っているなら走らせない。
+   * halt は「持ち主が明示解除するまで自動で動かない」印なので、モデル呼び出しだけを止めて
+   * ホストでコマンドが走り続けるなら、その印は意味を持たない。
+   */
+  useTool({
+    name: "shell",
+    description:
+      "コマンドを走らせて、出力をそのまま受け取る。**読むのではなく動かすための道具**。" +
+      "拾ったものを実際に動かし、詰まった箇所・落ちた経路・要った時間を記録に落とすのに使う。" +
+      "隔離された器(docker)の中で走るので、**持ち主のファイルにも台帳にも触れない**。" +
+      "書けるのは作業場だけで、器は毎回捨てられる — 残るのは作業場に置いたファイルだけ。" +
+      "既定では外に出られない。clone や install が要るときだけ net を true にする。" +
+      "上限は3分 / メモリ 2GB。返るのは出力の末尾 12,000字。" +
+      "**3分で終わる単位に割る** — 心拍ごと落ちると走った記録も消える。" +
+      "同じ作業場の名前を渡せば置いたファイルは残るので、続きは次の心拍でやればよい。",
+    input: v.object({
+      command: v.pipe(v.string(), v.description("走らせるコマンド。bash -lc に渡す。複数行でよい。")),
+      workspace: v.pipe(
+        v.string(),
+        v.description("作業場の名前(英数字)。同じ名前を渡すと前回置いたファイルの続きから走る。"),
+      ),
+      net: v.optional(
+        v.pipe(v.boolean(), v.description("外に出るか。clone / install が要るときだけ true。既定は false。")),
+      ),
+    }),
+    run: async ({
+      data: { command, workspace, net },
+    }: {
+      data: { command: string; workspace: string; net?: boolean | undefined }
+    }) =>
+      run(
+        Effect.gen(function* () {
+          const gov = yield* Governance
+          const halted = yield* gov.readHalt
+          if (halted) return `走らせない: 停止中(halt)— ${halted.reason}`
+          const mem = yield* Memory
+          const dir = runDir(workspace)
+          const r = yield* Effect.promise(() =>
+            runInSandbox(command, { workDir: dir, ...(net ? { net } : {}) }),
+          )
+          const head = r.timedOut
+            ? `時間切れで打ち切った(${Math.round(r.elapsedMs / 1000)}秒)`
+            : `終了コード ${r.exitCode}(${Math.round(r.elapsedMs / 1000)}秒)`
+          // **走った跡は必ず残す。** 出力そのものを台帳へ入れるのは、後から下書きを書くときに
+          // 要るのが「何が起きたか」の生の文だから — 要約して入れると、詰まった箇所の
+          // エラー文が消えて、書けるのが「動かしてみた」という誰にでも書ける文だけになる。
+          yield* mem.remember({
+            source: "system",
+            content: { ran: command, workspace, exitCode: r.exitCode, ms: r.elapsedMs, output: r.output },
+            text: `${command}\n${r.output}`,
+          })
+          return `${head}\n作業場: ${dir}\n\n${r.output || "(出力なし)"}`
+        }),
+      ),
+  })
+
   useTool({
     name: "tell",
     description:

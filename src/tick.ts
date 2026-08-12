@@ -144,6 +144,7 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
       "## 今回やること",
       "自分の記録(remember / watch / unwatch / ask / answer)は自分の判断で書いてよい。確認は要らない。",
       "外に出る行為(送信・予約・購入・削除)は propose で置く。実行はしない。",
+      "**手元で動かすのは `shell`** — 隔離された器の中なので裁可は要らない。走った跡は台帳に残る。",
       "",
       ...(spokenTo
         ? [
