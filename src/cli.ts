@@ -22,6 +22,8 @@
  *   oz belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
  *   oz dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定に上げる(1回ぶんでは見えない値)
  *   oz cleanup [日数] [--dry]… `.data/` の増え続けるものを落とす(events は触らない)
+ *   oz ws                  … 作業場の一覧(名前・用途・大きさ・最後に触った時刻)
+ *   oz selfdev [--fresh]   … 自分のソースの clone を作業場に置く(コンテナから直せるようにする)
  *   oz intake [--dry] [n]  … 過去の会話を圧縮して DB に入れる(DB の入口)
  *
  * **承認しても実行はされない**。コネクタ(送信・予約)が1つも無いので、approved は
@@ -32,7 +34,9 @@ import { DREAM_DAYS, dream } from "./agent/dream.ts"
 import { CLEANUP_DAYS, cleanup } from "./core/cleanup.ts"
 import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
+import { selfdev } from "./core/selfdev.ts"
 import { dayRange, localStamp, nowIso } from "./core/time.ts"
+import { listWorkspaces, renderWorkspaces } from "./core/workspaces.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "./model/claude-cli.ts"
 import { isRefusal, runtime } from "./runtime.ts"
 import { Attention, type NextMove, STALE_BELIEF_DAYS } from "./services/Attention.ts"
@@ -44,6 +48,7 @@ import { Ledger } from "./services/Ledger.ts"
 import { Memory, renderRecall } from "./services/Memory.ts"
 import { Notify } from "./services/Notify.ts"
 import { type ProposalRow, type ProposalStatus, Proposals } from "./services/Proposals.ts"
+import { runsRoot } from "./services/Sandbox.ts"
 
 const short = (id: string) => id.slice(0, 8)
 /** 桁が見えれば足りるので k で丸める。1000 未満は素の数。 */
@@ -74,6 +79,9 @@ const USAGE = `oz — open-zero の承認 CLI
                            --from <ISO> で「いつから真だったか」を遡って書ける
   oz dream [日数] [--dry]   何日ぶんかをまとめて見直し、確定に上げ直す(既定 7 日)
   oz cleanup [日数] [--dry] 作業場と読まれない会話を落とす(既定 14 日・events は触らない)
+  oz ws                    作業場の一覧(何のための場所か・大きさ・最後に触った時刻)
+  oz selfdev [--fresh]     自分のソースの clone を作業場に置き、中でゲートが通るまで確かめる
+                           --fresh は clone ごと取り直す(中で直しかけていたものは消える)
   oz intake --dry [n]      過去の会話を選別だけして圧縮率を見る(モデルを呼ばない)
   oz intake [n]            未取り込みの会話を古い順に n 件(既定 10)DB へ入れる
                            取り込み元は Claude Code のログと Claude.ai の書き出しの両方
@@ -400,6 +408,17 @@ const program = (argv: readonly string[]) =>
         const dry = rest.includes("--dry")
         const days = Number(rest.find((a) => /^\d+$/.test(a)) ?? CLEANUP_DAYS)
         return yield* cleanup({ days, ...(dry ? { dry: true } : {}) })
+      }
+
+      case "ws": {
+        const list = yield* listWorkspaces
+        return [`作業場(${list.length} 件)— ${runsRoot()}`, "", renderWorkspaces(list, Date.now())].join("\n")
+      }
+
+      case "selfdev": {
+        // **中でゲートが通るところまでやる。** clone を置いただけの状態を「できた」と出すと、
+        // 次の tick が依存の取得で持ち時間を全部使って、そこで切られる。
+        return yield* selfdev(rest.includes("--fresh") ? { fresh: true } : {})
       }
 
       case "intake": {

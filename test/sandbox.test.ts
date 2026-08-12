@@ -11,6 +11,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
 import { test } from "node:test"
+import { TZ } from "../src/core/time.ts"
 import { dockerArgs, runDir, runsRoot } from "../src/services/Sandbox.ts"
 
 /** 置き場を一時ディレクトリに向ける。`.data/runs` を検査で汚さない。 */
@@ -67,6 +68,14 @@ test("書けるのは作業場だけ。コンテナは毎回捨てる", () => {
   assert.ok(args.includes("--rm"), "コンテナが残ると走行のたびに溜まる")
   // **ユーザーの uid で走らせる。** root のままだと、コンテナが作ったファイルを tick が消せない。
   assert.equal(args[args.indexOf("--user") + 1], `${process.getuid?.()}:${process.getgid?.()}`)
+})
+
+test("中の時計の帯はホストと同じ", () => {
+  // 帯を渡さないとコンテナは UTC で走る。**同じコマンドが違う日付を出す環境**になり、
+  // 中で落ちた検査を読む側が「自分の欠陥」と「帯の差」を見分けられない。
+  const args = dockerArgs("date", { workDir: "/tmp/w", name: "oz-run-test" })
+  const env = args.filter((_, i) => args[i - 1] === "-e")
+  assert.ok(env.includes(`TZ=${TZ}`), `帯が渡っていない: ${env.join(" ")}`)
 })
 
 test("コマンドは最後の1要素として渡す(語に割らない)", () => {

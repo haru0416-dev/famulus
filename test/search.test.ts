@@ -12,6 +12,13 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
+// **`OPEN_ZERO_TZ` は `new Date()` には届かない。** 帯の付いていない日付
+// (SearXNG の `publishedDate`)を読む1件は素の `Date` を通るので、走らせたホストの帯で答が変わる。
+// ここまでは「たまたまこのホストが Asia/Tokyo だから通っていた」検査で、コンテナの中では 9 時間ずれた。
+process.env.TZ = "Asia/Tokyo"
+// 同じホストへの間隔は既定 1 秒。**ここは fetch を差し替えてあるので誰も叩いていない** —
+// 待つぶんがそのままゲートの所要になるので 0 にする(src/services/Web.ts の hostIntervalMs)。
+process.env.OPEN_ZERO_HOST_INTERVAL_MS = "0"
 const { defaultSources, parseFrom, plainQuery, renderHits, searchWeb } = await import(
   "../src/services/Search.ts"
 )

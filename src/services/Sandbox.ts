@@ -16,6 +16,7 @@
 import { spawn } from "node:child_process"
 import { mkdirSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
+import { TZ } from "../core/time.ts"
 
 /**
  * 走らせるコンテナ。`node` と `git` と `python3` が最初から入っている必要がある(拾い物は大抵どれかで動く)。
@@ -102,6 +103,11 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     // uid を指定するとコンテナの中に home が無くなる。npm も pip も HOME を要求するので作業場を充てる。
     "-e",
     "HOME=/work",
+    // **中の時計の帯をホストに合わせる。** 既定のコンテナは UTC で、こちらは Asia/Tokyo。
+    // 帯だけが違う環境で走らせると、同じコマンドが違う日付を出す — 実測で、帯の付いていない
+    // 日付を読む検査1件が中でだけ 9 時間ずれて落ちた(src/services/Search.ts の publishedDate)。
+    "-e",
+    `TZ=${TZ}`,
     "-v",
     `${opts.workDir}:/work`,
     "-w",
