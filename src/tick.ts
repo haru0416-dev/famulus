@@ -28,6 +28,7 @@ import { claudeMaxProvider } from "./model/provider.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
 import { Attention, type Digest, type ObservedEvent } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
+import { Discord } from "./services/Discord.ts"
 import { buildFencedPrompt, Governance, type UntrustedBlock } from "./services/Governance.ts"
 import { Memory } from "./services/Memory.ts"
 import { Notify } from "./services/Notify.ts"
@@ -165,24 +166,34 @@ const blocked = Effect.gen(function* () {
  * 受信箱を台帳に移す。**digest より先に呼ぶ** — 届いていた文がそのまま未読の入力になり、
  * 「持ち主から言われた」ことが起きる理由になる。ここが後だと、返事は次の心拍まで読まれない。
  *
- * 位置を持っていない初回は**取り込まずに位置だけ進める**。ntfy は数十時間ぶん抱えているので、
- * 位置なしで引くと昨日の返事が今日の指示として流れ込む。
+ * 口は2つ。ntfy はロック画面まで届くが返せる幅が狭く、Discord は持ち主が一番長く開いている。
+ * どちらから来ても同じ owner イベントにする — 台帳の側で経路を気にする理由が無い。
  *
- * source は owner。tailnet の中に居るのは持ち主の端末だけで、鍵は Tailscale が持っている。
+ * ntfy は位置を持っていない初回だけ**取り込まずに位置を進める**。数十時間ぶん抱えているので、
+ * 位置なしで引くと昨日の返事が今日の指示として流れ込む(Discord 側は同じ規則を自分で持つ)。
+ *
+ * source は owner。ntfy の宛先は tailnet の中にしか出ておらず、Discord は持ち主との DM だけ。
  * 仮に別の端末から投げられても、外に出る行為は予告を経るので実行前に持ち主の目を通る。
  */
 const drainInbox = Effect.gen(function* () {
   const notify = yield* Notify
+  const discord = yield* Discord
   const db = yield* Db
   const mem = yield* Memory
+  const said: string[] = []
+
   const cursor = yield* db.meta("ntfy:in_cursor")
   const msgs = yield* notify.inbox(cursor ?? "all")
   const last = msgs.at(-1)
-  if (!last) return 0
-  yield* db.setMeta("ntfy:in_cursor", last.id)
-  if (!cursor) return 0
-  for (const m of msgs) yield* mem.remember({ source: "owner", content: m.text, at: nowIso() })
-  return msgs.length
+  if (last) {
+    yield* db.setMeta("ntfy:in_cursor", last.id)
+    if (cursor) said.push(...msgs.map((m) => m.text))
+  }
+
+  said.push(...(yield* discord.inbox()).map((m) => m.text))
+
+  for (const text of said) yield* mem.remember({ source: "owner", content: text, at: nowIso() })
+  return said.length
 })
 
 /** 心拍の回数だけ数えておく。行を増やさずに「生きているか」が分かる最小の痕跡。 */

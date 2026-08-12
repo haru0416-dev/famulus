@@ -29,6 +29,7 @@ import { CLAUDE_POOL, RMOD_POOL } from "./model/claude-cli.ts"
 import { isRefusal, runtime } from "./runtime.ts"
 import { Attention, STALE_BELIEF_DAYS } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
+import { Discord } from "./services/Discord.ts"
 import { AUTONOMOUS_ROLE, BUDGET, Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
@@ -124,6 +125,7 @@ const program = (argv: readonly string[]) =>
           day.endIso,
         )
         const notify = yield* Notify
+        const discord = yield* Discord
         const last = yield* db.meta("tick:last")
         const lastActive = yield* db.meta("tick:last_active")
         // 台帳が溜まっているか。**器があることと中身があることは別**で、
@@ -151,6 +153,9 @@ const program = (argv: readonly string[]) =>
           notify.configured()
             ? `通知: 出せる${notify.canReply() ? " / 押し戻しも受けられる" : "(押し戻しは受けられない)"}`
             : "通知: 宛先が無い(.env の OPEN_ZERO_NTFY_TOPIC が空)",
+          discord.configured()
+            ? "Discord: DM に出せる / 印も自由文も受けられる"
+            : "Discord: 宛先が無い(.env の OPEN_ZERO_DISCORD_TOKEN が空)",
         ].join("\n")
       }
 

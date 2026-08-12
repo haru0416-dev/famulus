@@ -13,6 +13,7 @@ import { type DbFailed, describeRefusal, type Refusal } from "./core/errors.ts"
 import { type Runner, RunnerClaudeCli } from "./model/Runner.ts"
 import { Attention } from "./services/Attention.ts"
 import { type Db, DbLive } from "./services/Db.ts"
+import { Discord } from "./services/Discord.ts"
 import { Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
@@ -29,6 +30,7 @@ const services = Layer.mergeAll(
   Attention.Default,
   Intake.Default,
   Notify.Default,
+  Discord.Default,
 )
 
 /**
@@ -85,7 +87,17 @@ export function isRefusal(e: unknown): e is Refusal {
  * — フックが throw すると Flue はモデルを呼ぶ前に submission を落とすので、
  * **ゲートが実際にモデル呼び出しを止める**のはここ。
  */
-export type AppServices = Db | Governance | Memory | Ledger | Proposals | Attention | Intake | Notify | Runner
+export type AppServices =
+  | Db
+  | Governance
+  | Memory
+  | Ledger
+  | Proposals
+  | Attention
+  | Intake
+  | Notify
+  | Discord
+  | Runner
 
 export function run<A, E>(effect: Effect.Effect<A, E, AppServices>, rt: AppRuntime = runtime()): Promise<A> {
   return rt.runPromise(
