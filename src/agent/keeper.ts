@@ -127,11 +127,22 @@ export const keepGrounded = (values: readonly KeptValue[] | undefined, material:
  * 戻り値は DB に残す1行。呼び出し側はこれを tick の記録に添えるだけで、経路の分岐には使わない
  * — keeper が転んだせいで返信や既読位置が変わると、直す場所が分からなくなる。
  */
-export const keep = (opts: { material: string; since?: string; signal?: AbortSignal }) =>
+export const keep = (opts: {
+  material: string
+  since?: string
+  signal?: AbortSignal
+  /** 材料の見出し。窓を広げて呼ぶ側(dream)が「1回ぶんではない」と書けるようにする。 */
+  header?: string
+  /** 記録に付ける名前。既定は keeper。 */
+  label?: string
+  /** 判定に足す一節。窓が1回ぶんでないときに、何を数えてよいかを書き足す。 */
+  extraSystem?: string
+}) =>
   Effect.gen(function* () {
     const runner = yield* Runner
     const mem = yield* Memory
-    if (bare(opts.material).length === 0) return "keeper: 材料が無い(ユーザーの発言がこの回に無い)"
+    const tag = opts.label ?? "keeper"
+    if (bare(opts.material).length === 0) return `${tag}: 材料が無い(ユーザーの発言がこの回に無い)`
 
     // 既存の slot を見せる。**別名を作らせないため** — 同じ事柄が2つの名前で入ると、
     // どちらを引いても片方しか出てこない DB になる。
@@ -153,13 +164,13 @@ export const keep = (opts: { material: string; since?: string; signal?: AbortSig
       runner.run({
         role: "structurer",
         kind: "keep",
-        systemPrompt: KEEPER_SYSTEM,
-        prompt: `## いま DB にある確定値\n${known}\n\n## この回のユーザーの発言\n${opts.material}`,
+        systemPrompt: opts.extraSystem ? `${KEEPER_SYSTEM}\n\n${opts.extraSystem}` : KEEPER_SYSTEM,
+        prompt: `## いま DB にある確定値\n${known}\n\n## ${opts.header ?? "この回のユーザーの発言"}\n${opts.material}`,
         schema: KEEPER_SCHEMA,
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
     )
-    if (out._tag === "Left") return `keeper: 呼べなかった(${causeReason(out.left)})`
+    if (out._tag === "Left") return `${tag}: 呼べなかった(${causeReason(out.left)})`
 
     const res = (out.right.structured ?? {}) as { looked?: string; values?: KeptValue[] }
     const grounded = keepGrounded(res.values, opts.material)
@@ -172,7 +183,7 @@ export const keep = (opts: { material: string; since?: string; signal?: AbortSig
         ...(v.reason ? { reason: v.reason } : {}),
       })
     }
-    const head = kept.length === 0 ? "keeper: 上げるものは無かった" : `keeper: ${kept.length} 件を確定へ`
+    const head = kept.length === 0 ? `${tag}: 上げるものは無かった` : `${tag}: ${kept.length} 件を確定へ`
     const body = kept.map((v) => `${v.slot}=${v.value}`).join(" / ")
     // **落とした数も残す。** 引用が写せずに落ちたのと、本体が先に書いていたのと、
     // そもそも上げるものが無かったのは全部別の話。混ぜると、どれが起きているか読めない。

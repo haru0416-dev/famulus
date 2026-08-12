@@ -20,12 +20,14 @@
  *   oz deny <id> <理由>    … 却下。理由は次の生成へ還流させるので必須
  *   oz recall <語>         … 記憶を引く
  *   oz belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
+ *   oz dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定に上げる(1回ぶんでは見えない値)
  *   oz intake [--dry] [n]  … 過去の会話を圧縮して DB に入れる(DB の入口)
  *
  * **承認しても実行はされない**。コネクタ(送信・予約)が1つも無いので、approved は
  * 「承認済み・未実行」で止まる。ここを実行したことにするのが一番大きい嘘なので、そうしない。
  */
 import { Cause, Effect, Exit } from "effect"
+import { DREAM_DAYS, dream } from "./agent/dream.ts"
 import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
 import { dayRange, localStamp, nowIso } from "./core/time.ts"
@@ -68,6 +70,7 @@ const USAGE = `oz — open-zero の承認 CLI
   oz belief <slot>         事実の今の値と変遷(いつからいつまで何だったか)
   oz belief <slot> <値>    新しい値を確定。前の区間はそこで閉じる(上書きしない)
                            --from <ISO> で「いつから真だったか」を遡って書ける
+  oz dream [日数] [--dry]   何日ぶんかをまとめて見直し、確定に上げ直す(既定 7 日)
   oz intake --dry [n]      過去の会話を選別だけして圧縮率を見る(モデルを呼ばない)
   oz intake [n]            未取り込みの会話を古い順に n 件(既定 10)DB へ入れる
                            取り込み元は Claude Code のログと Claude.ai の書き出しの両方
@@ -380,6 +383,13 @@ const program = (argv: readonly string[]) =>
             return `  ${localStamp(h.validFrom, false)} ${span}  ${JSON.stringify(h.value)}${why}`
           }),
         ].join("\n")
+      }
+
+      case "dream": {
+        // 何日ぶんかをまとめて見直す。**--dry は枠を使わない**ので、既定の確認手段はこちら。
+        const dry = rest.includes("--dry")
+        const days = Number(rest.find((a) => /^\d+$/.test(a)) ?? DREAM_DAYS)
+        return yield* dream({ days, ...(dry ? { dry: true } : {}) })
       }
 
       case "intake": {

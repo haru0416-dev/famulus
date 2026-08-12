@@ -22,6 +22,7 @@ import { init } from "@flue/runtime"
 import { sqlite, start } from "@flue/runtime/node"
 import { Effect } from "effect"
 import { DRAFTING } from "./agent/drafting.ts"
+import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
@@ -258,10 +259,32 @@ async function tick(): Promise<string> {
 
   // ── 起きる理由が無い。**ここで終わるのが正常**。モデルは1回も呼ばない。
   if (d.idle) {
+    // ただし1日1回だけ、何日ぶんかの見直しをここで回す(docs/adr/0018)。
+    // **idle の回に置く理由は、返信を待たせないため。** 見直しは Luna で 30 秒前後かかるので、
+    // 話しかけられた回に挟むとその秒数だけ返事が遅れる。起きる理由が無い回なら誰も待っていない。
+    // その日に idle の回が一度も来なければ翌日へ回る — 窓は 7 日あり、`dream:through` が
+    // 進んだところを覚えているので、飛ばした日ぶんの材料は次の回にそのまま出てくる。
+    const dreamed = (await run(dreamDue(d.at)))
+      ? await run(dream()).catch((e: unknown) => `dream: 落ちた(${causeReason(e)})`)
+      : undefined
+    if (dreamed) log(dreamed)
     const n = await run(
       Effect.gen(function* () {
         const att = yield* Attention
         const n = yield* bumpCount("tick:idle_count")
+        if (dreamed) {
+          const db = yield* Db
+          const mem = yield* Memory
+          // 落ちた回にも印を付ける。付けないと、同じ落ち方を 15 分ごとに1日じゅう繰り返す。
+          yield* db.setMeta(DREAM_DAILY, dayRange(d.at).key)
+          yield* mem.remember({
+            kind: "observe",
+            source: "system",
+            content: { dream: dreamed },
+            text: dreamed,
+            at: nowIso(),
+          })
+        }
         // 見ていないので進めない。idle は入力が無いという判定なので、この起動と入れ違いに
         // 届いたぶんまで既読にすると、届いた側は何も返らないまま消える。
         yield* att.commit({ upto: d.cursor })
@@ -269,7 +292,8 @@ async function tick(): Promise<string> {
       }),
     )
     const since = Number.isFinite(d.sinceLastActiveHours) ? `${d.sinceLastActiveHours.toFixed(1)} 時間` : "—"
-    return `idle(通算 ${n} 回) — 前回の実働から ${since} / 次の冷却 ${d.cooldownHours} 時間`
+    const head = `idle(通算 ${n} 回) — 前回の実働から ${since} / 次の冷却 ${d.cooldownHours} 時間`
+    return dreamed ? `${head}\n${dreamed}` : head
   }
 
   const stop = await run(blocked)
