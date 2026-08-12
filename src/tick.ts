@@ -21,6 +21,7 @@
 import { init } from "@flue/runtime"
 import { sqlite, start } from "@flue/runtime/node"
 import { Effect } from "effect"
+import { DRAFTING } from "./agent/drafting.ts"
 import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
@@ -110,6 +111,26 @@ function buildPrompt(d: Digest): string {
       [
         "## 返事待ちの提案(あなたは決められない。持ち主が見るのを待っている)",
         ...d.pending.map((p) => `- ${short(p.id)} ${p.summary}(あと ${p.daysLeft} 日で流れる)`),
+      ].join("\n"),
+    )
+  }
+
+  // 下書きの規律は**出す日にだけ載せる**。毎回渡すと、書かない回のぶんだけ枠を食う。
+  if (d.draftDue) {
+    sections.push(
+      [
+        "## 今日ぶんの下書き",
+        "1日に1本、外に出せる文を `draft` で置く。出す先は Zenn を想定した記事。",
+        "",
+        "**材料は自分が走った記録に限る。** この台帳には、自走するエージェントを実際に動かして",
+        "壊れた記録が入っている — 切られた心拍、通らなかった経路、効かなかった設定、使った枠。",
+        "それは他の誰も持っていない。逆に、読んだ記事をまとめ直したものは誰が書いても同じになる。",
+        "",
+        "`recall` で自分の走行記録を引いてから書く。**引いて何も出てこなければ書かない** —",
+        "その日は `draft` を呼ばずに「材料が無い」と一行書いて終える。それは失敗ではない。",
+        "薄い記事を1本出すより、材料が溜まるまで待つほうが、名前が付いて出る文としては良い。",
+        "",
+        DRAFTING,
       ].join("\n"),
     )
   }
@@ -264,6 +285,7 @@ async function tick(): Promise<string> {
       Effect.gen(function* () {
         const mem = yield* Memory
         const att = yield* Attention
+        const db = yield* Db
         yield* mem.remember({
           kind: "observe",
           source: "system",
@@ -275,6 +297,9 @@ async function tick(): Promise<string> {
           at: nowIso(),
         })
         yield* bumpCount("tick:active_count")
+        // **書けたかどうかに関わらず、その日は1回で打ち切る。** `draft` を呼ばなかった=材料が無かった
+        // ということで、同じ材料のまま15分ごとに書かせ直しても出てくるものは変わらない。
+        if (d.draftDue) yield* db.setMeta("daily:draft", dayRange(d.at).key)
         // **active を立てるのはここだけ**。次の心拍はこの時刻から冷却時間を数える。
         // reasonKey を渡すと、同じ顔ぶれで起きるたびに次の冷却が倍になる(焚き続けない)。
         yield* att.commit({ active: true, reasonKey: d.reasonKey })

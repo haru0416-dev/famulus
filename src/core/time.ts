@@ -70,6 +70,9 @@ const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z")
  */
 export const nowIso = (): string => iso(Date.now())
 
+/** 持ち主の時計での時刻(0〜23)。1日1回のものを「いつ出すか」で使う。 */
+export const localHour = (atIso: string): number => localParts(Date.parse(atIso)).hour
+
 export interface Range {
   /** 'YYYY-MM-DD' または 'YYYY-MM'。人に見せる見出し。 */
   readonly key: string

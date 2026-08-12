@@ -14,7 +14,7 @@
 import { randomUUID } from "node:crypto"
 import { Effect } from "effect"
 import { ProposalConflict, ProposalNotFound } from "../core/errors.ts"
-import { nowIso } from "../core/time.ts"
+import { dayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 export type NextMove = "human" | "counterparty" | "famulus"
@@ -77,6 +77,8 @@ export interface Digest {
   readonly reasonKey: string
   /** この心拍で満たすべきだった冷却時間。後退が効いているかを外から見るため。 */
   readonly cooldownHours: number
+  /** 今日ぶんの下書きがまだ出ていない。**冷却を無視して起きる**(1日1回しか立たない)。 */
+  readonly draftDue: boolean
   readonly idle: boolean
 }
 
@@ -126,6 +128,15 @@ export const ACTIVE_COOLDOWN_HOURS = 1.5
  * 最後は「1日1回の棚卸し」に落ち着く。**外から新しい入力が来たら 0 に戻る**。
  */
 export const MAX_COOLDOWN_HOURS = 24
+
+/**
+ * 1日1本の下書きを出す時刻(持ち主の時計)。**ここより前には出さない。**
+ *
+ * 早い時刻に出すと、その日の走行記録がまだ無い状態で書くことになり、材料が前日ぶんだけになる。
+ * 夜に寄せてあるのは、読む側が1日の作業を終えた後に受け取るため — 割り込みの回数は同じでも、
+ * 集中している最中に切るのと、終わった後に届くのとでは落ちるものが違う。
+ */
+export const dailyDraftHour = (): number => Number(process.env.OPEN_ZERO_DAILY_HOUR ?? 20)
 
 const daysBetween = (fromIso: string, toMs: number) => (toMs - Date.parse(fromIso)) / 86_400_000
 
@@ -325,6 +336,12 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           if (overdue) reasons.push(`前回の棚卸しから ${IDLE_WAKE_HOURS} 時間以上`)
         }
 
+        // **冷却の外に出す。** 1日に1回しか立たない理由なので、直前に動いたかどうかで抑える対象ではない。
+        // 抑えると、夕方に別の理由で動いた日は下書きが丸ごと落ちる。
+        const draftDue =
+          localHour(at) >= dailyDraftHour() && (yield* db.meta("daily:draft")) !== dayRange(at).key
+        if (draftDue) reasons.push("今日ぶんの下書きがまだ出ていない")
+
         return {
           at,
           cursor,
@@ -338,6 +355,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           // 新しい入力で起きたなら顔ぶれは「新しい」— 後退を 0 に戻す。
           reasonKey: newEvents.length > 0 ? "" : reasonKey,
           cooldownHours,
+          draftDue,
           idle: reasons.length === 0,
         } satisfies Digest
       })

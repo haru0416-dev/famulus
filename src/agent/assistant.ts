@@ -26,11 +26,13 @@ import {
 import { Effect } from "effect"
 import * as v from "valibot"
 import { loadEnv } from "../core/env.ts"
-import { localStamp, nowIso } from "../core/time.ts"
+import { dayRange, localStamp, nowIso } from "../core/time.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "../model/claude-cli.ts"
 import { CLAUDE_MAX_PROVIDER_ID, claudeMaxProvider, lane } from "../model/provider.ts"
 import { run } from "../runtime.ts"
 import { Attention } from "../services/Attention.ts"
+import { Db } from "../services/Db.ts"
+import { Discord } from "../services/Discord.ts"
 import { buildFencedPrompt, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { Memory, renderRecall } from "../services/Memory.ts"
@@ -38,6 +40,7 @@ import { Notify } from "../services/Notify.ts"
 import { Proposals } from "../services/Proposals.ts"
 import { defaultSources, renderHits, SOURCE_MENU, searchWeb } from "../services/Search.ts"
 import { fetchPage } from "../services/Web.ts"
+import { findLeaks, findSmells } from "./drafting.ts"
 import { soulInstruction } from "./soul.ts"
 
 // `flue run` から起きる経路。ここも systemd/シェルを通らないので、自分で `.env` を読む。
@@ -604,6 +607,83 @@ export default function Assistant() {
           return sent
             ? `送った: ${title}`
             : "送れなかった(通知先が未設定か、ntfy に届かない)。中身は記録に残したので、次に会ったとき口で伝える。"
+        }),
+      ),
+  })
+
+  /**
+   * 名前が付いて外に出る文を、そのまま出せる形で置く。**問いでも材料でもなく、完成した本文。**
+   *
+   * `tell` と分けてあるのは返し方が違うから。tell は読ませて終わりだが、こちらは
+   * 出す・直す・捨てるの三択が要る。印を先に付けて出すので、返すのは1タップで済む。
+   *
+   * 出すのは Discord。長さが要る(記事1本)ので、ロック画面の通知には載らない。
+   */
+  useTool({
+    name: "draft",
+    description:
+      "外に出す文の下書きを持ち主に渡す。**そのまま公開できる本文だけ**を入れる — " +
+      "「こういう記事はどうか」という提案や、箇条書きの材料は入れない。書けないなら呼ばない。" +
+      "材料は台帳にある自分の実測に限る。他人の記事の要約は本文にしない。**1日に1本まで。**",
+    input: v.object({
+      title: v.pipe(v.string(), v.description("記事の題。内容を指す言葉にする(煽らない)。")),
+      body: v.pipe(
+        v.string(),
+        v.description("本文そのもの。Markdown。冒頭に「測っていないこと」を並べてから中身に入る。"),
+      ),
+      basis: v.pipe(
+        v.string(),
+        v.description("この本文が何の実測に基づくか。台帳のどの記録・どの走行を見たかを1〜3行で。"),
+      ),
+    }),
+    run: async ({ data: { title, body, basis } }) =>
+      run(
+        Effect.gen(function* () {
+          const discord = yield* Discord
+          const mem = yield* Memory
+          const db = yield* Db
+          // **出す前に見る。** 台帳の実測から書くと持ち主の生活がそのまま混ざるので、
+          // 非公開の確定値が本文に残っていないかを機械で確かめる(規律に書くだけでは通る)。
+          // **過去の値も含める。** 走行記録から書くと引かれるのは履歴のほうで、
+          // 書き換え前の日時や旧い連絡先は、いまの値と一致しないぶん素通りしやすい。
+          const secrets = yield* db.all("SELECT value FROM belief_slots WHERE exposure = 'private'")
+          const leaks = findLeaks(
+            `${title}\n${body}`,
+            secrets.map((r) => String((r as { value?: unknown }).value ?? "")),
+          )
+          if (leaks.length > 0) {
+            return (
+              `出していない。**非公開の値が本文に残っている**: ${leaks.map((s) => `「${s}」`).join(" ")}\n` +
+              "店名・医院名・人名・日時・連絡先は伏せる。仕組みと数字だけ残して書き直してから、もう一度呼ぶ。"
+            )
+          }
+          // 中身を持たない語も同じ扱いにする。規律に並べても、書いている途中の一文までは届かない。
+          const smells = findSmells(`${title}\n${body}`)
+          if (smells.length > 0) {
+            return (
+              `出していない。**中身を持たない語が残っている**: ${smells.map((s) => `「${s}」`).join(" ")}\n` +
+              "その語を消したときに何も残らない文は、主張ごと落とす。残すなら「何が・どの対象で・" +
+              "どう変わったか」に書き換える。直してから、もう一度呼ぶ。"
+            )
+          }
+          const id = yield* discord.post({
+            text: `**${title}**\n\n${body}\n\n---\n根拠: ${basis}`,
+            taps: [
+              { emoji: "✅", emojiReply: "出していい" },
+              { emoji: "✏️", emojiReply: "直す" },
+              { emoji: "🛑", emojiReply: "捨てる" },
+            ].map((t) => ({ emoji: t.emoji, reply: `下書き「${title}」→ ${t.emojiReply}` })),
+          })
+          // **出した事実は日付で持つ。** 1日1本の上限はここで数える(押されたかは関係ない)。
+          if (id) yield* db.setMeta("daily:draft", dayRange(nowIso()).key)
+          yield* mem.remember({
+            source: "system",
+            content: { drafted: title, body, basis, sent: Boolean(id) },
+            text: `${title}\n${body}`,
+          })
+          return id
+            ? `渡した: ${title}(✅ 出していい / ✏️ 直す / 🛑 捨てる)`
+            : "Discord に出せなかった。本文は記録に残したので、次に会ったとき見せる。"
         }),
       ),
   })

@@ -21,6 +21,10 @@ import { withHarness } from "./helpers.ts"
 const T0 = Date.parse("2026-08-08T09:00:00Z")
 const hours = (n: number) => n * 3_600_000
 
+// **日次の下書きは別の軸**。時刻だけで立つ理由なので、起床条件の検査からは外しておく
+// — 混ざると「入力で起きた」のか「20時を過ぎた」のかが assert から区別できない。
+process.env.OPEN_ZERO_DAILY_HOUR = "99"
+
 /** 「もう一度起きた」を作る。時刻を進めた digest を引くだけ。 */
 const digestAt = (ms: number) =>
   Effect.gen(function* () {
@@ -228,4 +232,58 @@ test("期限が近い裁可待ちは起こす理由になる", async () => {
     assert.equal(d.pending.length, 1)
     assert.match(d.reasons.join(), /期限が近い裁可待ち/)
   })
+})
+
+/**
+ * 1日1本の下書き。**回数が持ち主の集中の切断回数**なので、日を跨ぐまで二度立たないことを固定する。
+ * 冷却の外に出してあるのも意図的で、夕方に別件で動いた日に下書きが落ちないため。
+ */
+test("下書きは決めた時刻から1日1回だけ立つ", async () => {
+  const keep = process.env.OPEN_ZERO_DAILY_HOUR
+  // T0 は 18:00(持ち主の時計)。17時を境にすると T0 の時点で既に過ぎている。
+  process.env.OPEN_ZERO_DAILY_HOUR = "17"
+  try {
+    await withHarness(async (h) => {
+      await h.run(
+        Effect.gen(function* () {
+          const att = yield* Attention
+          // 直前に動いたことにする。冷却中でも下書きは立つ、が見たいこと。
+          yield* att.commit({ active: true, at: new Date(T0).toISOString() })
+        }),
+      )
+      const due = await h.run(digestAt(T0 + hours(0.5)))
+      assert.equal(due.draftDue, true, "時刻を過ぎたら冷却中でも立つ")
+      assert.match(due.reasons.join(), /下書き/)
+
+      await h.run(
+        Effect.gen(function* () {
+          const db = yield* Db
+          yield* db.setMeta("daily:draft", "2026-08-08")
+        }),
+      )
+      const done = await h.run(digestAt(T0 + hours(1)))
+      assert.equal(done.draftDue, false, "その日ぶんが済んでいれば二度は立たない")
+      assert.equal(done.idle, true)
+
+      // 日が変わればまた立つ。T0+9h = 翌 03:00 なので、さらに 14 時間進めて 17 時を跨ぐ。
+      const nextDay = await h.run(digestAt(T0 + hours(23)))
+      assert.equal(nextDay.draftDue, true, "日が変われば立ち直る")
+    })
+  } finally {
+    process.env.OPEN_ZERO_DAILY_HOUR = keep
+  }
+})
+
+test("決めた時刻より前には立たない — その日の走行記録がまだ無い", async () => {
+  const keep = process.env.OPEN_ZERO_DAILY_HOUR
+  process.env.OPEN_ZERO_DAILY_HOUR = "23"
+  try {
+    await withHarness(async (h) => {
+      const d = await h.run(digestAt(T0))
+      assert.equal(d.draftDue, false)
+      assert.equal(d.reasons.join().includes("下書き"), false)
+    })
+  } finally {
+    process.env.OPEN_ZERO_DAILY_HOUR = keep
+  }
 })
