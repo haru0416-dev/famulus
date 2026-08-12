@@ -1,4 +1,5 @@
 /** 端から端まで。外を見る役が実際に開いた URL を、global fetch を包んで数える。 */
+import { tmpdir } from "node:os"
 import { init } from "@flue/runtime"
 import { sqlite, start } from "@flue/runtime/node"
 import { claudeMaxProvider } from "./src/model/provider.ts"
@@ -28,7 +29,7 @@ const { default: Assistant } = await import("./src/agent/assistant.ts")
 const rt = runtime()
 const flue = await start({
   agents: [Assistant],
-  db: sqlite(process.env.PROBE_FLUE_DB ?? ".data/flue-probe.db"),
+  db: sqlite(process.env.PROBE_FLUE_DB ?? `${tmpdir()}/oz-probe-flue.db`),
   providers: [claudeMaxProvider()],
 })
 const t0 = Date.now()

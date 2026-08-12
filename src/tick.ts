@@ -24,6 +24,7 @@ import { Effect } from "effect"
 import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
+import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
 import { causeReason, describeRefusal } from "./core/errors.ts"
@@ -268,20 +269,28 @@ async function tick(): Promise<string> {
       ? await run(dream()).catch((e: unknown) => `dream: 落ちた(${causeReason(e)})`)
       : undefined
     if (dreamed) log(dreamed)
+    // 落とすほうも1日1回(docs/adr/0019)。**印は別に持つ** — 見直しが落ちた日に
+    // 掃除まで止まると、増える側だけが進む。こちらはモデルを呼ばないので枠にも関係しない。
+    const swept = (await run(cleanupDue(d.at)))
+      ? await run(cleanup()).catch((e: unknown) => `cleanup: 落ちた(${causeReason(e)})`)
+      : undefined
+    if (swept) log(swept)
     const n = await run(
       Effect.gen(function* () {
         const att = yield* Attention
+        const db = yield* Db
+        const mem = yield* Memory
         const n = yield* bumpCount("tick:idle_count")
-        if (dreamed) {
-          const db = yield* Db
-          const mem = yield* Memory
-          // 落ちた回にも印を付ける。付けないと、同じ落ち方を 15 分ごとに1日じゅう繰り返す。
-          yield* db.setMeta(DREAM_DAILY, dayRange(d.at).key)
+        // 落ちた回にも印を付ける。付けないと、同じ落ち方を 15 分ごとに1日じゅう繰り返す。
+        if (dreamed) yield* db.setMeta(DREAM_DAILY, dayRange(d.at).key)
+        if (swept) yield* db.setMeta(CLEANUP_DAILY, dayRange(d.at).key)
+        const lines = [dreamed, swept].filter(Boolean) as string[]
+        if (lines.length > 0) {
           yield* mem.remember({
             kind: "observe",
             source: "system",
-            content: { dream: dreamed },
-            text: dreamed,
+            content: { ...(dreamed ? { dream: dreamed } : {}), ...(swept ? { cleanup: swept } : {}) },
+            text: lines.join("\n"),
             at: nowIso(),
           })
         }
@@ -292,8 +301,9 @@ async function tick(): Promise<string> {
       }),
     )
     const since = Number.isFinite(d.sinceLastActiveHours) ? `${d.sinceLastActiveHours.toFixed(1)} 時間` : "—"
-    const head = `idle(通算 ${n} 回) — 前回の実働から ${since} / 次の冷却 ${d.cooldownHours} 時間`
-    return dreamed ? `${head}\n${dreamed}` : head
+    return [`idle(通算 ${n} 回) — 前回の実働から ${since} / 次の冷却 ${d.cooldownHours} 時間`, dreamed, swept]
+      .filter(Boolean)
+      .join("\n")
   }
 
   const stop = await run(blocked)
