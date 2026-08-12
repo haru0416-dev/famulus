@@ -29,6 +29,7 @@ import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
 import { causeReason, describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
+import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
 import { claudeMaxProvider } from "./model/provider.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
@@ -75,7 +76,7 @@ function renderEvent(e: ObservedEvent): string {
  * 起こされた以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を出す。
  * 起きた理由と材料だけ渡して、動かす必要が無ければ一行で終えてよいと書く。
  */
-function buildPrompt(d: Digest, spokenTo: boolean): string {
+function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspace[]): string {
   const sections: string[] = []
 
   sections.push(
@@ -146,6 +147,20 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
         "",
         "**理由が「前提が変わった」「その話ごと畳んだ」なら、その用件は出さない。**",
         "日付や文面を差し替えて出し直してよいのは、断られた理由がその一点だけだったとき。",
+      ].join("\n"),
+    )
+  }
+
+  // 在る作業場は毎回載せる。**引ける道具(`workspaces`)を置いただけでは引かれない** —
+  // 引くかどうかを判断するには、まず在ることを知っていなければならない。数行で済む。
+  if (workspaces.length > 0) {
+    sections.push(
+      [
+        "## 使える作業場(`shell` の workspace に渡す名前)",
+        renderWorkspaces(workspaces, Date.parse(d.at)),
+        "",
+        "**続きをやれるものが在るなら新しく作らない。** 作り直すと依存の取得からやり直しになり、",
+        "その回の持ち時間がそれで終わる。新しく作るときは `purpose` に何のための場所かを一行書く。",
       ].join("\n"),
     )
   }
@@ -336,7 +351,7 @@ async function tick(): Promise<string> {
     // 道具に締切を見せる。**プロンプトに書くだけでは足りない** — 起動時の文は、9回目を
     // 走らせるかどうかを決める時点では過去の話になっている(src/core/deadline.ts)。
     startDeadline(TIMEOUT_MS)
-    const receipt = await agent.dispatch(buildPrompt(d, spokenTo))
+    const receipt = await agent.dispatch(buildPrompt(d, spokenTo, await run(listWorkspaces)))
     // **切られてもここで受け止める。** 投げ直すと commit に辿り着かないので冷却の起点が進まず、
     // 次のタイマーが同じ理由で起きて同じだけ焼いて同じように落ちる。落ちた回も1回動いた回として
     // 締める — 実際にモデルは走り、道具も動いて、その跡は DB に残っている。

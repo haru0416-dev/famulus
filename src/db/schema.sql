@@ -224,3 +224,16 @@ CREATE TABLE IF NOT EXISTS turns (
   ledger_id  TEXT REFERENCES ledger(id)
 );
 CREATE INDEX IF NOT EXISTS idx_turns_at ON turns(at);
+
+-- ============================================================================
+-- 9. workspaces(コンテナの作業場。読み書きは src/core/workspaces.ts)
+--     **ファイルシステムが知らないことだけ置く。** 大きさと最後に触った時刻は
+--     `.data/runs/<name>` を走査すれば分かるので列にしない(持つと必ずずれる)。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS workspaces (
+  name       TEXT PRIMARY KEY,                        -- .data/runs の下の名前(runDir が正規化した後)
+  purpose    TEXT NOT NULL,                           -- 何のための場所か。次の tick はこれを読んで選ぶ
+  created_at TEXT NOT NULL,                           -- IsoUtc
+  keep       INTEGER NOT NULL DEFAULT 0                -- 1 なら cleanup の対象外。書けるのはホスト側だけ
+             CHECK (keep IN (0, 1))
+);

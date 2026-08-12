@@ -16,7 +16,9 @@ import { Effect } from "effect"
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
 const { CLEANUP_DAILY, cleanup, cleanupDue } = await import("../src/core/cleanup.ts")
 const { Db } = await import("../src/services/Db.ts")
+const { keepWorkspace, noteWorkspace, purposeOf } = await import("../src/core/workspaces.ts")
 const { withHarness } = await import("./helpers.ts")
+type Harness = Awaited<ReturnType<typeof import("./helpers.ts").harness>>
 
 const AT = "2026-08-13T00:00:00Z" // JST 9:00
 const DAYS = 3 // 切り口は 2026-08-10
@@ -27,14 +29,14 @@ const age = (path: string, daysAgo: number): void => {
   utimesSync(path, t, t)
 }
 
-const withTmp = async (fn: (dir: string) => Promise<void> | void): Promise<void> => {
+const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): Promise<void> => {
   const dir = mkdtempSync(join(tmpdir(), "oz-cleanup-"))
   const runs = process.env.OPEN_ZERO_RUNS
   const flue = process.env.OPEN_ZERO_FLUE_DB
   process.env.OPEN_ZERO_RUNS = join(dir, "runs")
   process.env.OPEN_ZERO_FLUE_DB = join(dir, "flue.db")
   try {
-    await fn(dir)
+    await withHarness((h) => Promise.resolve(fn(dir, h)))
   } finally {
     if (runs === undefined) delete process.env.OPEN_ZERO_RUNS
     else process.env.OPEN_ZERO_RUNS = runs
@@ -57,10 +59,10 @@ const workspace = (dir: string, name: string, daysAgo: number, deepDaysAgo?: num
 }
 
 test("しばらく触られていない作業場だけ落ちる", async () => {
-  await withTmp(async (dir) => {
+  await withTmp(async (dir, h) => {
     workspace(dir, "old", 10)
     workspace(dir, "fresh", 1)
-    const line = Effect.runSync(cleanup({ at: AT, days: DAYS }))
+    const line = await h.run(cleanup({ at: AT, days: DAYS }))
     assert.match(line, /作業場 1 件/)
     assert.equal(existsSync(join(dir, "runs", "old")), false)
     assert.equal(existsSync(join(dir, "runs", "fresh")), true)
@@ -72,18 +74,18 @@ test("しばらく触られていない作業場だけ落ちる", async () => {
  * そこだけ見ると「10 日前から放置」に見える。木の中で一番新しい刻で判定する。
  */
 test("下の階だけ書き換えた作業場は残る", async () => {
-  await withTmp(async (dir) => {
+  await withTmp(async (dir, h) => {
     workspace(dir, "working", 10, 1)
-    const line = Effect.runSync(cleanup({ at: AT, days: DAYS }))
+    const line = await h.run(cleanup({ at: AT, days: DAYS }))
     assert.match(line, /落とすものは無かった/)
     assert.equal(existsSync(join(dir, "runs", "working")), true)
   })
 })
 
 test("--dry は数えるだけで消さない", async () => {
-  await withTmp(async (dir) => {
+  await withTmp(async (dir, h) => {
     workspace(dir, "old", 10)
-    const line = Effect.runSync(cleanup({ at: AT, days: DAYS, dry: true }))
+    const line = await h.run(cleanup({ at: AT, days: DAYS, dry: true }))
     assert.match(line, /数えただけ/)
     assert.match(line, /作業場 1 件/)
     assert.equal(existsSync(join(dir, "runs", "old")), true)
@@ -91,8 +93,8 @@ test("--dry は数えるだけで消さない", async () => {
 })
 
 test("作業場が1つも無くても落ちない", async () => {
-  await withTmp(() => {
-    assert.match(Effect.runSync(cleanup({ at: AT, days: DAYS })), /落とすものは無かった/)
+  await withTmp(async (_dir, h) => {
+    assert.match(await h.run(cleanup({ at: AT, days: DAYS })), /落とすものは無かった/)
   })
 })
 
@@ -140,14 +142,14 @@ const rows = (file: string, sql: string): number => {
 }
 
 test("過ぎた日の会話だけ落ちる(その日ぶんと未来は残る)", async () => {
-  await withTmp(async (dir) => {
+  await withTmp(async (dir, h) => {
     const file = flue(dir, [
       "agents/Assistant/tick-2026-08-07",
       "agents/Assistant/tick-2026-08-08",
       "agents/Assistant/tick-2026-08-12",
       "agents/Assistant/tick-2026-08-13",
     ])
-    const line = Effect.runSync(cleanup({ at: AT, days: DAYS }))
+    const line = await h.run(cleanup({ at: AT, days: DAYS }))
     assert.match(line, /会話 2 本/)
     assert.deepEqual(
       new DatabaseSync(file)
@@ -164,9 +166,9 @@ test("過ぎた日の会話だけ落ちる(その日ぶんと未来は残る)", 
  * `tick-<日付>` 以外は日付が読めず、いつ読まれるかも分からない。
  */
 test("tick-<日付> の形でない会話は日付が読めないので触らない", async () => {
-  await withTmp(async (dir) => {
+  await withTmp(async (dir, h) => {
     const file = flue(dir, ["agents/Assistant/default", "agents/Assistant/tick-2026-08-07"])
-    Effect.runSync(cleanup({ at: AT, days: DAYS }))
+    await h.run(cleanup({ at: AT, days: DAYS }))
     assert.deepEqual(
       new DatabaseSync(file)
         .prepare("SELECT path FROM flue_conversation_streams")
@@ -178,9 +180,9 @@ test("tick-<日付> の形でない会話は日付が読めないので触らな
 })
 
 test("会話を落とすと、その会話に紐づく表も全部落ちる", async () => {
-  await withTmp(async (dir) => {
+  await withTmp(async (dir, h) => {
     const file = flue(dir, ["agents/Assistant/tick-2026-08-07", "agents/Assistant/tick-2026-08-12"])
-    Effect.runSync(cleanup({ at: AT, days: DAYS }))
+    await h.run(cleanup({ at: AT, days: DAYS }))
     for (const [table, col] of [
       ["flue_conversation_stream_batches", "path"],
       ["flue_conversation_stream_batch_chunks", "path"],
@@ -207,9 +209,9 @@ test("会話を落とすと、その会話に紐づく表も全部落ちる", as
 })
 
 test("--dry は会話も消さない", async () => {
-  await withTmp(async (dir) => {
+  await withTmp(async (dir, h) => {
     const file = flue(dir, ["agents/Assistant/tick-2026-08-07"])
-    const line = Effect.runSync(cleanup({ at: AT, days: DAYS, dry: true }))
+    const line = await h.run(cleanup({ at: AT, days: DAYS, dry: true }))
     assert.match(line, /会話 1 本/)
     assert.equal(rows(file, "SELECT count(*) AS n FROM flue_conversation_streams"), 1)
   })
@@ -217,9 +219,9 @@ test("--dry は会話も消さない", async () => {
 
 /** 版が上がって表の名前が変わっても、掃除ごと落ちない(消せるものだけ消す)。 */
 test("Flue の表が無くても落ちない", async () => {
-  await withTmp(async (dir) => {
+  await withTmp(async (dir, h) => {
     new DatabaseSync(join(dir, "flue.db")).close()
-    assert.match(Effect.runSync(cleanup({ at: AT, days: DAYS })), /落とすものは無かった/)
+    assert.match(await h.run(cleanup({ at: AT, days: DAYS })), /落とすものは無かった/)
   })
 })
 
@@ -243,5 +245,44 @@ test("ユーザーの時計で早すぎる時刻には回さない", async () =>
   await withHarness(async (h) => {
     // 2026-08-12T18:30:00Z = JST 翌 3:30。日付は変わっているが既定の 4 時より前。
     assert.equal(await h.run(cleanupDue("2026-08-12T18:30:00Z")), false)
+  })
+})
+
+/**
+ * **時刻では決まらない作業場がある。** 自分のソース(`selfdev`)は何日か触らなくても
+ * 在り続けなければならない。触っていないことを理由に消すと、直したい日に限って無い。
+ */
+test("keep を立てた作業場は古くても残る", async () => {
+  await withTmp(async (dir, h) => {
+    workspace(dir, "selfdev", 30)
+    workspace(dir, "old", 30)
+    const line = await h.run(
+      Effect.gen(function* () {
+        yield* keepWorkspace("selfdev", "自分のソース")
+        return yield* cleanup({ at: AT, days: DAYS })
+      }),
+    )
+    assert.match(line, /作業場 1 件/)
+    assert.equal(existsSync(join(dir, "runs", "selfdev")), true)
+    assert.equal(existsSync(join(dir, "runs", "old")), false)
+  })
+})
+
+/** 実体を消したら説明も落とす。残すと、実体の無い説明だけが溜まっていく。 */
+test("落とした作業場の登録も消える(--dry では消えない)", async () => {
+  await withTmp(async (dir, h) => {
+    workspace(dir, "old", 30)
+    const after = await h.run(
+      Effect.gen(function* () {
+        yield* noteWorkspace("old", "もう使っていない調べ物")
+        yield* cleanup({ at: AT, days: DAYS, dry: true })
+        const kept = yield* purposeOf("old")
+        yield* cleanup({ at: AT, days: DAYS })
+        return { kept, gone: yield* purposeOf("old") }
+      }),
+    )
+    assert.equal(after.kept, "もう使っていない調べ物")
+    assert.equal(after.gone, undefined)
+    assert.equal(existsSync(join(dir, "runs", "old")), false)
   })
 })

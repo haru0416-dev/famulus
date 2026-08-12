@@ -29,6 +29,7 @@ const NOT_TOOLS = new Set([
   "commit", // Attention の関数(冷却の起点を進める側)。モデルからは呼べない
   "at", // 道具の引数名(`ran` に渡す、実際に回した時刻)
   "since", // keeper の引数名(この回の起点)。モデルには見えない
+  "purpose", // 道具の引数名(`shell` に渡す、その作業場は何のための場所か)
 ])
 
 /**

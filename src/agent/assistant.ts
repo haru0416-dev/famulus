@@ -14,6 +14,8 @@
  * 残りは `claude -p` へ行く。`anthropic/...` を選ぶと Flue は `ANTHROPIC_API_KEY` を
  * 探しにいって従量課金に戻るので、そこは選ばない。
  */
+
+import { basename } from "node:path"
 import {
   setProvider,
   useAgentFinish,
@@ -30,6 +32,7 @@ import { remainingLabel, remainingMs } from "../core/deadline.ts"
 import { loadEnv } from "../core/env.ts"
 import { causeReason } from "../core/errors.ts"
 import { dayRange, localStamp, nowIso } from "../core/time.ts"
+import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "../model/claude-cli.ts"
 import { CLAUDE_MAX_PROVIDER_ID, claudeMaxProvider, lane } from "../model/provider.ts"
 import { Runner } from "../model/Runner.ts"
@@ -686,21 +689,31 @@ export default function Assistant() {
       "既定では外に出られない。clone や install が要るときだけ net を true にする。" +
       "上限は3分 / メモリ 2GB。返るのは出力の末尾 12,000字。" +
       "**短い単位に割る** — 返り値に載る残り時間を見て、尽きる前に切り上げる。" +
-      "同じ作業場の名前を渡せば置いたファイルは残るので、続きは次の tick でやればよい。",
+      "同じ作業場の名前を渡せば置いたファイルは残るので、続きは次の tick でやればよい。" +
+      "**どんな作業場が在るかは `workspaces` で引ける。新しく作る前に引く。**",
     input: v.object({
       command: v.pipe(v.string(), v.description("走らせるコマンド。bash -lc に渡す。複数行でよい。")),
       workspace: v.pipe(
         v.string(),
         v.description("作業場の名前(英数字)。同じ名前を渡すと前回置いたファイルの続きから走る。"),
       ),
+      purpose: v.optional(
+        v.pipe(
+          v.string(),
+          v.description(
+            "その作業場は何のための場所か、一行。**新しく作るときは必ず書く。** " +
+              "一覧に出て、次の tick が「どれを使えばいいか」をここから読む。既にあるものは省いてよい。",
+          ),
+        ),
+      ),
       net: v.optional(
         v.pipe(v.boolean(), v.description("外に出るか。clone / install が要るときだけ true。既定は false。")),
       ),
     }),
     run: async ({
-      data: { command, workspace, net },
+      data: { command, workspace, purpose, net },
     }: {
-      data: { command: string; workspace: string; net?: boolean | undefined }
+      data: { command: string; workspace: string; purpose?: string | undefined; net?: boolean | undefined }
     }) =>
       run(
         Effect.gen(function* () {
@@ -719,6 +732,11 @@ export default function Assistant() {
           }
           const mem = yield* Memory
           const dir = runDir(workspace)
+          // **DB に載せる名前は正規化後のほう。** モデルが書いた綴りをそのまま入れると、
+          // 一覧の名前で `shell` を呼び直したときに別のディレクトリが立つ。
+          const name = basename(dir)
+          if (purpose) yield* noteWorkspace(name, purpose)
+          const unnamed = !purpose && (yield* purposeOf(name)) === undefined
           const r = yield* Effect.promise(() =>
             runInSandbox(command, {
               workDir: dir,
@@ -739,7 +757,33 @@ export default function Assistant() {
             content: { ran: command, workspace, exitCode: r.exitCode, ms: r.elapsedMs, output: r.output },
             text: `${command}\n${r.output}`,
           })
-          return `${head} / ${remainingLabel()}\n作業場: ${dir}\n\n${r.output || "(出力なし)"}`
+          // 説明の無い作業場は、次の回から**名前しか読めない**。作った本人がまだいるこの回で訊く。
+          const nudge = unnamed
+            ? `\n(この作業場には説明が無い。何のための場所か purpose に一行渡すと、次の tick が一覧から選べる)`
+            : ""
+          return `${head} / ${remainingLabel()}\n作業場: ${dir}${nudge}\n\n${r.output || "(出力なし)"}`
+        }),
+      ),
+  })
+
+  /**
+   * 作業場の一覧。**`shell` の続きを在り処から選べるようにする**ための読み取り専用の口。
+   *
+   * 名前を思い出す道具ではない — 「自分のソースはどこにあるか」「先週の調べ物の途中は残っているか」を、
+   * プロンプトに毎回書かずに引けるようにする。書き込みは `shell` の `purpose` 側にしかない。
+   */
+  useTool({
+    name: "workspaces",
+    description:
+      "作業場の一覧。名前・何のための場所か・大きさ・最後に触った時刻が返る。" +
+      "**`shell` に渡す名前はここから選ぶ。** 続きをやれるものが在るのに新しく作ると、" +
+      "依存の取得からやり直しになって、その回の持ち時間がそれで終わる。",
+    input: v.object({}),
+    run: async () =>
+      run(
+        Effect.gen(function* () {
+          const list = yield* listWorkspaces
+          return renderWorkspaces(list, Date.now())
         }),
       ),
   })

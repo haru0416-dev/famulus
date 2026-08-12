@@ -10,6 +10,8 @@
  *   ここに残っているものは次の回のための足場でしかない。ただし
  *   「長い作業は同じ作業場に置いて次の tick で続ける」(src/services/Sandbox.ts)ので、
  *   触られたばかりのものは消せない。**最後に触った時刻**で切る。
+ *   ただし時刻では決まらないものが1つある — 自分のソースのように、何日か触らなくても
+ *   在り続けなければならない場所。そこは `keep` で外す(src/core/workspaces.ts)。
  * - `flue-tick.db` は tick の会話の保存先。会話 id は `tick-<その日>` で日ごとに変わり、
  *   **過ぎた日の会話は二度と開かれない**。読まれないまま残る。
  *
@@ -21,7 +23,9 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { Effect } from "effect"
 import { Db } from "../services/Db.ts"
+import { runsRoot } from "../services/Sandbox.ts"
 import { dayRange, localHour, nowIso } from "./time.ts"
+import { forgetWorkspaces, keptNames, mb, scanTree } from "./workspaces.ts"
 
 /**
  * これより古いものを落とす。**続きをやる作業場を消さない**幅を取る。
@@ -37,7 +41,6 @@ export const CLEANUP_DAILY = "daily:cleanup"
 /** ユーザーの時計でこの時刻を過ぎてから回す。見直し(dream)と同じ時間帯。 */
 export const CLEANUP_HOUR = Number(process.env.OPEN_ZERO_CLEANUP_HOUR ?? 4)
 
-const runsRoot = (): string => process.env.OPEN_ZERO_RUNS ?? ".data/runs"
 const flueDb = (): string => process.env.OPEN_ZERO_FLUE_DB ?? ".data/flue-tick.db"
 
 /** この tick で回すかどうか。**1日1回**。印を付けるのは呼び出し側(src/tick.ts)。 */
@@ -49,49 +52,28 @@ export const cleanupDue = (atIso: string) =>
   })
 
 /**
- * その木の中で**最後に触られた時刻**。深いところだけ更新されている場合があるので、
- * 上の階のミリ秒だけ見ると、まだ使っている作業場を古いと判定する。
+ * 作業場のうち、しばらく触られていないものを落とす。
+ *
+ * `kept` は**時刻を見ずに残す**名前(src/core/workspaces.ts の `keep`)。自分のソースを置いた
+ * `selfdev` のように、何日か触らなくても在り続けなければならない場所がある。
+ * 時刻だけで切ると、直したい日に限って消えている。
  */
-const newestMs = (dir: string): number => {
-  let newest = statSync(dir).mtimeMs
-  for (const e of readdirSync(dir, { recursive: true, withFileTypes: true })) {
-    const p = join(e.parentPath, e.name)
-    try {
-      const m = statSync(p).mtimeMs
-      if (m > newest) newest = m
-    } catch {
-      // 走行中に消えたものは無視する(消える方向なので、古いと誤判定する側には倒れない)。
-    }
-  }
-  return newest
-}
-
-const mb = (bytes: number): string => `${(bytes / 1_048_576).toFixed(1)}MB`
-
-/** その木の合計バイト数。落とした量を人が読める形で残すためだけに使う。 */
-const treeBytes = (dir: string): number => {
-  let total = 0
-  for (const e of readdirSync(dir, { recursive: true, withFileTypes: true })) {
-    if (!e.isFile()) continue
-    try {
-      total += statSync(join(e.parentPath, e.name)).size
-    } catch {}
-  }
-  return total
-}
-
-/** 作業場のうち、しばらく触られていないものを落とす。 */
-const sweepRuns = (cutoffMs: number, dry: boolean): { names: string[]; bytes: number } => {
+const sweepRuns = (
+  cutoffMs: number,
+  dry: boolean,
+  kept: ReadonlySet<string>,
+): { names: string[]; bytes: number } => {
   const root = runsRoot()
   if (!existsSync(root)) return { names: [], bytes: 0 }
   const names: string[] = []
   let bytes = 0
   for (const e of readdirSync(root, { withFileTypes: true })) {
-    if (!e.isDirectory()) continue
+    if (!e.isDirectory() || kept.has(e.name)) continue
     const dir = join(root, e.name)
-    if (newestMs(dir) >= cutoffMs) continue
+    const t = scanTree(dir)
+    if (t.newestMs >= cutoffMs) continue
     names.push(e.name)
-    bytes += treeBytes(dir)
+    bytes += t.bytes
     if (!dry) rmSync(dir, { recursive: true, force: true })
   }
   return { names, bytes }
@@ -178,14 +160,17 @@ const sweepConversations = (
  * `dry` は数えるだけで消さない。**消すほうは取り消せない**ので、既定の確認手段はこちら。
  */
 export const cleanup = (opts?: { at?: string; days?: number; dry?: boolean }) =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
     const at = opts?.at ?? nowIso()
     const days = opts?.days ?? CLEANUP_DAYS
     const cutoffMs = Date.parse(at) - days * 86_400_000
     const cutoffDay = dayRange(new Date(cutoffMs).toISOString()).key
     const dry = opts?.dry === true
 
-    const runs = sweepRuns(cutoffMs, dry)
+    const runs = sweepRuns(cutoffMs, dry, yield* keptNames)
+    // 実体を消したら説明も落とす。**順はこちらが後** — 先に消すと、rmSync が落ちた回に
+    // 「消さない指定」だけが消えて、次の掃除で本体が持っていかれる。
+    if (!dry) yield* forgetWorkspaces(runs.names)
     const conv = sweepConversations(flueDb(), cutoffDay, dry)
 
     const parts: string[] = []
