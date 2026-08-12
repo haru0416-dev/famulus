@@ -61,9 +61,7 @@ const fakeDiscord = async (
         const [, id, emoji] = /\/messages\/(\d+)\/reactions\/([^/]+)\/@me/.exec(path) ?? []
         const name = decodeURIComponent(emoji ?? "")
         const m = msgs.find((x) => x.id === id)
-        if (m && req.method === "DELETE") {
-          m.reactions = (m.reactions ?? []).filter((r) => r.emoji.name !== name)
-        } else if (m) {
+        if (m) {
           m.reactions ??= []
           m.reactions.push({ emoji: { name }, count: 1, me: true })
         }
@@ -93,12 +91,6 @@ const inbox = Effect.gen(function* () {
   const d = yield* Discord
   return yield* d.inbox()
 })
-
-const mark = (id: string, emoji: string, on: boolean) =>
-  Effect.gen(function* () {
-    const d = yield* Discord
-    yield* d.mark(id, emoji, on)
-  })
 
 const configured = Effect.gen(function* () {
   const d = yield* Discord
@@ -193,7 +185,7 @@ test("押されるまでは空。押されたら割り当てた文が返る", as
       const m = dc.msgs.find((x) => x.id === id)
       const r = m?.reactions?.[0]
       if (r) r.count = 2
-      assert.deepEqual(await h.run(inbox), [{ id: `${id}:🛑`, text: "やめて", msgId: id }])
+      assert.deepEqual(await h.run(inbox), [{ id: `${id}:🛑`, text: "やめて" }])
       // 二度は返らない。返ると同じ指示が心拍のたびに効き続ける。
       assert.deepEqual(await h.run(inbox), [])
     })
@@ -213,7 +205,7 @@ test("初回は自由文を取り込まない — DM に残っている過去の
     await withHarness(async (h) => {
       assert.deepEqual(await h.run(inbox), [])
       dc.msgs.unshift({ id: "52", content: "今日はこれをやって", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [{ id: "52", text: "今日はこれをやって", msgId: "52" }])
+      assert.deepEqual(await h.run(inbox), [{ id: "52", text: "今日はこれをやって" }])
     })
   } finally {
     wire(undefined)
@@ -262,49 +254,6 @@ test("行数でも分ける — 2000 字に収まっていても縦に長いと�
       const joined = sent.map((x) => String(x.body?.content ?? "")).join("\n")
       assert.equal(joined.split("\n").length, 40)
       assert.equal(joined.split("\n").at(-1), "行39")
-    })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
-})
-
-test("受け取った印は付けて外せる — 返し終わったことを鳴らさずに知らせる", async () => {
-  const dc = await fakeDiscord([{ id: "70", content: "やっといて", author: { id: OWNER } }])
-  wire(dc.url)
-  try {
-    await withHarness(async (h) => {
-      await h.run(mark("70", "👀", true))
-      assert.deepEqual(
-        dc.msgs.find((m) => m.id === "70")?.reactions?.map((r) => r.emoji.name),
-        ["👀"],
-      )
-      await h.run(mark("70", "👀", false))
-      assert.deepEqual(dc.msgs.find((m) => m.id === "70")?.reactions, [])
-    })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
-})
-
-test("印を付ける先は自由文だけ — 押して返ってきたぶんには付けない", async () => {
-  const dc = await fakeDiscord()
-  wire(dc.url)
-  try {
-    await withHarness(async (h) => {
-      const id = await h.run(post({ text: "下書き", taps: [{ emoji: "🛑", reply: "やめて" }] }))
-      await h.run(inbox)
-      const m = dc.msgs.find((x) => x.id === id)
-      if (m?.reactions?.[0]) m.reactions[0].count = 2
-      dc.msgs.unshift({ id: "9999", content: "こっちが自由文", author: { id: OWNER } })
-      const got = await h.run(inbox)
-      // 印を押したぶんと自由文の両方が返る。ackId に選ぶのは後者だけ。
-      assert.equal(got.length, 2)
-      assert.deepEqual(
-        got.filter((x) => x.id === x.msgId).map((x) => x.msgId),
-        ["9999"],
-      )
     })
   } finally {
     wire(undefined)

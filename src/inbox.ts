@@ -18,16 +18,8 @@ import { Discord } from "./services/Discord.ts"
 import { Memory } from "./services/Memory.ts"
 import { Notify } from "./services/Notify.ts"
 
-export interface Drained {
-  readonly count: number
-  /**
-   * 印を付け返す先。**自由文の最新1件だけ。** 印を押して返ってきたぶんは対象にしない
-   * — 押した相手はこちらが出した下書きで、そこに受領の印を足しても何を指すのか読めない。
-   */
-  readonly ackId: string | undefined
-}
-
-export const drainInbox: Effect.Effect<Drained, DbFailed, Notify | Discord | Db | Memory> = Effect.gen(
+/** 台帳へ移した件数。**0 なら心拍を起こす理由が無い。** */
+export const drainInbox: Effect.Effect<number, DbFailed, Notify | Discord | Db | Memory> = Effect.gen(
   function* () {
     const notify = yield* Notify
     const discord = yield* Discord
@@ -43,13 +35,9 @@ export const drainInbox: Effect.Effect<Drained, DbFailed, Notify | Discord | Db 
       if (cursor) said.push(...msgs.map((m) => m.text))
     }
 
-    const inbound = yield* discord.inbox()
-    said.push(...inbound.map((m) => m.text))
+    said.push(...(yield* discord.inbox()).map((m) => m.text))
 
     for (const text of said) yield* mem.remember({ source: "owner", content: text, at: nowIso() })
-    return {
-      count: said.length,
-      ackId: inbound.filter((m) => m.id === m.msgId).at(-1)?.msgId,
-    }
+    return said.length
   },
 )

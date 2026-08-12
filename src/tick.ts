@@ -30,7 +30,7 @@ import { claudeMaxProvider } from "./model/provider.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
 import { Attention, type Digest, type ObservedEvent } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
-import { ACK, Discord } from "./services/Discord.ts"
+import { Discord } from "./services/Discord.ts"
 import { buildFencedPrompt, Governance, type UntrustedBlock } from "./services/Governance.ts"
 import { Memory } from "./services/Memory.ts"
 
@@ -219,7 +219,7 @@ async function tick(): Promise<string> {
       // 言われた」ことが起きる理由になる。ここが後だと、返事は次の心拍まで読まれない。
       // 口(poll)が先に取り込んでいれば0件で通り、台帳に残っているぶんが digest に出る。
       const arrived = yield* drainInbox
-      if (arrived.count > 0) log(`受信箱から ${arrived.count} 件`)
+      if (arrived > 0) log(`受信箱から ${arrived} 件`)
       const att = yield* Attention
       return yield* att.digest()
     }),
@@ -284,13 +284,6 @@ async function tick(): Promise<string> {
         // **返信は台帳より先に出す。** 持ち主は待っている側なので、記録に手間取って
         // 返事が遅れる順序にしない。出せなくても台帳には残るので、失っては困るものは無い。
         if (spokenTo && text) yield* discord.post({ text })
-        // 受け取った印を外す。**返し終わったこと自体を、通知を鳴らさずに知らせる。**
-        // 落ちたときは残る — それは「まだ返していない」の正しい表示なので消しに行かない。
-        const acked = yield* db.meta("discord:ack")
-        if (acked) {
-          yield* discord.mark(acked, ACK, false)
-          yield* db.setMeta("discord:ack", "")
-        }
         yield* mem.remember({
           kind: "observe",
           source: "system",

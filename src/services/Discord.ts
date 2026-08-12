@@ -30,9 +30,6 @@ const LIMIT = 2000
  */
 const LINES = 17
 
-/** 受け取ったことを返す印。返し終わったら外す。**通知を1回も増やさない返事。** */
-export const ACK = "👀"
-
 /** 押させる印。絵文字1つに意味を1つ割り当てる。 */
 export interface Tap {
   readonly emoji: string
@@ -50,8 +47,6 @@ export interface Post {
 export interface Inbound {
   readonly id: string
   readonly text: string
-  /** 元になった Discord のメッセージ id。**印を付け返す先**。 */
-  readonly msgId: string
 }
 
 const token = (): string | undefined => process.env.OPEN_ZERO_DISCORD_TOKEN
@@ -155,19 +150,13 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         return opened
       })
 
-    /**
-     * 印を付ける / 外す。**受け取ったことを通知を増やさずに返すための口。**
-     *
-     * 走り始めに付けて、返し終わったら外す。持ち主の側では自分が送った文に印が付くだけで、
-     * 通知は1回も鳴らない。返事そのものが来るまでの間、動いているかどうかがそこで読める。
-     * 途中で落ちれば印は残る — それは「まだ返していない」の正しい表示なので消しに行かない。
-     */
-    const mark = (messageId: string, emoji: string, on: boolean): Effect.Effect<void, DbFailed> =>
+    /** 印を1つ付ける。**押す側が絵文字を探さずに済むように、出した直後に自分で置く。** */
+    const mark = (messageId: string, emoji: string): Effect.Effect<void, DbFailed> =>
       Effect.gen(function* () {
         const ch = yield* channel()
         if (!ch) return
         yield* call(`/channels/${ch}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`, {
-          method: on ? "PUT" : "DELETE",
+          method: "PUT",
         }).pipe(Effect.ignore)
       })
 
@@ -191,7 +180,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
           )
         }
         if (!last || !p.taps?.length) return last
-        for (const t of p.taps) yield* mark(last, t.emoji, true)
+        for (const t of p.taps) yield* mark(last, t.emoji)
         const pending = yield* meta<Pending>("discord:taps", {})
         pending[last] = Object.fromEntries(p.taps.map((t) => [t.emoji, t.reply]))
         const kept = Object.entries(pending).slice(-MAX_PENDING)
@@ -232,7 +221,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         // 古い順に見る。API は新しい順で返すので、そのまま流すと台帳の並びが逆になる。
         for (const m of [...msgs].reverse()) {
           if (cursor && m.author.id === owner && m.content.trim() !== "" && newer(m.id, cursor)) {
-            out.push({ id: m.id, text: m.content, msgId: m.id })
+            out.push({ id: m.id, text: m.content })
           }
           const waiting = pending[m.id]
           if (!waiting) continue
@@ -240,7 +229,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
             const reply = waiting[r.emoji.name]
             // 自分で付けたぶんは数に入っている。それを超えていたら持ち主が押した。
             if (reply && r.count > (r.me ? 1 : 0)) {
-              out.push({ id: `${m.id}:${r.emoji.name}`, text: reply, msgId: m.id })
+              out.push({ id: `${m.id}:${r.emoji.name}`, text: reply })
               delete pending[m.id]
               break
             }
@@ -256,6 +245,6 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
     /** 出せるか。人に「Discord には出ない」と伝えるためだけに使う。 */
     const configured = (): boolean => token() !== undefined && ownerId() !== undefined
 
-    return { post, inbox, mark, configured } as const
+    return { post, inbox, configured } as const
   }),
 }) {}

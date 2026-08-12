@@ -8,7 +8,7 @@
  *
  *   1. 受信箱を1回読む(REST 1本 + ntfy 1本)。**モデルは呼ばない。**
  *   2. 何も来ていなければ黙って終わる。大半の起動はここで終わる。
- *   3. 来ていたら台帳に移し、印を付けて、心拍を起こす。
+ *   3. 来ていたら台帳に移して心拍を起こす。
  *
  * **常駐にしない。** websocket を張れば待ち時間は0になるが、落ちたら黙って死ぬ常駐が1本増え、
  * 再接続とセッション再開を自分で持つことになる。30秒間隔なら、その全部が systemd の
@@ -26,7 +26,6 @@ import { nowIso } from "./core/time.ts"
 import { drainInbox } from "./inbox.ts"
 import { run, runtime } from "./runtime.ts"
 import { Db } from "./services/Db.ts"
-import { ACK, Discord } from "./services/Discord.ts"
 
 loadEnv()
 
@@ -79,22 +78,13 @@ async function poll(): Promise<string> {
     Effect.gen(function* () {
       const db = yield* Db
       const got = yield* drainInbox
-      if (got.count > 0) {
-        const discord = yield* Discord
-        // **受け取ったことを先に返す。** 印を付けるのは通知を鳴らさない唯一の返し方で、
-        // ここから心拍が答えを書くまでの間、動いているかどうかがそこで読める。
-        if (got.ackId) {
-          yield* discord.mark(got.ackId, ACK, true)
-          yield* db.setMeta("discord:ack", got.ackId)
-        }
-      }
 
       // **届いた件数ではなく、台帳の未読で決める。** 心拍が走っている最中に届いたぶんは
       // 起こし直しが併合されて落ちるので、消えるまで見る。消すのは心拍側の commit。
       const cursor = Number((yield* db.meta("tick:cursor")) ?? 0)
       const row = yield* db.get("SELECT COUNT(*) n FROM events WHERE rowid > ? AND source = 'owner'", cursor)
       const unread = Number(row?.n ?? 0)
-      if (unread === 0) return { count: got.count, unread, wake: false }
+      if (unread === 0) return { count: got, unread, wake: false }
 
       // 新しく届いたぶんは待たせない。
       const wokeRaw = yield* db.meta("tick:woke")
@@ -106,7 +96,7 @@ async function poll(): Promise<string> {
       // 枠切れや停止で見送られた回はここに入らず、下の RETRY_MS の側で間が空く。
       const lastRaw = yield* db.meta("tick:last")
       const ran = !!lastRaw && !!wokeRaw && Date.parse(lastRaw) >= Date.parse(wokeRaw)
-      return { count: got.count, unread, wake: got.count > 0 || ran || since >= RETRY_MS }
+      return { count: got, unread, wake: got > 0 || ran || since >= RETRY_MS }
     }),
   )
 
