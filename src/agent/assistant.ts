@@ -40,7 +40,7 @@ import { Notify } from "../services/Notify.ts"
 import { Proposals } from "../services/Proposals.ts"
 import { defaultSources, renderHits, SOURCE_MENU, searchWeb } from "../services/Search.ts"
 import { fetchPage } from "../services/Web.ts"
-import { findLeaks, findSmells } from "./drafting.ts"
+import { DRAFT_MAX, findLeaks, findSmells } from "./drafting.ts"
 import { soulInstruction } from "./soul.ts"
 
 // `flue run` から起きる経路。ここも systemd/シェルを通らないので、自分で `.env` を読む。
@@ -657,8 +657,16 @@ export default function Assistant() {
               "店名・医院名・人名・日時・連絡先は伏せる。仕組みと数字だけ残して書き直してから、もう一度呼ぶ。"
             )
           }
+          // 長さも同じ。**規律に「短く」と書くだけでは毎回2000字が出てくる。**
+          if (body.length > DRAFT_MAX) {
+            return (
+              `出していない。本文が ${body.length}字ある(上限 ${DRAFT_MAX}字)。\n` +
+              "削るのではなく、**話を1つに絞り直す。** 見つけたことが複数あるなら、いちばん強い1つで" +
+              "書いて残りは次の日に回す。経緯・過程・網羅した限界の列挙は落とす — 読む側は求めていない。"
+            )
+          }
           // 中身を持たない語も同じ扱いにする。規律に並べても、書いている途中の一文までは届かない。
-          const smells = findSmells(`${title}\n${body}`)
+          const smells = findSmells(title, body)
           if (smells.length > 0) {
             return (
               `出していない。**中身を持たない語が残っている**: ${smells.map((s) => `「${s}」`).join(" ")}\n` +

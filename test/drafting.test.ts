@@ -49,16 +49,16 @@ test("非公開の値が無ければ何も当たらない", () => {
 
 test("評価だけで閉じた文を落とす — 1本目が実際に通した書き方", () => {
   const body = "重要なのは、これを検出できたのが自分の走行記録だったことだ。"
-  assert.deepEqual(findSmells(body), ["重要"])
+  assert.deepEqual(findSmells("題", body), ["重要"])
 })
 
 test("因果として使うぶんは通す — 締めているときだけ落とす", () => {
-  assert.deepEqual(findSmells("有効期限を外したら、実行不能が5件から0件になった。"), [])
-  assert.deepEqual(findSmells("この設定が効く。"), ["効く。"])
+  assert.deepEqual(findSmells("題", "有効期限を外したら、実行不能が5件から0件になった。"), [])
+  assert.deepEqual(findSmells("題", "この設定が効く。"), ["効く。"])
 })
 
 test("定型はどこに出ても落とす", () => {
-  const smells = findSmells("本稿では、さまざまな条件を並べていきます。")
+  const smells = findSmells("題", "本稿では、さまざまな条件を並べていきます。")
   assert.deepEqual(smells.sort(), ["さまざまな", "本稿では", "ていきます"].sort())
 })
 
@@ -68,5 +68,18 @@ test("測ったことだけを書いた本文は素通しする", () => {
     "1件は参照していた確定値が9時間後に書き換わり、もう1件は中身の期日が有効期限より先に来た。",
     "n=1、期間は5日間。他の条件では確かめていない。",
   ].join("\n")
-  assert.deepEqual(findSmells(body), [])
+  assert.deepEqual(findSmells("提案が実行前に使えなくなった件", body), [])
+})
+
+test("比喩と擬人を落とす — 1本目が全部やっていた", () => {
+  const smells = findSmells(
+    "裁可待ちキューを挟んだら、提案は実行される前に腐った",
+    "キューは何も気づかず引きずっている。皮肉なことに、提案はまだ生きている。",
+  )
+  assert.deepEqual(smells.sort(), ["腐った", "気づかず", "引きずって", "皮肉", "生きている"].sort())
+})
+
+test("横棒は題では通し、本文では落とす", () => {
+  assert.deepEqual(findSmells("提案が実行前に使えなくなる — n=1 の5日間", "5件中2件だった。"), [])
+  assert.deepEqual(findSmells("題", "2件が実行不能になった — 理由は別々だった。"), ["—"])
 })
