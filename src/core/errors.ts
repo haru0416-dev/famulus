@@ -85,6 +85,26 @@ export class DbFailed extends Data.TaggedError("DbFailed")<{
 /** governance が出しうる拒否の総和。ツール実行前・送信前のゲートはこれを返す。 */
 export type Refusal = Halt | QuotaCooldown | DailyRunLimit | UnpricedModel | EgressDenied | DeliveryRejected
 
+/**
+ * 包まれた失敗から**本当の理由**を一行で取り出す。
+ *
+ * Flue は dispatch の失敗を `Agent run failed (submission sub_…)` にまとめてしまうので、
+ * 表に出た文字列だけを記録すると、自走枠の使い切りも provider の落ちも同じ顔になる。
+ * 実際の理由は内側の `meta.reason` にあるので、`cause` を辿って最初に見つけたものを返す。
+ * 見つからなければ元の文字列(それ以上のことは分からない、が正しい記録)。
+ */
+export function causeReason(e: unknown): string {
+  const seen = new Set<unknown>()
+  let cur: unknown = e
+  while (cur && typeof cur === "object" && !seen.has(cur)) {
+    seen.add(cur)
+    const meta = (cur as { meta?: { reason?: unknown } }).meta
+    if (typeof meta?.reason === "string" && meta.reason) return meta.reason
+    cur = (cur as { cause?: unknown }).cause
+  }
+  return String(e)
+}
+
 /** 人間に見せる一行(裁可ボード・CLI 共通)。 */
 export function describeRefusal(r: Refusal): string {
   switch (r._tag) {

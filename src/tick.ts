@@ -22,9 +22,10 @@ import { init } from "@flue/runtime"
 import { sqlite, start } from "@flue/runtime/node"
 import { Effect } from "effect"
 import { DRAFTING } from "./agent/drafting.ts"
+import { KEEP_MS, keep } from "./agent/keeper.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
-import { describeRefusal } from "./core/errors.ts"
+import { causeReason, describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
 import { drainInbox } from "./inbox.ts"
 import { claudeMaxProvider } from "./model/provider.ts"
@@ -41,8 +42,14 @@ loadEnv()
 /** Flue の会話永続化。対話(`flue run`)とは別の口にしておく — 履歴が混ざると起点が読めない。 */
 const FLUE_DB = process.env.OPEN_ZERO_FLUE_DB ?? ".data/flue-tick.db"
 
-/** 1回の心拍に許す時間。`read()` は既定で無限に待つので、タイマー実行では必ず上限を付ける。 */
-const TIMEOUT_MS = Number(process.env.OPEN_ZERO_TICK_TIMEOUT_MS ?? 300_000)
+/**
+ * 1回の心拍に許す時間。`read()` は既定で無限に待つので、タイマー実行では必ず上限を付ける。
+ *
+ * 300 秒では下書きの日が入り切らない(docs/adr/0012)。書いて精査に出して直してもう一度出す形になり、
+ * 実測した回は 270 秒の時点でまだ3稿目を書いていた。unit の `TimeoutStartSec` は 600 秒なので、
+ * **その内側**に収まる範囲で伸ばす。器の上限(180 秒)との差は広がる方向なので ADR 0002 は保たれる。
+ */
+const TIMEOUT_MS = Number(process.env.OPEN_ZERO_TICK_TIMEOUT_MS ?? 420_000)
 
 const short = (id: string) => id.slice(0, 8)
 /** 心拍が使うモデル。既定は対話と同じ — 自走のほうを安くしたいときだけ差し替える。 */
@@ -96,10 +103,18 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
     sections.push(
       [
         "## 動いていない見張り",
-        ...d.stalled.map(
-          (w) =>
-            `- ${short(w.id)} ${w.subject}(最後の動きから ${w.stalledDays} 日 / 次に動くのは ${w.next_move_owner})`,
-        ),
+        // 前回の結果を一緒に渡す。**これが無いと毎回まっさらな状態で同じ一覧を舐め直す**ことになり、
+        // 先週を踏まえた文が一度も出ない。実際に AI追跡の見張りがそうなっていた。
+        ...d.stalled.map((w) => {
+          const head = `- ${short(w.id)} ${w.subject}(最後の動きから ${w.stalledDays} 日 / 次に動くのは ${w.next_move_owner}`
+          const runs = w.run_count > 0 ? ` / 通算 ${w.run_count} 回` : " / まだ一度も回していない"
+          const prev = w.last_result ? `\n  前回: ${w.last_result}` : ""
+          return `${head}${runs})${prev}`
+        }),
+        "",
+        "回したら `ran` で結果を残す。**何も出てこなかった回も残す** — 呼ばないと次の心拍でまた上がる。",
+        "**前に回したのに記帳し忘れているなら、そのときの時刻を `at` に渡して今記帳する。**",
+        "冷却はその時刻から数えるので後ろへずれない。件名に走行記録を書き込むのではなく、ここを使う。",
       ].join("\n"),
     )
   }
@@ -119,6 +134,19 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
       ].join("\n"),
     )
   }
+  if (d.refused.length > 0) {
+    sections.push(
+      [
+        // 見張りに前回の結果を渡すのと同じ(docs/adr/0017)。断られた側を渡さないと、
+        // まっさらな状態で同じ相手に同じ用件を撃ち直す。
+        "## 断られた提案(同じ形をもう一度出さない)",
+        ...d.refused.map((p) => `- ${p.summary}\n  → ${p.reason}`),
+        "",
+        "**理由が「前提が変わった」「その話ごと畳んだ」なら、その用件は出さない。**",
+        "日付や文面を差し替えて出し直してよいのは、断られた理由がその一点だけだったとき。",
+      ].join("\n"),
+    )
+  }
 
   // 下書きの規律は**出す日にだけ載せる**。毎回渡すと、書かない回のぶんだけ枠を食う。
   if (d.draftDue) {
@@ -127,13 +155,9 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
         "## 今日ぶんの下書き",
         "1日に1本、外に出せる文を `draft` で置く。出す先は Zenn を想定した記事。",
         "",
-        "**材料は自分が走った記録に限る。** この台帳には、自走するエージェントを実際に動かして",
-        "壊れた記録が入っている — 切られた心拍、通らなかった経路、効かなかった設定、使った枠。",
-        "それは他の誰も持っていない。逆に、読んだ記事をまとめ直したものは誰が書いても同じになる。",
-        "",
-        "`recall` で自分の走行記録を引いてから書く。**引いて何も出てこなければ書かない** —",
-        "その日は `draft` を呼ばずに「材料が無い」と一行書いて終える。それは失敗ではない。",
-        "薄い記事を1本出すより、材料が溜まるまで待つほうが、名前が付いて出る文としては良い。",
+        "**書き始める前に `recall` で自分の走行記録を引く。** 切られた心拍、通らなかった経路、",
+        "効かなかった設定、使った枠 — 自走するエージェントを実際に動かして壊れた記録は他の誰も持っていない。",
+        "引いて何も出てこなければ `draft` を呼ばず、「材料が無い」と一行書いて終える。",
         "",
         DRAFTING,
       ].join("\n"),
@@ -143,9 +167,6 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
   sections.push(
     [
       "## 今回やること",
-      "自分の記録(remember / watch / unwatch / ask / answer)は自分の判断で書いてよい。確認は要らない。",
-      "外に出る行為(送信・予約・購入・削除)は propose で置く。実行はしない。",
-      "**手元で動かすのは `shell`** — 隔離された器の中なので裁可は要らない。走った跡は台帳に残る。",
       `**この回に使える時間は ${Math.round(TIMEOUT_MS / 1000)} 秒**。\`shell\` の返り値に残りが出る。` +
         "尽きる前に手を止めて、分かったことを書く。続きは同じ作業場の名前を渡せば次の心拍で継げる。",
       "",
@@ -154,7 +175,6 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
             "**最後に書いた文がそのまま返信になる。** `tell` は要らない — 同じ画面に出る。",
             "答えるのであって、報告しない。何を調べたか・どの道具を呼んだかは書かない。",
             "訊かれたことに答え、動いたなら何がどうなったかを書く。**それ以外は書かない。**",
-            "分からないなら分からないと書く。埋めるために推測を足さない。",
           ]
         : [
             "**書いても届かない。** ここで書いたものは自分の側に残るだけで、持ち主は読みに来ない。",
@@ -166,10 +186,15 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
       "**調べ直すより、手元にあるもので終える。** 心拍は数分で切られる。途中で切られると",
       "その回の働きは丸ごと消えて、持ち主には何も残らない。だから:",
       "- `recall` は当たった時点で止める。**同じ語をもう一度引かない**。「該当なし」が2回続いたら台帳に無い。",
-      "- 台帳を読むだけなら自分で引く。子(`digger` / `researcher`)を立てるのは、1回では足りないとき。",
+      "- 台帳を読むだけなら自分で引く。`task` で子(`digger` / `researcher`)を立てるのは",
+      "  **1回では足りないとき**と、**外(web)を見に行くとき**だけ。",
       "- **探すときは割って投げる。** 同じ問いを1つの文脈で順に調べると、2件目は1件目の語彙を",
       "  引き継いで同じ側しか見なくなる。**別の切り口を別の子に渡し、互いの結果は見せない。**",
       "  合わせるのは戻ってきてから。詰めの段(答えが見えている)では割らず、手元で終える。",
+      "- **投げる前に「たぶんこう返る」を一行書いておく。** 予告どおりに返ったものは既に知っていたことの",
+      "  確認でしかない。**予告を外した返りだけが新しい。** 外れたら、外れた側を書く。",
+      "- **持ち主に届ける値打ちがあると言うなら、同じ物差しに掛けて落ちたものを1つ名指す。**",
+      "  落ちたものを名指せない物差しは何でも通すので、通ったことが証拠にならない。",
       "- 材料が揃ったらそこで打ち切って、`tell` なり `remember` なりで形にして終える。",
       "",
       ...(spokenTo
@@ -180,7 +205,6 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
         : [
             "**何もしないのが正解であることが多い。** 動かす必要が無ければ道具を1つも呼ばず、",
             "「今は動かない。理由は〜」と一行で書いて終えてよい。それは失敗ではない。",
-            "持ち主に確認したいことが出たら、訊くのではなく ask で問いとして置く。",
           ]),
     ].join("\n"),
   )
@@ -282,15 +306,35 @@ async function tick(): Promise<string> {
     // **切られてもここで受け止める。** 投げ直すと commit に辿り着かないので冷却の起点が進まず、
     // 次のタイマーが同じ理由で起きて同じだけ焼いて同じように落ちる。落ちた回も1回動いた回として
     // 締める — 実際にモデルは走り、道具も動いて、その跡は台帳に残っている。
-    let cutOff = false
-    const reply = await agent.read(receipt, { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(async (e) => {
+    const deadline = AbortSignal.timeout(TIMEOUT_MS)
+    let cutOff: string | undefined
+    const reply = await agent.read(receipt, { signal: deadline }).catch(async (e) => {
       await agent.abort().catch(() => {})
-      cutOff = true
-      log("切られた:", String(e))
-      return { text: `(${Math.round(TIMEOUT_MS / 1000)}秒で切られた。この回の締めの文は書けていない)` }
+      // **時間切れと、それ以外の止まり方を混ぜない。** 混ぜると「300秒で切られた」だけが台帳に残り、
+      // 自走枠の使い切りも provider の落ちも同じ顔になる。次の回で何を直せばいいか読めなくなる。
+      cutOff = deadline.aborted ? `${Math.round(TIMEOUT_MS / 1000)}秒で時間切れ` : causeReason(e)
+      log("止まった:", cutOff)
+      return { text: `(${cutOff}。この回の締めの文は書けていない)` }
     })
 
     const text = (reply.text ?? "").trim()
+
+    // ── 締めの記録係。**持ち主が話した回にだけ通る**(docs/adr/0014)。
+    // 材料は持ち主の発言そのもので、外から来たものは渡さない。切られた回は通さない —
+    // 途中で止まった回のやり取りは、確かめられたかどうかが判断できる形になっていない。
+    let kept: string | undefined
+    if (spokenTo && !cutOff) {
+      const material = d.newEvents
+        .filter((e) => e.source === "owner" && e.taint === 0)
+        .map(renderEvent)
+        .join("\n")
+      // `since` はこの回の起点。本体が既に確定させた slot を記録係が言い換え直さないための線。
+      kept = await run(keep({ material, since: d.at, signal: AbortSignal.timeout(KEEP_MS) })).catch(
+        (e: unknown) => `記録係: 落ちた(${causeReason(e)})`,
+      )
+      log(kept)
+    }
+
     await run(
       Effect.gen(function* () {
         const mem = yield* Memory
@@ -304,7 +348,7 @@ async function tick(): Promise<string> {
         yield* mem.remember({
           kind: "observe",
           source: "system",
-          content: { tick: d.at, reasons: d.reasons, said: text },
+          content: { tick: d.at, reasons: d.reasons, said: text, ...(kept ? { kept } : {}) },
           // 索引に入れるのは**言ったことだけ**。`deriveText` に任せると封筒(起動時刻・起きた理由)まで
           // 平らに潰して混ぜてしまい、「持ち主の入力が未読」のような定型句が毎回の記録に紛れて、
           // 何を検索してもそれが当たるようになる。封筒は台帳に残す、索引には入れない。
@@ -327,7 +371,7 @@ async function tick(): Promise<string> {
         })
       }),
     )
-    if (cutOff) return `切られた(${Math.round(TIMEOUT_MS / 1000)}秒)— 走った跡は台帳に残っている`
+    if (cutOff) return `止まった(${cutOff})— 走った跡は台帳に残っている`
     return text ? `動いた: ${text.slice(0, 400)}` : "動いた(発話なし)"
   } finally {
     clearDeadline()

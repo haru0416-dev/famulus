@@ -37,6 +37,7 @@ import { isRefusal, run } from "../runtime.ts"
 import { AUTONOMOUS_ROLE, Governance, type Lane } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { ClaudeCliError, callClaude, poolForModel, RUNTIME_PROMPT, resolveClaudeBin } from "./claude-cli.ts"
+import { traceOf } from "./trace.ts"
 
 export const CLAUDE_MAX_PROVIDER_ID = "claude-max"
 const API = "claude-cli"
@@ -276,7 +277,7 @@ async function account(model: string, result: Awaited<ReturnType<typeof callClau
           cacheWrite: result.usage.cacheWrite,
           usd: 0, // 定額枠。影の値段は provenance にだけ残す。
         },
-        summary: result.text.slice(0, 200),
+        summary: traceOf(result.text),
         provenance: { pool: poolForModel(model), notionalUsd: result.usage.notionalUsd, via: "flue" },
         at,
       })

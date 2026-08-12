@@ -28,9 +28,11 @@ import { Effect } from "effect"
 import * as v from "valibot"
 import { remainingLabel, remainingMs } from "../core/deadline.ts"
 import { loadEnv } from "../core/env.ts"
+import { causeReason } from "../core/errors.ts"
 import { dayRange, localStamp, nowIso } from "../core/time.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "../model/claude-cli.ts"
 import { CLAUDE_MAX_PROVIDER_ID, claudeMaxProvider, lane } from "../model/provider.ts"
+import { Runner } from "../model/Runner.ts"
 import { run } from "../runtime.ts"
 import { Attention } from "../services/Attention.ts"
 import { Db } from "../services/Db.ts"
@@ -43,7 +45,16 @@ import { Proposals } from "../services/Proposals.ts"
 import { runDir, runInSandbox } from "../services/Sandbox.ts"
 import { defaultSources, renderHits, SOURCE_MENU, searchWeb } from "../services/Search.ts"
 import { fetchPage } from "../services/Web.ts"
-import { DRAFT_MAX, findLeaks, findShape, findSmells } from "./drafting.ts"
+import {
+  DRAFT_MAX,
+  findLeaks,
+  findShape,
+  findSmells,
+  keepQuoted,
+  type Problem,
+  REVIEW_SCHEMA,
+  REVIEW_SYSTEM,
+} from "./drafting.ts"
 import { soulInstruction } from "./soul.ts"
 
 // `flue run` から起きる経路。ここも systemd/シェルを通らないので、自分で `.env` を読む。
@@ -75,6 +86,13 @@ const RESEARCH_MODEL = `${CLAUDE_MAX_PROVIDER_ID}/${process.env.OPEN_ZERO_RESEAR
 const RUN_RESERVE_MS = 45_000
 /** これを下回る持ち時間なら走らせない。取得だけで消えて、出力が出る前に切られる。 */
 const MIN_RUN_MS = 15_000
+
+/**
+ * 精査役1回の上限。**実測 31 秒**(1200字の下書きに対して指摘3件、出力 1759 token)で、
+ * 指摘を多く返した回で 3366 token。倍を見て 90 秒に置いた(docs/adr/0012)。
+ * ここを超えるのは読めていないときなので、待たずに切って次の回に回す。
+ */
+const REVIEW_MS = 90_000
 
 /**
  * 今のターンの入力そのものの event id。**recall から外すために持つ**(Memory.recall の注記)。
@@ -150,9 +168,7 @@ ${SOURCE_MENU.map((s) => `  - \`${s.name}\` — ${s.what}`).join("\n")}
 - \`web\` の \`N索引\` は、**いくつの検索エンジンが同じ頁を拾ったか**。数が多いほど広く出ている頁で、
   1索引のものは1つの索引にしか出ていない。**中身の正しさではない。**
 - 返るのは題・URL・書き手・日付・目印(★星 ♡いいね 点数)だけ。**中身が要るものだけ \`fetch\` で開く。**
-- **一覧の要約や日付をそのまま事実として書かない。** これは索引で、原文ではない。
-  動く値(版番号・価格・順位・人事)は開いて確かめる。
-  **\`x\` だけは逆。** あそこの要約は頁の紹介文ではなく**投稿の文字そのもの**で、x.com は開けない
+- **\`x\` の要約だけは捨てない。** 他の先の要約は頁の紹介文だが、あそこのそれは**投稿の文字そのもの**で、x.com は開けない
   (robots で断られている)。開いて確かめる道が無いのに要約を捨てると、**手元にある本文を捨てる**
   ことになる。読み方は結果の \`## x\` の下に出る。
 - 0件で返る先がある。そのときは語を変えるか、別の先を名指しする。**埋めない。**
@@ -302,7 +318,6 @@ function Researcher() {
   \`開いた頁: <URL を列挙 / 無し>\`。** どちらも「無し」なのに中身のある答えを書いたなら、
   それはモデルの内側の検索から出たもの — **全部 (未確認) を付ける。**
   ここに URL が並んでいない答えの中の動く値も、全部 (未確認) が付いていること。
-- **検索の索引は一次資料より遅れる。**版番号も公開日も、検索だけの答えは1つ古い値を返しうる。
 - 動く値を訊かれたら、一次資料の見当を先に付ける: npm は \`registry.npmjs.org/<名前>\`
   (\`dist-tags\` に最新版、\`time\` に版ごとの公開日時)、GitHub は \`<repo>/releases.atom\`、
   それ以外は公式サイトの該当頁。**まず開く。検索はその URL を見つけるために使う。**
@@ -506,20 +521,63 @@ export default function Assistant() {
   useTool({
     name: "watch",
     description:
-      "決着していない件を見張りに登録する。次に自分が起きたとき、これが手掛かりになる。動きが無いまま数日経つと自動で上がってくる。",
+      "決着していない件を見張りに登録する。次に自分が起きたとき、これが手掛かりになる。動きが無いまま数日経つと自動で上がってくる。**同じ件を登録し直さない** — 一周回したら ran を使う。",
     input: v.object({
       subject: v.pipe(v.string(), v.description("何を見張るか。一行(例: 'A社 契約更新の返信待ち')。")),
       next_move: v.pipe(
         v.picklist(["famulus", "human", "counterparty"]),
         v.description("次に動くのは誰か。famulus=自分、human=持ち主、counterparty=相手。"),
       ),
+      cooldown_hours: v.optional(
+        v.pipe(
+          v.number(),
+          v.description(
+            "一周回した後、次に机へ載せるまでの時間。既定は24。毎日見るものなら24、週次なら168。",
+          ),
+        ),
+      ),
     }),
-    run: async ({ data: { subject, next_move } }) =>
+    run: async ({ data: { subject, next_move, cooldown_hours } }) =>
       run(
         Effect.gen(function* () {
           const att = yield* Attention
-          const id = yield* att.watch(subject, next_move)
+          const id = yield* att.watch(
+            subject,
+            next_move,
+            cooldown_hours === undefined ? undefined : { cooldownHours: cooldown_hours },
+          )
           return `見張りに入れた(${id.slice(0, 8)})。次に動くのは ${next_move}。`
+        }),
+      ),
+  })
+
+  useTool({
+    name: "ran",
+    description:
+      "見張りを一周回した印を付ける。**回したら必ず呼ぶ** — 呼ばないと同じ見張りが次の心拍でまた机に上がる。何も出てこなかった回も呼ぶ(空振りだったこと自体が次に渡す情報)。result は次に回すときの起点になるので、件数や日付など**差分を言える形**で書く。**前に回したのを記帳し忘れていたなら、そのときの時刻を `at` で渡して今から記帳してよい** — 冷却は渡した時刻から数えるので、後ろへずれない。",
+    input: v.object({
+      id: v.pipe(v.string(), v.description("見張りの id(先頭8文字でよい)。")),
+      result: v.pipe(
+        v.string(),
+        v.description(
+          "回して分かったこと。次の回はこれを起点にする(例: '8/12 時点で HN 新着に該当なし。前回拾った X はその後 star +300')。",
+        ),
+      ),
+      at: v.optional(
+        v.pipe(
+          v.string(),
+          v.description(
+            "実際に回した時刻(IsoUtc)。省くと今。**先の時刻は取らない**(渡しても今に丸められる)。",
+          ),
+        ),
+      ),
+    }),
+    run: async ({ data: { id, result, at } }) =>
+      run(
+        Effect.gen(function* () {
+          const att = yield* Attention
+          const w = yield* att.ranWatch(id, result, at)
+          return `見張り ${w.id.slice(0, 8)}「${w.subject}」を回した(通算 ${w.run_count} 回、回した時刻 ${w.last_run_at})。次に上がるのは そこから ${w.cooldown_hours} 時間後。`
         }),
       ),
   })
@@ -736,7 +794,8 @@ export default function Assistant() {
     description:
       "外に出す文の下書きを持ち主に渡す。**そのまま公開できる本文だけ**を入れる — " +
       "「こういう記事はどうか」という提案や、箇条書きの材料は入れない。書けないなら呼ばない。" +
-      "材料は台帳にある自分の実測に限る。他人の記事の要約は本文にしない。**1日に1本まで。**",
+      "材料は台帳にある自分の実測に限る。他人の記事の要約は本文にしない。**1日に1本まで。**" +
+      "**書いていない読み手が精査してから届く** — 規律に当たる箇所は引用付きで返るので、そこを直して呼び直す。",
     input: v.object({
       title: v.pipe(v.string(), v.description("記事の題。内容を指す言葉にする(煽らない)。")),
       body: v.pipe(
@@ -754,6 +813,19 @@ export default function Assistant() {
           const discord = yield* Discord
           const mem = yield* Memory
           const db = yield* Db
+          const runner = yield* Runner
+          // **1日1本は、ここで数える。** 説明文に書くだけでは通る(下の長さ検査と同じ理由)。
+          // `daily:draft` は起こす側(Attention)が読む印でもあるが、それは「起きるか」を決めるだけで、
+          // 別の理由で起きた回に書き足すのは止められない。実際に同じ題が23分で4本出た。
+          // 上限が守るのは文の質ではなく**声を掛ける回数**なので、出した後は同じ日に開けない。
+          if ((yield* db.meta("daily:draft")) === dayRange(nowIso()).key) {
+            return (
+              "出していない。**今日ぶんは出してある。**1日1本まで。\n" +
+              "直せと言われたのなら、`draft` ではなく返事の本文に書き直したものをそのまま書く — " +
+              "その文は持ち主の画面へ直接届く。印(✅ / ✏️ / 🛑)は要らない、もう訊かれている側だから。\n" +
+              "そうでないなら明日に回す。本文は覚えておけば消えない。"
+            )
+          }
           // **出す前に見る。** 台帳の実測から書くと持ち主の生活がそのまま混ざるので、
           // 非公開の確定値が本文に残っていないかを機械で確かめる(規律に書くだけでは通る)。
           // **過去の値も含める。** 走行記録から書くと引かれるのは履歴のほうで、
@@ -792,8 +864,54 @@ export default function Assistant() {
           if (shape.length > 0) {
             return `出していない。**並べ方が読み手を疲れさせる形になっている**:\n${shape.map((s) => `- ${s}`).join("\n")}\n直してから、もう一度呼ぶ。`
           }
+          // **ここから先は機械では見えない。** 上の3つが見ているのは語と密度で、規律の本体
+          // (材料が自分の実測か・話が1つか・測ったことと見立てが分かれているか)には当たらない。
+          // 書いた本人には読み直させない — 一文ごとに理由を持っている側は、その理由のほうを先に思い出す。
+          // 機械の検査を後ろに回さないのは、正規表現で落ちるものに枠を1回使わないため。
+          //
+          // **この呼び出しにも締切を渡す。** 渡さないと精査役だけが心拍の持ち時間の外で走る。
+          // 実測した回は、締切が切れた後もここで待ち続けて、外から殺すまで終わらなかった
+          // — そうなると `commit` に届かず冷却の起点が進まないので、次のタイマーが同じ理由で
+          // 起きて同じところで止まる(ADR 0002 が塞いだはずの輪が、ここから開く)。
+          const left = remainingMs()
+          if (left < REVIEW_MS + RUN_RESERVE_MS) {
+            return `出していない。精査に回す時間が残っていない(${remainingLabel()})。本文は捨てずに、次の回で最初に呼ぶ。`
+          }
+          const review = yield* Effect.either(
+            runner.run({
+              role: "reviewer",
+              kind: "draft-review",
+              systemPrompt: REVIEW_SYSTEM,
+              // 本文は囲って渡す。子が外から拾ってきた材料が混ざっているので、指示と同じ平面に置かない。
+              prompt: buildFencedPrompt("この下書きを精査してください。", [
+                { source: "draft", label: title, content: body },
+              ]),
+              schema: REVIEW_SCHEMA,
+              signal: AbortSignal.timeout(Math.min(REVIEW_MS, left - RUN_RESERVE_MS)),
+            }),
+          )
+          // **読めなかったら出さない。** 検査役が落ちたときに素通りさせると、枠が閉じている日だけ
+          // 無検査の文が外に出る。日付の印はまだ立てていないので、次の回でそのまま出し直せる。
+          if (review._tag === "Left") {
+            return `出していない。精査役を呼べなかった(${causeReason(review.left)})。本文は捨てずに、次の回でもう一度呼ぶ。`
+          }
+          const verdict = (review.right.structured ?? {}) as { verdict?: string; problems?: Problem[] }
+          const problems = keepQuoted(verdict.problems, title, body)
+          if (verdict.verdict === "直す" && problems.length > 0) {
+            return (
+              `出していない。**読み手に止められた。**\n${problems
+                .map((p) => `- 「${p.quote}」\n  ${p.rule}\n  → ${p.fix}`)
+                .join("\n")}\n` +
+              "直してから、もう一度呼ぶ。**書き足して答えない** — 指摘された文は落とすか書き換える。"
+            )
+          }
           const id = yield* discord.post({
             text: `**${title}**\n\n${body}\n\n---\n根拠: ${basis}`,
+            // 押してもらわないと外に出ない文なので、**黙らせてある場所でも呼ぶ**。
+            to: "draft",
+            ping: true,
+            // 「直す」は印だけでは何を直すか言えない。枝を立てて、そこに書けるようにする。
+            thread: title,
             taps: [
               { emoji: "✅", emojiReply: "出していい" },
               { emoji: "✏️", emojiReply: "直す" },
@@ -808,7 +926,7 @@ export default function Assistant() {
             text: `${title}\n${body}`,
           })
           return id
-            ? `渡した: ${title}(✅ 出していい / ✏️ 直す / 🛑 捨てる)`
+            ? `渡した: ${title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
             : "Discord に出せなかった。本文は記録に残したので、次に会ったとき見せる。"
         }),
       ),

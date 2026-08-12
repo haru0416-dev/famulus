@@ -173,7 +173,12 @@ CREATE TABLE IF NOT EXISTS watchlist (
   last_activity_at TEXT NOT NULL,                     -- 最終動き(滞留日数の起点)
   next_move_owner TEXT NOT NULL CHECK (next_move_owner IN ('human','counterparty','famulus')),
   status          TEXT NOT NULL CHECK (status IN ('open','closed')),
-  source_ref      TEXT CHECK (source_ref IS NULL OR json_valid(source_ref))  -- SourceRef
+  source_ref      TEXT CHECK (source_ref IS NULL OR json_valid(source_ref)),  -- SourceRef
+  -- 発火の記録。**登録した時刻ではなく、実際に一周回した時刻で冷却を数える。**
+  last_run_at     TEXT,                               -- 最後に回した時刻。NULL = 一度も回していない
+  cooldown_hours  REAL NOT NULL DEFAULT 24,           -- 回した後、次に机へ載せるまで
+  run_count       INTEGER NOT NULL DEFAULT 0,         -- 通算で何周回したか
+  last_result     TEXT                                -- 前回回して分かったこと。次の回に渡す
 );
 CREATE INDEX IF NOT EXISTS idx_watchlist_open ON watchlist(status) WHERE status = 'open';
 

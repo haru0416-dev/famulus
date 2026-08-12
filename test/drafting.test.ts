@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { findLeaks, findShape, findSmells } from "../src/agent/drafting.ts"
+import { findLeaks, findShape, findSmells, keepQuoted } from "../src/agent/drafting.ts"
 
 /** 非公開の確定値。台帳にはこの形で入っている(JSON 文字列の中身)。 */
 const SECRETS = [
@@ -129,4 +129,54 @@ test("見出しが多いのは話が複数あるということ", () => {
     findShape(body).some((s) => s.startsWith("見出しが 4 個ある")),
     true,
   )
+})
+
+/**
+ * 精査役が返した指摘の受け取り。**駄目出しの側も検査する。**
+ *
+ * 機械の検査を全部通った下書きは、あとは読み手の判断だけで止まる。そこを無条件に信じると、
+ * 本文に無い一節を引いた指摘で下書きが止まり、書き直しても同じ理由でまた止まる
+ * (直す対象が本文に無いので、直しようが無い)。引けなかった指摘はコードが捨てる。
+ */
+const BODY = "心拍を20回走らせたら、18回は別の枠へ出ていた。\n親が使ったのは2回だけ。"
+
+test("本文から写した指摘は残す", () => {
+  const kept = keepQuoted(
+    [{ quote: "18回は別の枠へ出ていた", rule: "n が無い", fix: "条件を足す" }],
+    "題",
+    BODY,
+  )
+  assert.equal(kept.length, 1)
+})
+
+test("空白の入れ方が違っても写したものとして扱う", () => {
+  const kept = keepQuoted([{ quote: "親が使ったのは\n2回だけ", rule: "r", fix: "f" }], "題", BODY)
+  assert.equal(kept.length, 1)
+})
+
+test("題から写した指摘も残す — 評価語は題に出る", () => {
+  const kept = keepQuoted(
+    [{ quote: "劇的に速くなった", rule: "評価で締めている", fix: "落とす" }],
+    "劇的に速くなった",
+    BODY,
+  )
+  assert.equal(kept.length, 1)
+})
+
+test("本文に無い一節を引いた指摘は捨てる", () => {
+  const kept = keepQuoted(
+    [{ quote: "全体的に説明が足りない", rule: "説明不足", fix: "書き足す" }],
+    "題",
+    BODY,
+  )
+  assert.deepEqual(kept, [])
+})
+
+test("引用が空の指摘は捨てる — 名指せない駄目出しで止めない", () => {
+  const kept = keepQuoted([{ quote: "   ", rule: "読みにくい", fix: "直す" }], "題", BODY)
+  assert.deepEqual(kept, [])
+})
+
+test("指摘が無い返り値でも落ちない", () => {
+  assert.deepEqual(keepQuoted(undefined, "題", BODY), [])
 })

@@ -109,6 +109,26 @@ test("cache_write の無い ledger は列が足され、既存の行は残る", 
   d.close()
 })
 
+test("発火の記録を持たない watchlist は列が足され、既存の見張りは「まだ回していない」になる", () => {
+  const path = join(ROOT, "watchlist-v1.db")
+  const d = new DatabaseSync(path)
+  d.exec(`
+    CREATE TABLE watchlist (
+      id TEXT PRIMARY KEY, subject TEXT NOT NULL, opened_at TEXT NOT NULL,
+      last_activity_at TEXT NOT NULL, next_move_owner TEXT NOT NULL, status TEXT NOT NULL,
+      source_ref TEXT
+    );
+    INSERT INTO watchlist (id, subject, opened_at, last_activity_at, next_move_owner, status)
+      VALUES ('w1', 'AI追跡', '2026-08-01T00:00:00Z', '2026-08-05T00:00:00Z', 'famulus', 'open');
+  `)
+  assert.deepEqual(migrate(d), ["watchlist:firing"], "1回目は掛かる")
+  assert.deepEqual(migrate(d), [], "2回目は何もしない")
+  const row = d.prepare("SELECT last_run_at, cooldown_hours, run_count, last_result FROM watchlist").get()
+  // **回した跡はどこにも残っていない。** `opened_at` で埋めると、回していないものを回したことにする。
+  assert.deepEqual({ ...row }, { last_run_at: null, cooldown_hours: 24, run_count: 0, last_result: null })
+  d.close()
+})
+
 test("読み書きする側の無い卓は、空なら落ちる", () => {
   const path = join(ROOT, "unused.db")
   const d = new DatabaseSync(path)

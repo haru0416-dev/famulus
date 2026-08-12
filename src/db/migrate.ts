@@ -68,6 +68,23 @@ function ledgerCacheWrite(d: DatabaseSync): boolean {
 }
 
 /**
+ * watchlist に発火の記録を足す(docs/adr/0013)。
+ *
+ * 既存行の `last_run_at` は NULL のまま置く。**「まだ一度も回していない」と読むのが記録として正しい**
+ * — 回した跡はどこにも残っていないので、`opened_at` や `last_activity_at` で埋めると
+ * 回していないものを回したことにする。NULL は最初の心拍で1回だけ机に載り、そこから冷却が始まる。
+ */
+function watchlistFiring(d: DatabaseSync): boolean {
+  const cols = columns(d, "watchlist")
+  if (cols.length === 0 || cols.includes("last_run_at")) return false
+  d.exec("ALTER TABLE watchlist ADD COLUMN last_run_at TEXT")
+  d.exec("ALTER TABLE watchlist ADD COLUMN cooldown_hours REAL NOT NULL DEFAULT 24")
+  d.exec("ALTER TABLE watchlist ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0")
+  d.exec("ALTER TABLE watchlist ADD COLUMN last_result TEXT")
+  return true
+}
+
+/**
  * 読み書きする側の無い卓を落とす(docs/adr/0007)。
  *
  * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、卓は残り続ける。
@@ -102,6 +119,7 @@ export function migrate(d: DatabaseSync): string[] {
   const applied: string[] = []
   if (bitemporalBeliefSlots(d)) applied.push("belief_slots:bitemporal")
   if (ledgerCacheWrite(d)) applied.push("ledger:cache_write")
+  if (watchlistFiring(d)) applied.push("watchlist:firing")
   for (const t of dropUnusedTables(d)) applied.push(`drop:${t}`)
   return applied
 }

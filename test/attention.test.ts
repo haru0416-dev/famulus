@@ -13,6 +13,7 @@ import {
   Attention,
   IDLE_WAKE_HOURS,
   MAX_COOLDOWN_HOURS,
+  REFUSED_LIMIT,
 } from "../src/services/Attention.ts"
 import { Db } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
@@ -124,6 +125,138 @@ test("自分が動く番の見張りは起こす理由になる — ただし冷
     assert.equal(cooled.idle, false)
     assert.equal(cooled.stalled.length, 1)
     assert.equal(cooled.reasonKey, "stalled")
+  })
+})
+
+/**
+ * 回しても静かにならない、を止める(docs/adr/0013)。
+ *
+ * `next_move_owner = 'famulus'` は**無条件で**滞留に入るので、`last_activity_at` を更新しても
+ * 自分持ちの見張りは次の心拍でまた上がってくる。実際にそうなり、モデルは**最終走行時刻を
+ * subject の文字列に書き込んで登録し直す**という回避をしていた(列が無いのでそうするしかない)。
+ * 止めるのは経過日数ではなく、回した時刻と冷却。
+ */
+test("一周回した見張りは、冷却が明けるまで机に載らない", async () => {
+  await withHarness(async (h) => {
+    const id = await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        const w = yield* att.watch("AI追跡: HN の新着を舐める", "famulus", {
+          at: "2026-08-08T09:00:00Z",
+          cooldownHours: 24,
+        })
+        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        return w
+      }),
+    )
+
+    // 一度も回していないものは今すぐ上がる(NULL を「大昔に回した」とは読まない)。
+    const first = await h.run(digestAt(T0 + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
+    assert.equal(first.stalled.length, 1)
+    assert.equal(first.stalled[0]?.run_count, 0)
+
+    await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        yield* att.ranWatch(id, "8/8 時点で新着に該当なし", "2026-08-08T11:00:00Z")
+      }),
+    )
+
+    const quiet = await h.run(digestAt(T0 + hours(12)))
+    assert.equal(quiet.stalled.length, 0, "回した直後は上がらない")
+
+    const back = await h.run(digestAt(T0 + hours(26)))
+    assert.equal(back.stalled.length, 1, "冷却が明ければまた上がる")
+    assert.equal(back.stalled[0]?.run_count, 1)
+    // 前回の結果を渡さないと、毎回まっさらな状態で同じ一覧を舐め直すことになる。
+    assert.equal(back.stalled[0]?.last_result, "8/8 時点で新着に該当なし")
+  })
+})
+
+test("何も出てこなかった回も『回した』— 空振りこそ次の心拍に伝える必要がある", async () => {
+  await withHarness(async (h) => {
+    const id = await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        const w = yield* att.watch("週次で見る件", "famulus", {
+          at: "2026-08-08T09:00:00Z",
+          cooldownHours: 168,
+        })
+        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        return w
+      }),
+    )
+    await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        yield* att.ranWatch(id, "該当なし", "2026-08-08T09:30:00Z")
+      }),
+    )
+
+    // **動きがあった(touchWatch)と、自分が回した(ranWatch)は別のこと。**
+    // 相手から返事が来ても自分は何もしていないので、冷却は始まらない。
+    await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        yield* att.touchWatch(id, "famulus", "2026-08-09T09:00:00Z")
+      }),
+    )
+
+    const mid = await h.run(digestAt(T0 + hours(48)))
+    assert.equal(mid.stalled.length, 0, "動きがあっても、回した冷却は明けない")
+    const [w] = await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        return yield* att.openWatches(T0 + hours(48))
+      }),
+    )
+    assert.equal(w?.dueNow, false)
+    // 8/8 09:30 に回して 168 時間 → 8/15 09:30。いま 8/10 09:00 なので残り 120.5 時間。
+    assert.equal(w?.dueInHours, 120.5)
+
+    const after = await h.run(digestAt(T0 + hours(169)))
+    assert.equal(after.stalled.length, 1, "週が明ければ上がる")
+  })
+})
+
+/**
+ * 後から記帳する道。**これが無いと記帳そのものが見送られる。**
+ *
+ * 数時間前に回したものを「今」で記帳すると、冷却がその分だけ後ろへずれる。実際に、
+ * ずれるくらいなら呼ばないという判断が起き(端から端まで走らせた回で観測)、見張りは机に残った。
+ */
+test("回した時刻を渡して後から記帳できる。先の時刻は取らない", async () => {
+  await withHarness(async (h) => {
+    const id = await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        const w = yield* att.watch("朝に回した見張り", "famulus", { at: "2026-08-08T09:00:00Z" })
+        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        return w
+      }),
+    )
+    // 実際に回したのは 8/8 09:00。記帳はそのあと。
+    const rec = await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        return yield* att.ranWatch(id, "該当なし", "2026-08-08T09:00:00Z")
+      }),
+    )
+    assert.equal(rec.last_run_at, "2026-08-08T09:00:00Z", "記帳した時刻ではなく回した時刻")
+
+    const before = await h.run(digestAt(T0 + hours(23)))
+    assert.equal(before.stalled.length, 0)
+    const after = await h.run(digestAt(T0 + hours(25)))
+    assert.equal(after.stalled.length, 1, "冷却は回した時刻から数える(記帳の分だけ後ろへずれない)")
+
+    // **未来は取らない。** 取ると、一度の記帳で好きなだけ黙らせられる。
+    const far = await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        return yield* att.ranWatch(id, "先の時刻を渡してみる", "2099-01-01T00:00:00Z")
+      }),
+    )
+    assert.ok(far.last_run_at !== null && far.last_run_at < "2099-01-01T00:00:00Z")
   })
 })
 
@@ -293,6 +426,65 @@ test("期限が近い裁可待ちは起こす理由になる", async () => {
     assert.equal(d.idle, false)
     assert.equal(d.pending.length, 1)
     assert.match(d.reasons.join(), /期限が近い裁可待ち/)
+  })
+})
+
+/** 断られたぶんを入れる。理由まで揃っていないと机には載らない。 */
+const denied = (n: number, at: string, reason: string | null) =>
+  Effect.gen(function* () {
+    const db = yield* Db
+    yield* db.run(
+      `INSERT INTO proposals (id, kind, created_at, summary, assessment, ask,
+         c_what, c_when, c_who, c_how, c_how_verified, payload, provenance, status, expires_at, deny_reason)
+       VALUES (?,'plan',?,?,'根拠','判断','w','t','famulus','h','v','{}','[]','denied',?,?)`,
+      `d${n}`,
+      at,
+      `${n} 件目の用件`,
+      at,
+      reason,
+    )
+  })
+
+/**
+ * 断られたことを次の回に渡す。**渡さないと、同じ相手に同じ用件を撃ち直す。**
+ * 見張りに前回の結果を渡すのと同じ理由(docs/adr/0013 / 0017)。
+ */
+test("断られた提案は机に載る — ただし起こす理由にはしない", async () => {
+  await withHarness(async (h) => {
+    await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        yield* denied(1, "2026-08-08T08:00:00Z", "希望日が経過した")
+        // 理由の無いものは載せない。撃ち直しを止める材料になっていない。
+        yield* denied(2, "2026-08-08T08:30:00Z", null)
+        yield* att.commit({ active: true, at: new Date(T0).toISOString() })
+      }),
+    )
+    const d = await h.run(digestAt(T0 + hours(1)))
+    assert.deepEqual(
+      d.refused.map((r) => [r.summary, r.reason]),
+      [["1 件目の用件", "希望日が経過した"]],
+    )
+    // 済んだ話で起きても何も進まない。**理由に数えると同じ却下で永久に起きる。**
+    assert.equal(d.idle, true)
+    assert.equal(d.reasons.length, 0)
+  })
+})
+
+test("断られたぶんは新しい順に決めた数だけ — 古いものから落ちる", async () => {
+  await withHarness(async (h) => {
+    await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        for (let n = 1; n <= REFUSED_LIMIT + 2; n++) {
+          yield* denied(n, `2026-08-0${n}T08:00:00Z`, `理由 ${n}`)
+        }
+        yield* att.commit({ active: true, at: new Date(T0).toISOString() })
+      }),
+    )
+    const d = await h.run(digestAt(T0 + hours(1)))
+    assert.equal(d.refused.length, REFUSED_LIMIT)
+    assert.equal(d.refused[0]?.summary, `${REFUSED_LIMIT + 2} 件目の用件`)
   })
 })
 

@@ -143,6 +143,86 @@ export const DRAFTING = `## 外に出す文の規律
 根拠(basis)は持ち主だけが読む欄なので、そちらは長くてよい。**本文に経緯を移さない。**`
 
 /**
+ * 書いた本人以外に読ませる段。**機械で当たるのは語と密度だけ**で、規律の残りは当たらない。
+ *
+ * findSmells は語の一覧を、findShape は太字と見出しの数を見ている。どちらも文字の形しか見ないので、
+ * 「材料は自分が測ったものに限る」「1本に入れるのは1つだけ」「測ったことと見立てを分ける」は
+ * 一度も検査されないまま外へ出る。実際に今日出た4本は、この検査を全部通って届いている。
+ *
+ * **自分で書いた文は自分では落とせない。** 書いた側は一文ごとに理由を持っているので、
+ * 規律に照らして読み直しても、規律よりその理由のほうが先に出てくる。読ませる相手を別に立てる。
+ *
+ * 引用を要求するのは、名指せない指摘を落とすため。「全体的に説明が足りない」は直しようが無く、
+ * 返しても同じ本文がもう一度出てくるだけになる。
+ */
+export const REVIEW_SYSTEM = `あなたはこの下書きを**書いていない**読み手です。書いた側の意図は知りません。
+下に置く規律に照らして、そのまま外に出せるかだけを見ます。
+
+**直せと言えるのは、規律のどれに当たるかを名指せるときだけ。**
+気に入らない・物足りない・もっと書けるはずだ、は理由になりません。
+指摘には必ず**本文からそのまま写した一節**を添えます。写せないなら、その指摘は出しません。
+
+見る順は、材料 → 主張 → 形。
+1. 材料が書き手自身の実測か。他人の記事や発表の要約が本文の中身になっていないか
+2. 話が1つに絞れているか。2つ目の話が混ざっていないか
+3. 測ったことと見立てが分かれているか。n と条件が書かれているか
+4. 展開できない評価で締めている文が無いか(何が・どの対象で・どう変わったか)
+5. 比喩と擬人が無いか。起きたことを言い換えただけの語が無いか
+
+${DRAFTING}`
+
+export const REVIEW_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["verdict", "problems"],
+  properties: {
+    verdict: {
+      type: "string",
+      enum: ["出す", "直す"],
+      description: "そのまま外に出せるなら「出す」。規律に当たる箇所を名指せるなら「直す」。",
+    },
+    problems: {
+      type: "array",
+      description: "直すべき箇所。出せるなら空。多くて3件 — 4件目があるなら題材から選び直す話になる。",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["quote", "rule", "fix"],
+        properties: {
+          quote: {
+            type: "string",
+            description: "本文からそのまま写した一節。要約や言い換えにしない。写せないなら指摘ごと出さない。",
+          },
+          rule: { type: "string", description: "規律のどれに当たるか。一行で。" },
+          fix: { type: "string", description: "どう直すか。落とすなら「落とす」と書く。" },
+        },
+      },
+    },
+  },
+} as const
+
+export interface Problem {
+  readonly quote: string
+  readonly rule: string
+  readonly fix: string
+}
+
+/** 空白を無視して比べる。読み手は本文を写すときに改行と字下げを揃え直すことがある。 */
+const bare = (s: string): string => s.replace(/\s/g, "")
+
+/**
+ * 本文に無い引用を付けた指摘を落とす。**指示ではなくコードが弾く。**
+ *
+ * 引用を写せなかった指摘は、当たっている保証が無いだけでなく直しようも無い。
+ * 全部落ちて0件になったら通す — 名指せない駄目出しで止めると、書き直しても同じ理由でまた止まり、
+ * 下書きが一度も出ないまま日が過ぎる。Intake の `quoted` と同じ扱い。
+ */
+export function keepQuoted(problems: readonly Problem[] | undefined, title: string, body: string): Problem[] {
+  const src = bare(`${title}\n${body}`)
+  return (problems ?? []).filter((p) => p.quote.trim() !== "" && src.includes(bare(p.quote)))
+}
+
+/**
  * 非公開の値が本文に漏れていないか見る。**当たったら出さない。**
  *
  * 規律に書くだけでは足りない。1本目の下書きには医院名も予約日時も入っていて、

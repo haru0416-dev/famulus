@@ -46,6 +46,10 @@ const short = (id: string) => id.slice(0, 8)
 const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
 const kb = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`)
 
+/** Discord の出し先。**DM かチャンネルかを言い分ける** — 読む側が探しに行く場所が違う。 */
+const place = (ch: string | undefined, dm: string | undefined) =>
+  ch === undefined ? "出せない" : ch === dm ? "DM" : `チャンネル ${ch}`
+
 const USAGE = `oz — open-zero の裁可 CLI
 
   oz status                今の停止状態・枠・今日の使用量・裁可待ち件数・心拍の生死
@@ -181,6 +185,7 @@ const program = (argv: readonly string[]) =>
         )
         const notify = yield* Notify
         const discord = yield* Discord
+        const dc = yield* discord.where()
         const last = yield* db.meta("tick:last")
         const lastActive = yield* db.meta("tick:last_active")
         // 台帳が溜まっているか。**器があることと中身があることは別**で、
@@ -209,7 +214,7 @@ const program = (argv: readonly string[]) =>
             ? `通知: 出せる${notify.canReply() ? " / 押し戻しも受けられる" : "(押し戻しは受けられない)"}`
             : "通知: 宛先が無い(.env の OPEN_ZERO_NTFY_TOPIC が空)",
           discord.configured()
-            ? "Discord: DM に出せる / 印も自由文も受けられる"
+            ? `Discord: 会話 ${place(dc.talk, dc.dm)} / 下書き ${place(dc.draft, dc.dm)} — 印も自由文も受けられる`
             : "Discord: 宛先が無い(.env の OPEN_ZERO_DISCORD_TOKEN が空)",
         ].join("\n")
       }

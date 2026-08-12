@@ -26,11 +26,21 @@ export interface WatchRow {
   readonly last_activity_at: string
   readonly next_move_owner: NextMove
   readonly status: "open" | "closed"
+  /** 最後に**実際に一周回した**時刻。null = 一度も回していない。 */
+  readonly last_run_at: string | null
+  readonly cooldown_hours: number
+  readonly run_count: number
+  /** 前回回して分かったこと。次に回すときの起点になる。 */
+  readonly last_result: string | null
 }
 
-/** 見張っている件に、最後の動きからの経過日数を添えたもの。滞留の判断材料。 */
+/** 見張っている件に、経過日数と冷却の残りを添えたもの。机に載せるかの判断材料。 */
 export interface WatchView extends WatchRow {
   readonly stalledDays: number
+  /** 冷却が明けているか。明けていないものは机に載せない。 */
+  readonly dueNow: boolean
+  /** 冷却明けまでの時間。0 なら今すぐ回してよい。 */
+  readonly dueInHours: number
 }
 
 export interface QuestionRow {
@@ -48,6 +58,19 @@ export interface PendingProposal {
   readonly created_at: string
   readonly expires_at: string
   readonly daysLeft: number
+}
+
+/**
+ * 断られた提案と、その理由。**同じ形をもう一度撃たないために渡す。**
+ *
+ * 見張りに前回の結果を渡すのと同じ理由(docs/adr/0013)。渡さないと、毎回まっさらな状態で
+ * 同じ相手に同じ用件を出し直す。実際、同じ用件が3回撃たれて3回とも断られている。
+ */
+export interface RefusedProposal {
+  readonly id: string
+  readonly summary: string
+  readonly reason: string
+  readonly at: string
 }
 
 export interface ObservedEvent {
@@ -71,6 +94,7 @@ export interface Digest {
   readonly openQuestions: readonly QuestionRow[]
   readonly staleBeliefs: readonly StaleBelief[]
   readonly pending: readonly PendingProposal[]
+  readonly refused: readonly RefusedProposal[]
   readonly sinceLastActiveHours: number
   readonly reasons: readonly string[]
   /** 理由の顔ぶれ(件数を除いたもの)。前回と同じなら次の冷却が伸びる。`commit` に渡す。 */
@@ -91,10 +115,31 @@ export interface StaleBelief {
 
 /** これ以上動きが無い見張りは滞留として起こす材料にする。 */
 export const STALLED_DAYS = 3
+
+/**
+ * 見張りを一周回した後、次に机へ載せるまでの既定時間。
+ *
+ * **`last_activity_at` では止まらない。** `digest` は `next_move_owner = 'famulus'` の見張りを
+ * 無条件で滞留に入れるので、回して `touchWatch` しても同じ見張りが次の心拍でまた上がってくる。
+ * 実際にそうなり、モデルは**最終走行時刻を subject の文字列に書き込んで登録し直す**という
+ * 回避をしていた(列が無いので文字列で代用するしかない)。
+ *
+ * 止めるのは経過日数ではなく**回した回数と時刻**でなければならない。回した印を別の列で持ち、
+ * 冷却が明けるまで載せない。OpenClaw の `standing_intents`(`last_fired_at` + `cooldown_seconds` +
+ * `fire_count` を見る `canFire`)と同じ形。docs/adr/0013。
+ */
+export const WATCH_COOLDOWN_HOURS = 24
 /** 裁可待ちがこの日数以内に期限切れになるなら、心拍で持ち主に思い出させる材料にする。 */
 export const EXPIRING_DAYS = 2
 /** 何も無くてもこの時間が経ったら1回起こす(反応するだけの機械にしないための下限)。 */
 export const IDLE_WAKE_HOURS = 24
+/**
+ * 心拍の机に載せる「断られたぶん」の数。
+ *
+ * **起こす理由には数えない。**断られたことは済んだ話で、それで起きても何も進まない。
+ * 別件で起きたときに、同じ形をもう一度撃たないための材料として置くだけ。
+ */
+export const REFUSED_LIMIT = 5
 /**
  * 真だと確かめてからこの日数が経った belief は、棚卸しのとき「まだ合っているか」を疑う材料にする。
  *
@@ -149,20 +194,21 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
     const watch = (
       subject: string,
       nextMoveOwner: NextMove = "famulus",
-      opts?: { at?: string; sourceRef?: unknown },
+      opts?: { at?: string; sourceRef?: unknown; cooldownHours?: number },
     ) =>
       Effect.gen(function* () {
         const id = randomUUID()
         const at = opts?.at ?? nowIso()
         yield* db.run(
-          `INSERT INTO watchlist (id, subject, opened_at, last_activity_at, next_move_owner, status, source_ref)
-           VALUES (?, ?, ?, ?, ?, 'open', ?)`,
+          `INSERT INTO watchlist (id, subject, opened_at, last_activity_at, next_move_owner, status, source_ref, cooldown_hours)
+           VALUES (?, ?, ?, ?, ?, 'open', ?, ?)`,
           id,
           subject,
           at,
           at,
           nextMoveOwner,
           opts?.sourceRef === undefined ? null : JSON.stringify(opts.sourceRef),
+          opts?.cooldownHours ?? WATCH_COOLDOWN_HOURS,
         )
         return id
       })
@@ -203,6 +249,47 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         return { ...w, last_activity_at: at, next_move_owner: owner } satisfies WatchRow
       })
 
+    /**
+     * 一周回した印を付ける。**冷却はここからしか始まらない。**
+     *
+     * `touchWatch`(動きがあった)と分けてあるのは、両者が別のことを言っているから。
+     * 相手から返事が来たのは「動き」だが自分は何もしていない。自分が回したのなら、
+     * 何も出てこなくても回した — 空振りこそ、次の心拍に「もう見た」と伝える必要がある。
+     *
+     * `result` を残すのは、**次に回すときの起点にするため**。これが無いと毎回まっさらな状態で
+     * 同じ一覧を舐め直すことになり、先週見たものを踏まえた文が一度も出ない。実際にそうなっていた
+     * (AI追跡の見張り3件が全部「HN の新着を舐める」で、差分を言えたことが無い)。
+     *
+     * `at` は**回した時刻**で、記帳した時刻ではない。数時間前に回したものを後から記帳するとき、
+     * ここを今にすると冷却がその分だけ後ろへずれる。**ずれるくらいなら呼ばないほうがまし**という
+     * 判断が実際に起き(記帳を見送った回がある)、見張りは机に残り続けた。だから過去を渡せる。
+     * **先の時刻は取らない。** 未来を渡せると、一度の記帳で好きなだけ黙らせられてしまう。
+     */
+    const ranWatch = (idOrPrefix: string, result: string, ranAt?: string) =>
+      Effect.gen(function* () {
+        const w = yield* findWatch(idOrPrefix)
+        const now = nowIso()
+        const at = ranAt === undefined || ranAt > now ? now : ranAt
+        // 動きの時刻は**戻さない**。後から記帳するとき、その間に来た返事のほうが新しい。
+        const activity = at > w.last_activity_at ? at : w.last_activity_at
+        yield* db.run(
+          `UPDATE watchlist
+              SET last_run_at = ?, last_activity_at = ?, run_count = run_count + 1, last_result = ?
+            WHERE id = ?`,
+          at,
+          activity,
+          result,
+          w.id,
+        )
+        return {
+          ...w,
+          last_run_at: at,
+          last_activity_at: activity,
+          run_count: w.run_count + 1,
+          last_result: result,
+        } satisfies WatchRow
+      })
+
     const closeWatch = (idOrPrefix: string) =>
       Effect.gen(function* () {
         const w = yield* findWatch(idOrPrefix)
@@ -213,10 +300,17 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
     const openWatches = (nowMs: number = Date.now()) =>
       db.all("SELECT * FROM watchlist WHERE status = 'open' ORDER BY last_activity_at ASC").pipe(
         Effect.map((rows) =>
-          (rows as unknown as WatchRow[]).map((r) => ({
-            ...r,
-            stalledDays: Math.floor(daysBetween(r.last_activity_at, nowMs)),
-          })),
+          (rows as unknown as WatchRow[]).map((r) => {
+            // 一度も回していないものは今すぐ回してよい(NULL を「大昔に回した」とは読まない)。
+            const dueAtMs =
+              r.last_run_at === null ? nowMs : Date.parse(r.last_run_at) + r.cooldown_hours * 3_600_000
+            return {
+              ...r,
+              stalledDays: Math.floor(daysBetween(r.last_activity_at, nowMs)),
+              dueNow: dueAtMs <= nowMs,
+              dueInHours: Math.max(0, (dueAtMs - nowMs) / 3_600_000),
+            }
+          }),
         ),
       )
 
@@ -306,8 +400,10 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           cursor,
         )) as unknown as ObservedEvent[]
 
+        // **冷却が明けたものだけ。** `next_move_owner = 'famulus'` は無条件で滞留に入るので、
+        // ここで `dueNow` を挟まないと自分持ちの見張りは回しても静かにならず、毎回の心拍で上がり続ける。
         const stalled = (yield* openWatches(nowMs)).filter(
-          (w) => w.next_move_owner === "famulus" || w.stalledDays >= STALLED_DAYS,
+          (w) => w.dueNow && (w.next_move_owner === "famulus" || w.stalledDays >= STALLED_DAYS),
         )
         const questions = yield* openQuestions()
         // 確かめてから時間が経った事実。**古いだけで間違いとは限らない**ので、消さずに聞く材料にする。
@@ -329,6 +425,23 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           created_at: String(r.created_at),
           expires_at: String(r.expires_at),
           daysLeft: Math.floor(daysBetween(at, Date.parse(String(r.expires_at)))),
+        }))
+
+        // 断られたぶん。**古くなっても落とさない** — 「その用件ごと畳んだ」は日が経っても効いている。
+        // 件数で切る(理由は1行ずつ短い)。落とすなら、その理由を確定値として置いてからにする。
+        const refusedRows = yield* db.all(
+          `SELECT p.id, p.summary, p.deny_reason, COALESCE(d.at, p.created_at) AS decided_at
+             FROM proposals p
+             LEFT JOIN decisions d ON d.proposal_id = p.id AND d.verb = 'deny'
+            WHERE p.status = 'denied' AND p.deny_reason IS NOT NULL
+            ORDER BY decided_at DESC LIMIT ?`,
+          REFUSED_LIMIT,
+        )
+        const refused: RefusedProposal[] = refusedRows.map((r) => ({
+          id: String(r.id),
+          summary: String(r.summary),
+          reason: String(r.deny_reason),
+          at: String(r.decided_at),
         }))
 
         const lastActive = yield* db.meta("tick:last_active")
@@ -379,6 +492,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           openQuestions: questions,
           staleBeliefs,
           pending,
+          refused,
           sinceLastActiveHours,
           reasons,
           // 新しい入力で起きたなら顔ぶれは「新しい」— 後退を 0 に戻す。
@@ -424,6 +538,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
     return {
       watch,
       touchWatch,
+      ranWatch,
       closeWatch,
       openWatches,
       findWatch,

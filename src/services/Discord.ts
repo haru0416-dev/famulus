@@ -1,5 +1,5 @@
 /**
- * Discord の DM。**持ち主が一番長く居る場所に出すための口。**
+ * Discord。**持ち主が一番長く居る場所に出すための口。**
  *
  * ntfy はロック画面に届くが、届いた先で出来ることが少ない(短い本文と決め打ちのボタンだけ)。
  * 長い下書きを読ませて一言返してもらう相手としては、既に開いている画面のほうが強い。
@@ -9,7 +9,19 @@
  * — 30秒ごとに `inbox()` を1回叩くだけならモデルを呼ばず REST 1本で済む(src/poll.ts)。
  * 落ちたら黙って死ぬ常駐を1本増やさずに、待ち時間だけ 15分 から 30秒 に落ちる。
  *
- * 出す先は DM だけ。サーバのチャンネルに出すと、持ち主以外にも読まれる場所に台帳の中身が出る。
+ * 出す先は用途で分ける(`Desk`)。**通知を切れる単位が用途と一致する**のが分ける理由で、
+ * 全部を1本に流すと「読まなくていいもの」を黙らせた瞬間に「返事が要るもの」も黙る。
+ * 分け先はチャンネル id を env で指す — 名前で引くと、名前を変えた日に黙って出なくなる(docs/adr/0015)。
+ *
+ * **人が居ない場所には出さない。** チャンネルを指していなければ DM に落ちるし、
+ * 指す先を持ち主以外が読める場所にすると、台帳の中身がそこに出る(囲いの中かは env を書く側の責任)。
+ *
+ * 返事は**訊かれた場所に返す**。持ち主が DM に書いたのにチャンネルへ返すと、
+ * 書いた側は返事が無かったことになる。最後に話しかけられた場所を覚えておいてそこへ出す。
+ *
+ * 印を押させるものは**枝(スレッド)を1本生やす**。印は「どれに」までしか言えないので、
+ * 「直す」の中身を受けるには自由文が要るが、平場に書かれた自由文はどの1件への返事か分からない。
+ * 枝の中なら場所そのものが宛先になる(docs/adr/0016)。
  *
  * 設定が無ければ**黙って何もしない**(Notify と同じ契約)。
  */
@@ -37,10 +49,29 @@ export interface Tap {
   readonly reply: string
 }
 
+/**
+ * 出す先の種類。**チャンネルそのものではなく用途を渡す** — 呼ぶ側は id を知らないでよい。
+ *
+ * `talk` は会話(訊かれたら返す)。`draft` は名前が出る文で、印を押させる場所。
+ */
+export type Desk = "talk" | "draft"
+
 export interface Post {
   readonly text: string
   /** 付ける印。先に自分で付けておく — 押す側が絵文字を探さずに済む。 */
   readonly taps?: readonly Tap[]
+  /** 出す先。既定は会話。 */
+  readonly to?: Desk
+  /**
+   * 持ち主を呼ぶ。**チャンネルを黙らせていても届く**ので、返事が要るものにだけ付ける。
+   * DM には付けない — 既に本人しか居ない場所で、呼びかけは字が増えるだけ。
+   */
+  readonly ping?: boolean
+  /**
+   * 枝の名前。渡すと、出した1通から枝を生やしてそこも聞きに行く。
+   * **この1件への返事を、場所で受け取るため** — 平場の自由文はどれへの返事か分からない。
+   */
+  readonly thread?: string
 }
 
 /** 持ち主から返ってきた1件。押した印も自由文も、同じ形にして返す。 */
@@ -52,11 +83,24 @@ export interface Inbound {
 const token = (): string | undefined => process.env.OPEN_ZERO_DISCORD_TOKEN
 const ownerId = (): string | undefined => process.env.OPEN_ZERO_DISCORD_OWNER_ID
 
+/** 用途ごとの出し先。空文字は「指していない」と読む(env を消さずに空にすることがある)。 */
+const fixedChannel = (to: Desk): string | undefined => {
+  const raw = to === "draft" ? process.env.OPEN_ZERO_DISCORD_CH_DRAFT : process.env.OPEN_ZERO_DISCORD_CH_TALK
+  return raw === undefined || raw.trim() === "" ? undefined : raw.trim()
+}
+
 /** 待っている印。`{ メッセージid: { 絵文字: 返る文 } }` を schema_meta に置く。 */
 type Pending = Record<string, Record<string, string>>
 
 /** 覚えておく待ちの数。押されないまま溜まった古いものは落とす — 返事が来ないものは流れたもの。 */
 const MAX_PENDING = 20
+
+/**
+ * 聞き続ける枝の数。**押された時点では閉じない** — 「直す」を押した人は、その後に
+ * 何を直すかを書く。決着で閉じると、その自由文の行き先が無くなる。
+ * 古いものから落ちる。1つ増えるごとに、口が30秒ごとに叩く先が1つ増える。
+ */
+const MAX_THREADS = 3
 
 /** snowflake は数として単調増加する。文字列比較では桁が変わったときに壊れる。 */
 const newer = (a: string, b: string): boolean => BigInt(a) > BigInt(b)
@@ -131,7 +175,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       )
 
     /** DM のチャンネル。持ち主ごとに固定なので一度引いたら覚えておく。 */
-    const channel = (): Effect.Effect<string | undefined, DbFailed> =>
+    const dm = (): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
         const owner = ownerId()
         if (!token() || !owner) return undefined
@@ -150,14 +194,53 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         return opened
       })
 
-    /** 印を1つ付ける。**押す側が絵文字を探さずに済むように、出した直後に自分で置く。** */
-    const mark = (messageId: string, emoji: string): Effect.Effect<void, DbFailed> =>
+    /**
+     * 出す先を決める。**最後に話しかけられた場所が最優先** — 返事は訊かれた場所に返す。
+     * 印を押させるものは、指してあれば専用の場所へ出す(黙らせる単位を会話と分けるため)。
+     */
+    const channel = (to: Desk = "talk"): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
-        const ch = yield* channel()
-        if (!ch) return
-        yield* call(`/channels/${ch}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`, {
-          method: "PUT",
-        }).pipe(Effect.ignore)
+        if (!token()) return undefined
+        if (to === "draft") {
+          const fixed = fixedChannel("draft") ?? fixedChannel("talk")
+          if (fixed) return fixed
+        } else {
+          const heard = yield* db.meta("discord:heard_in")
+          if (heard) return heard
+          const fixed = fixedChannel("talk")
+          if (fixed) return fixed
+        }
+        return yield* dm()
+      })
+
+    /** 印を1つ付ける。**押す側が絵文字を探さずに済むように、出した直後に自分で置く。** */
+    const mark = (ch: string, messageId: string, emoji: string): Effect.Effect<void> =>
+      call(`/channels/${ch}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`, {
+        method: "PUT",
+      }).pipe(Effect.ignore)
+
+    /**
+     * 枝を1本生やす。**返事の宛先を場所で持つため。**
+     * 枝の中の発言は `channel_id` がそのまま元の1通を指すので、どれへの返事かを当てずに済む。
+     *
+     * 生やした直後に既読位置を起点へ置く。置かないと「位置を持たない場所」の規則に当たって、
+     * **持ち主が枝に書いた最初の1通が、取り込まれないまま位置だけ進む**(docs/adr/0015 の影響)。
+     */
+    const branch = (ch: string, messageId: string, name: string): Effect.Effect<void, DbFailed> =>
+      Effect.gen(function* () {
+        const made = yield* call(`/channels/${ch}/messages/${messageId}/threads`, {
+          method: "POST",
+          // 名前は 100 字まで。超えると 400 で弾かれる(枝ごと立たない)。
+          body: JSON.stringify({ name: name.slice(0, 100), auto_archive_duration: 1440 }),
+        }).pipe(
+          Effect.flatMap((r) => Effect.tryPromise(() => r.json() as Promise<{ id?: string }>)),
+          Effect.map((j) => j.id),
+          Effect.catchAll(() => Effect.succeed(undefined)),
+        )
+        if (!made) return
+        yield* db.setMeta(`discord:last:${made}`, made)
+        const open = yield* meta<string[]>("discord:threads", [])
+        yield* db.setMeta("discord:threads", JSON.stringify([...open, made].slice(-MAX_THREADS)))
       })
 
     /**
@@ -166,10 +249,13 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
      */
     const post = (p: Post): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
-        const ch = yield* channel()
+        const ch = yield* channel(p.to)
         if (!ch) return undefined
+        // 呼びかけは本文に混ぜてから割る。後から足すと、分けた最後の1通だけに付く。
+        const owner = ownerId()
+        const head = p.ping && owner && ch !== (yield* dm()) ? `<@${owner}>\n` : ""
         let last: string | undefined
-        for (const part of chunks(p.text)) {
+        for (const part of chunks(head + p.text)) {
           last = yield* call(`/channels/${ch}/messages`, {
             method: "POST",
             body: JSON.stringify({ content: part }),
@@ -179,13 +265,46 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
             Effect.catchAll(() => Effect.succeed(undefined)),
           )
         }
-        if (!last || !p.taps?.length) return last
-        for (const t of p.taps) yield* mark(last, t.emoji)
+        if (!last) return last
+        // 枝は印より先に。印を付けてから落ちても、返事の行き先だけは立っている。
+        if (p.thread) yield* branch(ch, last, p.thread)
+        if (!p.taps?.length) return last
+        for (const t of p.taps) yield* mark(ch, last, t.emoji)
         const pending = yield* meta<Pending>("discord:taps", {})
         pending[last] = Object.fromEntries(p.taps.map((t) => [t.emoji, t.reply]))
         const kept = Object.entries(pending).slice(-MAX_PENDING)
         yield* db.setMeta("discord:taps", JSON.stringify(Object.fromEntries(kept)))
         return last
+      })
+
+    /**
+     * 読みに行く場所。**出す先を全部聞く** — 出した場所に返事が来るし、
+     * DM は出し先をチャンネルに移した後も残る(持ち主がそちらに書いたら黙って落ちる、が起きない)。
+     * 生やした枝も聞く。枝は自分で出した1件に紐づくので、そこに他人は書けない。
+     */
+    const listening = (): Effect.Effect<readonly string[], DbFailed> =>
+      Effect.gen(function* () {
+        if (!token()) return []
+        const out = new Set<string>()
+        for (const to of ["talk", "draft"] as const) {
+          const fixed = fixedChannel(to)
+          if (fixed) out.add(fixed)
+        }
+        const d = yield* dm()
+        if (d) out.add(d)
+        for (const t of yield* meta<string[]>("discord:threads", [])) out.add(t)
+        return [...out]
+      })
+
+    /**
+     * その場所の既読位置。持っていない場所は**取り込まずに位置だけ進める**(初回の規則)。
+     * DM だけは場所ごとに分ける前の位置を引き継ぐ — 引き継がないと、DM の過去ログを一度だけ全部読む。
+     */
+    const cursorOf = (ch: string): Effect.Effect<string | undefined, DbFailed> =>
+      Effect.gen(function* () {
+        const own = yield* db.meta(`discord:last:${ch}`)
+        if (own) return own
+        return ch === (yield* dm()) ? yield* db.meta("discord:last") : undefined
       })
 
     /**
@@ -201,50 +320,74 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
      */
     const inbox = (): Effect.Effect<readonly Inbound[], DbFailed> =>
       Effect.gen(function* () {
-        const ch = yield* channel()
-        if (!ch) return []
-        const msgs = yield* readJson<
-          {
-            id: string
-            content: string
-            author: { id: string }
-            reactions?: { emoji: { name: string }; count: number; me: boolean }[]
-          }[]
-        >(`/channels/${ch}/messages?limit=50`)
-        if (!msgs?.length) return []
-
         const owner = ownerId()
-        const cursor = yield* db.meta("discord:last")
         const pending = yield* meta<Pending>("discord:taps", {})
         const out: Inbound[] = []
+        let heard: string | undefined
 
-        // 古い順に見る。API は新しい順で返すので、そのまま流すと台帳の並びが逆になる。
-        for (const m of [...msgs].reverse()) {
-          if (cursor && m.author.id === owner && m.content.trim() !== "" && newer(m.id, cursor)) {
-            out.push({ id: m.id, text: m.content })
-          }
-          const waiting = pending[m.id]
-          if (!waiting) continue
-          for (const r of m.reactions ?? []) {
-            const reply = waiting[r.emoji.name]
-            // 自分で付けたぶんは数に入っている。それを超えていたら持ち主が押した。
-            if (reply && r.count > (r.me ? 1 : 0)) {
-              out.push({ id: `${m.id}:${r.emoji.name}`, text: reply })
-              delete pending[m.id]
-              break
+        for (const ch of yield* listening()) {
+          const msgs = yield* readJson<
+            {
+              id: string
+              content: string
+              author: { id: string }
+              reactions?: { emoji: { name: string }; count: number; me: boolean }[]
+            }[]
+          >(`/channels/${ch}/messages?limit=50`)
+          if (!msgs?.length) continue
+
+          const cursor = yield* cursorOf(ch)
+
+          // 古い順に見る。API は新しい順で返すので、そのまま流すと台帳の並びが逆になる。
+          for (const m of [...msgs].reverse()) {
+            if (cursor && m.author.id === owner && m.content.trim() !== "" && newer(m.id, cursor)) {
+              out.push({ id: m.id, text: m.content })
+              // **返す先はここ。** 一番新しい自由文の場所を覚える(印は場所を動かさない —
+              // 押すのは前に出したものへの返事で、話しかけられたのとは違う)。
+              if (heard === undefined || newer(m.id, heard)) heard = ch
+            }
+            const waiting = pending[m.id]
+            if (!waiting) continue
+            for (const r of m.reactions ?? []) {
+              const reply = waiting[r.emoji.name]
+              // 自分で付けたぶんは数に入っている。それを超えていたら持ち主が押した。
+              if (reply && r.count > (r.me ? 1 : 0)) {
+                out.push({ id: `${m.id}:${r.emoji.name}`, text: reply })
+                delete pending[m.id]
+                break
+              }
             }
           }
+
+          const newest = msgs.reduce((a, m) => (newer(m.id, a) ? m.id : a), msgs[0]?.id ?? "0")
+          yield* db.setMeta(`discord:last:${ch}`, newest)
         }
 
-        const newest = msgs.reduce((a, m) => (newer(m.id, a) ? m.id : a), msgs[0]?.id ?? "0")
-        yield* db.setMeta("discord:last", newest)
+        if (heard !== undefined) yield* db.setMeta("discord:heard_in", heard)
         yield* db.setMeta("discord:taps", JSON.stringify(pending))
-        return out
+        // 場所をまたいでも届いた順に並べる。snowflake は時刻で単調増加するので id で並べ直せる。
+        return out.sort((a, b) => (newer(a.id.split(":")[0] ?? "0", b.id.split(":")[0] ?? "0") ? 1 : -1))
       })
 
     /** 出せるか。人に「Discord には出ない」と伝えるためだけに使う。 */
     const configured = (): boolean => token() !== undefined && ownerId() !== undefined
 
-    return { post, inbox, configured } as const
+    /**
+     * いまどこに出て、どこを聞いているか。**人が読むためだけ**に使う。
+     * 出し先は状態(最後に話しかけられた場所)で動くので、env を読むだけでは分からない。
+     */
+    const where = (): Effect.Effect<{ talk?: string; draft?: string; dm?: string }, DbFailed> =>
+      Effect.gen(function* () {
+        const talk = yield* channel("talk")
+        const draft = yield* channel("draft")
+        const d = yield* dm()
+        return {
+          ...(talk ? { talk } : {}),
+          ...(draft ? { draft } : {}),
+          ...(d ? { dm: d } : {}),
+        }
+      })
+
+    return { post, inbox, configured, where } as const
   }),
 }) {}

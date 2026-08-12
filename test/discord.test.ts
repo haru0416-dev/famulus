@@ -10,6 +10,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { test } from "node:test"
 import { Effect } from "effect"
+import { Db } from "../src/services/Db.ts"
 import { Discord, type Post } from "../src/services/Discord.ts"
 import { withHarness } from "./helpers.ts"
 
@@ -34,10 +35,23 @@ interface Msg {
  * 出したものは `msgs` に積むので、テスト側から押されたことにできる。
  */
 const fakeDiscord = async (
-  msgs: Msg[] = [],
-): Promise<{ url: string; hits: Hit[]; msgs: Msg[]; close: () => Promise<void> }> => {
+  seed: Msg[] = [],
+): Promise<{
+  url: string
+  hits: Hit[]
+  msgs: Msg[]
+  at: (ch: string) => Msg[]
+  close: () => Promise<void>
+}> => {
   const hits: Hit[] = []
   let next = 100
+  // 場所ごとの中身。DM 以外は触られたときに生える(テスト側は id を決め打ちで渡す)。
+  const rooms = new Map<string, Msg[]>([[CH, seed]])
+  const at = (ch: string): Msg[] => {
+    const got = rooms.get(ch) ?? []
+    rooms.set(ch, got)
+    return got
+  }
   const server: Server = createServer((req: IncomingMessage, res) => {
     let raw = ""
     req.on("data", (c) => {
@@ -51,23 +65,30 @@ const fakeDiscord = async (
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(v))
 
       if (path === "/users/@me/channels") return json({ id: CH })
-      if (path === `/channels/${CH}/messages` && req.method === "POST") {
+      const [, ch] = /^\/channels\/(\d+)\//.exec(path) ?? []
+      if (path === `/channels/${ch}/messages` && req.method === "POST" && ch) {
         const id = String(++next)
-        msgs.unshift({ id, content: String(body?.content ?? ""), author: { id: "bot" } })
+        at(ch).unshift({ id, content: String(body?.content ?? ""), author: { id: "bot" } })
         return json({ id })
       }
-      if (path.includes("/reactions/")) {
+      // 枝。本物は起点の1通と同じ id を返す(枝そのものが場所になる)。
+      const [, from] = /\/messages\/(\d+)\/threads$/.exec(path) ?? []
+      if (from && req.method === "POST") {
+        at(from)
+        return json({ id: from, name: body?.name })
+      }
+      if (path.includes("/reactions/") && ch) {
         // 自分で付けた印。押す側から見ると数は 1 から始まる。
         const [, id, emoji] = /\/messages\/(\d+)\/reactions\/([^/]+)\/@me/.exec(path) ?? []
         const name = decodeURIComponent(emoji ?? "")
-        const m = msgs.find((x) => x.id === id)
+        const m = at(ch).find((x) => x.id === id)
         if (m) {
           m.reactions ??= []
           m.reactions.push({ emoji: { name }, count: 1, me: true })
         }
         return res.writeHead(204).end()
       }
-      if (path.startsWith(`/channels/${CH}/messages?`)) return json(msgs)
+      if (ch && path.startsWith(`/channels/${ch}/messages?`)) return json(at(ch))
       return res.writeHead(404).end("{}")
     })
   })
@@ -76,7 +97,8 @@ const fakeDiscord = async (
   return {
     url: `http://127.0.0.1:${port}`,
     hits,
-    msgs,
+    msgs: seed,
+    at,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   }
 }
@@ -98,7 +120,9 @@ const configured = Effect.gen(function* () {
 })
 
 /** 設定を立てる。値を消しっぱなしにすると、後続のテストが本物の Discord を叩きに行く。 */
-const wire = (url: string | undefined) => {
+const wire = (url: string | undefined, ch?: { talk?: string; draft?: string }) => {
+  delete process.env.OPEN_ZERO_DISCORD_CH_TALK
+  delete process.env.OPEN_ZERO_DISCORD_CH_DRAFT
   if (url === undefined) {
     process.env.OPEN_ZERO_DISCORD_TOKEN = ""
     delete process.env.OPEN_ZERO_DISCORD_TOKEN
@@ -109,6 +133,8 @@ const wire = (url: string | undefined) => {
   process.env.OPEN_ZERO_DISCORD_TOKEN = "test-token"
   process.env.OPEN_ZERO_DISCORD_OWNER_ID = OWNER
   process.env.OPEN_ZERO_DISCORD_API = url
+  if (ch?.talk) process.env.OPEN_ZERO_DISCORD_CH_TALK = ch.talk
+  if (ch?.draft) process.env.OPEN_ZERO_DISCORD_CH_DRAFT = ch.draft
 }
 
 test("トークンが無ければ何もしない — 叩かないし落ちない", async () => {
@@ -238,6 +264,211 @@ test("Discord が落ちていても空を返す — 心拍は返事が読めな�
     })
   } finally {
     wire(undefined)
+  }
+})
+
+const TALK = "7001"
+const DRAFT = "7002"
+
+/**
+ * 分ける理由は**黙らせる単位**。下書きと会話が同じ場所に出ると、
+ * 「読まなくていいものを黙らせる」と「返事が要るもの」も一緒に黙る。
+ */
+test("下書きは下書きの場所へ、会話は会話の場所へ出る", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK, draft: DRAFT })
+  try {
+    await withHarness(async (h) => {
+      await h.run(post({ text: "返事" }))
+      await h.run(post({ text: "下書き本文", to: "draft" }))
+      const sent = dc.hits.filter((x) => x.method === "POST" && x.path.endsWith("/messages"))
+      assert.deepEqual(
+        sent.map((x) => x.path),
+        [`/channels/${TALK}/messages`, `/channels/${DRAFT}/messages`],
+      )
+      // DM は開きにも行かない。**分けた先が指してあるなら DM は関係ない。**
+      assert.equal(
+        dc.hits.some((x) => x.path === "/users/@me/channels"),
+        false,
+      )
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("印は出した場所に付く — 会話の場所に出した通知へ間違って付けない", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK, draft: DRAFT })
+  try {
+    await withHarness(async (h) => {
+      const id = await h.run(
+        post({ text: "出していいか", to: "draft", taps: [{ emoji: "✅", reply: "出す" }] }),
+      )
+      assert.equal(
+        dc.hits.find((x) => x.method === "PUT")?.path.startsWith(`/channels/${DRAFT}/messages/${id}/`),
+        true,
+      )
+      // 押されたら、その場所を読んで拾える。
+      const r = dc.at(DRAFT).find((x) => x.id === id)?.reactions?.[0]
+      if (r) r.count = 2
+      assert.deepEqual(await h.run(inbox), [{ id: `${id}:✅`, text: "出す" }])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+/** 訊かれた場所に返す。**書いた側から見て返事が無いのと、別の部屋に返すのは同じこと。** */
+test("返事は最後に話しかけられた場所に返る — DM に書かれたら DM に返す", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK, draft: DRAFT })
+  try {
+    await withHarness(async (h) => {
+      // 位置合わせ(初回は取り込まない)。
+      dc.at(TALK).unshift({ id: "200", content: "位置合わせ", author: { id: OWNER } })
+      dc.msgs.unshift({ id: "201", content: "位置合わせ", author: { id: OWNER } })
+      await h.run(inbox)
+
+      dc.msgs.unshift({ id: "300", content: "DM から訊く", author: { id: OWNER } })
+      assert.deepEqual(await h.run(inbox), [{ id: "300", text: "DM から訊く" }])
+      await h.run(post({ text: "DM への返事" }))
+      assert.equal(dc.msgs[0]?.content, "DM への返事")
+
+      // チャンネルに書き直したら、返事もそちらへ戻る。
+      dc.at(TALK).unshift({ id: "301", content: "やっぱりこっち", author: { id: OWNER } })
+      assert.deepEqual(await h.run(inbox), [{ id: "301", text: "やっぱりこっち" }])
+      await h.run(post({ text: "チャンネルへの返事" }))
+      assert.equal(dc.at(TALK)[0]?.content, "チャンネルへの返事")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("既読位置は場所ごとに持つ — 片方に書いても、もう片方の過去ログは指示にならない", async () => {
+  const dc = await fakeDiscord([{ id: "50", content: "DM の去年の話", author: { id: OWNER } }])
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      dc.at(TALK).unshift({ id: "51", content: "チャンネルの去年の話", author: { id: OWNER } })
+      assert.deepEqual(await h.run(inbox), [])
+      dc.at(TALK).unshift({ id: "52", content: "今日の指示", author: { id: OWNER } })
+      // DM 側は位置が動いていないが、そこに残っている過去の一言は出てこない。
+      assert.deepEqual(await h.run(inbox), [{ id: "52", text: "今日の指示" }])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+/** 場所ごとに分ける前の位置。引き継がないと、DM に残っている会話を一度だけ全部読む。 */
+test("DM の既読位置は、場所ごとに分ける前のものを引き継ぐ", async () => {
+  const dc = await fakeDiscord([
+    { id: "60", content: "去年の話", author: { id: OWNER } },
+    { id: "61", content: "おととしの話", author: { id: OWNER } },
+  ])
+  wire(dc.url)
+  try {
+    await withHarness(async (h) => {
+      await h.run(
+        Effect.gen(function* () {
+          const db = yield* Db
+          yield* db.setMeta("discord:last", "61")
+        }),
+      )
+      assert.deepEqual(await h.run(inbox), [])
+      dc.msgs.unshift({ id: "62", content: "今日の指示", author: { id: OWNER } })
+      assert.deepEqual(await h.run(inbox), [{ id: "62", text: "今日の指示" }])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("呼びかけはチャンネルにだけ付く — DM では字が増えるだけ", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { draft: DRAFT })
+  try {
+    await withHarness(async (h) => {
+      await h.run(post({ text: "下書き", to: "draft", ping: true }))
+      assert.equal(dc.at(DRAFT)[0]?.content, `<@${OWNER}>\n下書き`)
+      await h.run(post({ text: "返事", ping: true }))
+      assert.equal(dc.msgs[0]?.content, "返事")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+/**
+ * 印は「どれに」までしか言えない。**「直す」の中身は自由文でしか来ない**が、
+ * 平場に書かれた自由文はどの1件への返事か分からない。枝なら場所そのものが宛先になる。
+ */
+test("枝の名前を渡すと、出した1通から枝が生える", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { draft: DRAFT })
+  try {
+    await withHarness(async (h) => {
+      const id = await h.run(post({ text: "下書き本文", to: "draft", thread: "題名" }))
+      const made = dc.hits.find((x) => x.method === "POST" && x.path.endsWith("/threads"))
+      assert.equal(made?.path, `/channels/${DRAFT}/messages/${id}/threads`)
+      assert.equal(made?.body?.name, "題名")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+/** 生やした場所は位置を持たない。**規則をそのまま当てると、最初の1通が黙って消える。** */
+test("枝に書かれた1通目から拾う — 生やした時点で位置を置く", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK, draft: DRAFT })
+  try {
+    await withHarness(async (h) => {
+      const id = await h.run(post({ text: "下書き本文", to: "draft", thread: "題名" }))
+      dc.at(String(id)).unshift({ id: "900", content: "ここの数字を直して", author: { id: OWNER } })
+      assert.deepEqual(await h.run(inbox), [{ id: "900", text: "ここの数字を直して" }])
+      // **返事は枝の中に返る。**平場に返すと、どれへの返事か読む側が探すことになる。
+      await h.run(post({ text: "直した" }))
+      assert.equal(dc.at(String(id))[0]?.content, "直した")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("聞き続ける枝には上限がある — 古いものから落ちる", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { draft: DRAFT })
+  try {
+    await withHarness(async (h) => {
+      const ids: (string | undefined)[] = []
+      for (const n of [1, 2, 3, 4]) {
+        ids.push(await h.run(post({ text: `下書き${n}`, to: "draft", thread: `題名${n}` })))
+      }
+      const open = await h.run(
+        Effect.gen(function* () {
+          const db = yield* Db
+          return yield* db.meta("discord:threads")
+        }),
+      )
+      assert.deepEqual(JSON.parse(open ?? "[]"), ids.slice(1))
+      // 落ちた枝に書いても拾わない(叩きに行っていない)。
+      dc.at(String(ids[0])).unshift({ id: "910", content: "古い枝への返事", author: { id: OWNER } })
+      assert.deepEqual(await h.run(inbox), [])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
   }
 })
 

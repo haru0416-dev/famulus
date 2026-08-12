@@ -7,8 +7,10 @@
  * ntfy は位置を持っていない初回だけ**取り込まずに位置を進める**。数十時間ぶん抱えているので、
  * 位置なしで引くと昨日の返事が今日の指示として流れ込む(Discord 側は同じ規則を自分で持つ)。
  *
- * source は owner。ntfy の宛先は tailnet の中にしか出ておらず、Discord は持ち主との DM だけ。
- * 仮に別の端末から投げられても、外に出る行為は予告を経るので実行前に持ち主の目を通る。
+ * source は owner。ntfy の宛先は tailnet の中にしか出ておらず、Discord は持ち主しか居ない場所だけ
+ * (DM と、持ち主が用意した囲いの中のチャンネル)。**書いた人が誰かは author id で見る**ので、
+ * 場所に他人が入ってきても owner にはならない。仮に別の端末から投げられても、
+ * 外に出る行為は予告を経るので実行前に持ち主の目を通る。
  */
 import { Effect } from "effect"
 import type { DbFailed } from "./core/errors.ts"

@@ -14,8 +14,9 @@ import { nowIso } from "../core/time.ts"
 import { Governance, type Meter } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { ClaudeCliError, callClaude, poolForModel, type QuotaSignal, RUNTIME_PROMPT } from "./claude-cli.ts"
+import { traceOf } from "./trace.ts"
 
-export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
+export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify" | "reviewer"
 
 /**
  * 役割→モデル。品質が製品そのものになる役だけ opus に置く。
@@ -24,10 +25,15 @@ export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
  * 量で焚く役をそちらから外すと、声に使える枠が残る。ChatGPT 側も OAuth の定額枠で、
  * `poolForModel` が別の pool に数えるため、片方を焚いてももう片方は止まらない。
  *
- * **この表で今このプロセスから実際に呼ばれるのは `scout` だけ**(src/services/Intake.ts の取り込み)。
+ * **この表で今このプロセスから実際に呼ばれるのは `scout` / `reviewer` / `structurer` だけ**
+ * (src/services/Intake.ts の取り込み、src/agent/assistant.ts の `draft`、src/agent/keeper.ts の締め)。
  * `briefing` と `dialogue` は Flue 経路(src/model/provider.ts)を通るので、モデルは
- * `OPEN_ZERO_MODEL` / `OPEN_ZERO_TICK_MODEL` が決める。`structurer` と `classify` は呼び手がまだ無い。
+ * `OPEN_ZERO_MODEL` / `OPEN_ZERO_TICK_MODEL` が決める。`classify` は呼び手がまだ無い。
  * ここを取り違えると「structurer を守った」つもりで、引用を写す仕事のほうを動かすことになる。
+ *
+ * `reviewer` を下げないのは、**書いた側と同じ強さでないと落とせない**から。
+ * 下書きは opus が書くので、それより弱い読み手に渡すと、規律に当たっている箇所を名指せずに
+ * 「出す」だけが返る。ここで枠を1回使うが、外に名前で出る文はこの回にしか止められない。
  *
  * その `scout` が持つのは**引用を原文のまま写す**仕事で、引けなかった項目はコードが落とす。
  * 落ちた分は後から復元できないので、モデルを替えるときは引用の原文一致率を測ってから替える。
@@ -35,7 +41,11 @@ export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
 export const ROLE_MODEL: Record<Role, string> = {
   briefing: "claude-opus-5", // 朝会執筆
   dialogue: "claude-opus-5", // 対話(声。下げない)
-  structurer: "claude-opus-5", // 構造化提出(呼び手はまだ無い)
+  // 締めの記録係(keeper)。**持ち主の発言から引用を写す仕事**で、写せなかったものはコードが落とす
+  // (keepGrounded)。scout と同じ性質なので同じ側に置く。持ち主が話した回ごとに1回通るため、
+  // ここを opus にすると声と同じ枠を毎回2回叩くことになる。
+  structurer: "gpt-5.6-luna",
+  reviewer: "claude-opus-5", // 下書きの精査(assistant の draft)。**外に出る前の最後の関門**
   scout: "gpt-5.6-luna", // 取り込みの構造化。**引用を写す役**(Intake.ingest)
   classify: "gpt-5.6-luna", // 分類(呼び手はまだ無い)
 }
@@ -132,7 +142,7 @@ const makeRunner = (
             // 定額枠なので実費は 0。CLI が返す金額は影の値段として provenance にだけ残す。
             usd: p.meter === "quota" ? 0 : out.usage.notionalUsd,
           },
-          summary: out.text.slice(0, 200),
+          summary: traceOf(out.text),
           provenance: { pool: p.pool, notionalUsd: out.usage.notionalUsd },
           at,
         })

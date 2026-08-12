@@ -341,6 +341,21 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
         .pipe(Effect.map((rows) => rows.map((r) => view(String(r.slot), r)).filter((v) => v !== undefined)))
 
     /**
+     * いま閉じていない区間の全部。**新しい値を上げる前に、既にある名前を見せるための口。**
+     *
+     * 同じ事柄に別名の slot を作られると、どちらを引いても片方しか出てこない台帳になる。
+     * 検索では防げない — 別名は別名として素直に当たるので、書く側に既存の名前を見せるしかない。
+     */
+    const currentBeliefs = (limit = 50) =>
+      db
+        .all(
+          `SELECT slot, ${SLOT_COLS} FROM belief_slots
+            WHERE valid_until IS NULL ORDER BY updated_at DESC LIMIT ?`,
+          limit,
+        )
+        .pipe(Effect.map((rows) => rows.map((r) => view(String(r.slot), r)).filter((v) => v !== undefined)))
+
+    /**
      * 全文検索。trigram なので部分一致する。
      *
      * **2文字以下は FTS では引けない**(trigram は3文字窓)。日本語は「会議」「予定」「金額」のように
@@ -446,6 +461,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
       beliefAsOf,
       beliefHistory,
       staleBeliefs,
+      currentBeliefs,
       recall,
       recent,
       redact,
