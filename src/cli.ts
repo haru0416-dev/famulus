@@ -10,7 +10,9 @@
  *   oz halt <理由>         … 全停止。自動では明けない
  *   oz resume              … 停止解除
  *   oz attention           … 心拍が今なにを見ているか(見張り・問い・次に起きる条件)
+ *   oz answer <id> <答え>  … 問いに答えて閉じる
  *   oz drop <id> <理由>    … 追わないと決めた問いを畳む(答えずに閉じる)
+ *   oz watch <やること>    … 見張りに置く(既定は famulus = 心拍の起床理由になる)
  *   oz unwatch <id>        … 決着した見張りを閉じる
  *   oz list [status]       … 提案一覧(既定は裁可待ち)
  *   oz show <id>           … 裁可カード全文(id は前方一致でよい)
@@ -29,7 +31,7 @@ import { describeRefusal } from "./core/errors.ts"
 import { dayRange, localStamp, nowIso } from "./core/time.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "./model/claude-cli.ts"
 import { isRefusal, runtime } from "./runtime.ts"
-import { Attention, STALE_BELIEF_DAYS } from "./services/Attention.ts"
+import { Attention, type NextMove, STALE_BELIEF_DAYS } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
 import { AUTONOMOUS_ROLE, BUDGET, Governance } from "./services/Governance.ts"
@@ -50,7 +52,9 @@ const USAGE = `oz — open-zero の裁可 CLI
   oz halt <理由>           全停止(自動解除しない)
   oz resume                停止解除
   oz attention             心拍の視野(見張り・未解決の問い・次に起きる条件)
+  oz answer <id> <答え>    問いに答えて閉じる(持ち主の答えは確認済みとして入る)
   oz drop <id> <理由>      問いを答えないまま取り下げる。理由は必須
+  oz watch <やること>      見張りに置く(既定は自分の番。--human で人待ち)
   oz unwatch <id>          見張りを閉じる
   oz list [status]         提案一覧。status は proposed(既定)/approved/denied/expired/all
   oz show <id>             裁可カード全文(id は前方一致可)
@@ -197,6 +201,17 @@ const program = (argv: readonly string[]) =>
        * 見ているものを畳む2本。**溜まったものを持ち主の側から下ろせないと、机は一方通行で埋まる。**
        * 問いも見張りも増やす口はエージェント側にあるのに、減らす口が答えるときしか無かった。
        */
+      case "answer": {
+        const [id, ...text] = rest
+        const said = text.join(" ").trim()
+        if (!id || !said) return yield* Effect.fail(new Error("id と答えが要る: oz answer <id> <答え>"))
+        const att = yield* Attention
+        const q = yield* att.findQuestion(id)
+        // 持ち主が打った答えは一次情報。ここだけは確認済みとして入れてよい。
+        yield* att.answer(id, said, { confirmed: true })
+        return `答えた: ${short(q.id)} ${q.question}\n  → ${said}`
+      }
+
       case "drop": {
         const [id, ...why] = rest
         const reason = why.join(" ").trim()
@@ -205,6 +220,26 @@ const program = (argv: readonly string[]) =>
         const q = yield* att.findQuestion(id)
         yield* att.drop(id, reason)
         return `問いを取り下げた: ${short(q.id)} ${q.question}\n  理由: ${reason}`
+      }
+
+      /**
+       * 持ち主の側から仕事を置く。**既定は famulus** — 置いた時点で心拍の起床理由になり、
+       * 次に冷却が明けた回で自分の番として出てくる。人待ちの件は `--human` で理由から外す。
+       */
+      case "watch": {
+        const owner: NextMove = rest.includes("--human")
+          ? "human"
+          : rest.includes("--counterparty")
+            ? "counterparty"
+            : "famulus"
+        const subject = rest
+          .filter((a) => !a.startsWith("--"))
+          .join(" ")
+          .trim()
+        if (!subject) return yield* Effect.fail(new Error("中身が要る: oz watch <やること> [--human]"))
+        const att = yield* Attention
+        const id = yield* att.watch(subject, owner)
+        return `見張りに入れた: ${short(id)} ${subject}\n  次に動くのは ${owner}`
       }
 
       case "unwatch": {
