@@ -1,27 +1,27 @@
 /**
- * Discord。**持ち主が一番長く居る場所に出すための口。**
+ * Discord。**ユーザーが一番長く居る場所に出すための経路。**
  *
  * ntfy はロック画面に届くが、届いた先で出来ることが少ない(短い本文と決め打ちのボタンだけ)。
  * 長い下書きを読ませて一言返してもらう相手としては、既に開いている画面のほうが強い。
  *
  * **常駐しない。** ボタン(interaction)は3秒以内に応答が要るので gateway 接続が要るが、
- * 絵文字の印なら後から数えられる。返事の待ち時間は、常駐ではなく**読みに行く間隔**で決まる
+ * 絵文字のリアクションなら後から数えられる。返事の待ち時間は、常駐ではなく**読みに行く間隔**で決まる
  * — 30秒ごとに `inbox()` を1回叩くだけならモデルを呼ばず REST 1本で済む(src/poll.ts)。
  * 落ちたら黙って死ぬ常駐を1本増やさずに、待ち時間だけ 15分 から 30秒 に落ちる。
  *
  * 出す先は用途で分ける(`Desk`)。**通知を切れる単位が用途と一致する**のが分ける理由で、
- * 全部を1本に流すと「読まなくていいもの」を黙らせた瞬間に「返事が要るもの」も黙る。
+ * 全部を1本に流すと「読まなくていいもの」をミュートした瞬間に「返事が要るもの」も届かなくなる。
  * 分け先はチャンネル id を env で指す — 名前で引くと、名前を変えた日に黙って出なくなる(docs/adr/0015)。
  *
  * **人が居ない場所には出さない。** チャンネルを指していなければ DM に落ちるし、
- * 指す先を持ち主以外が読める場所にすると、台帳の中身がそこに出る(囲いの中かは env を書く側の責任)。
+ * 指す先をユーザー以外が読める場所にすると、DB の中身がそこに出る(囲いの中かは env を書く側の責任)。
  *
- * 返事は**訊かれた場所に返す**。持ち主が DM に書いたのにチャンネルへ返すと、
+ * 返事は**訊かれた場所に返す**。ユーザーが DM に書いたのにチャンネルへ返すと、
  * 書いた側は返事が無かったことになる。最後に話しかけられた場所を覚えておいてそこへ出す。
  *
- * 印を押させるものは**枝(スレッド)を1本生やす**。印は「どれに」までしか言えないので、
- * 「直す」の中身を受けるには自由文が要るが、平場に書かれた自由文はどの1件への返事か分からない。
- * 枝の中なら場所そのものが宛先になる(docs/adr/0016)。
+ * リアクションを押させるものは**スレッドを1本立てる**。リアクションは「どれに」までしか言えないので、
+ * 「直す」の中身を受けるには自由文が要るが、スレッド外に書かれた自由文はどの1件への返事か分からない。
+ * スレッドの中なら場所そのものが宛先になる(docs/adr/0016)。
  *
  * 設定が無ければ**黙って何もしない**(Notify と同じ契約)。
  */
@@ -29,7 +29,7 @@ import { Effect } from "effect"
 import type { DbFailed } from "../core/errors.ts"
 import { Db } from "./Db.ts"
 
-/** 叩き先。検査のときだけ差し替える — 本物に出すと持ち主の DM が試し書きで埋まる。 */
+/** 叩き先。検査のときだけ差し替える — 本物に出すとユーザーの DM が試し書きで埋まる。 */
 const api = (): string => process.env.OPEN_ZERO_DISCORD_API ?? "https://discord.com/api/v10"
 
 /** 1通の上限。Discord は 2000 字で弾くので、超えるぶんは分けて出す。 */
@@ -42,39 +42,39 @@ const LIMIT = 2000
  */
 const LINES = 17
 
-/** 押させる印。絵文字1つに意味を1つ割り当てる。 */
+/** 押させるリアクション。絵文字1つに意味を1つ割り当てる。 */
 export interface Tap {
   readonly emoji: string
-  /** 押されたときに持ち主の発言として台帳へ入る文。 */
+  /** 押されたときにユーザーの発言として DB へ入る文。 */
   readonly reply: string
 }
 
 /**
  * 出す先の種類。**チャンネルそのものではなく用途を渡す** — 呼ぶ側は id を知らないでよい。
  *
- * `talk` は会話(訊かれたら返す)。`draft` は名前が出る文で、印を押させる場所。
+ * `talk` は会話(訊かれたら返す)。`draft` は名前が出る文で、リアクションを押させる場所。
  */
 export type Desk = "talk" | "draft"
 
 export interface Post {
   readonly text: string
-  /** 付ける印。先に自分で付けておく — 押す側が絵文字を探さずに済む。 */
+  /** 付けるリアクション。先に自分で付けておく — 押す側が絵文字を探さずに済む。 */
   readonly taps?: readonly Tap[]
   /** 出す先。既定は会話。 */
   readonly to?: Desk
   /**
-   * 持ち主を呼ぶ。**チャンネルを黙らせていても届く**ので、返事が要るものにだけ付ける。
+   * ユーザーを呼ぶ。**チャンネルをミュートしていても届く**ので、返事が要るものにだけ付ける。
    * DM には付けない — 既に本人しか居ない場所で、呼びかけは字が増えるだけ。
    */
   readonly ping?: boolean
   /**
-   * 枝の名前。渡すと、出した1通から枝を生やしてそこも聞きに行く。
-   * **この1件への返事を、場所で受け取るため** — 平場の自由文はどれへの返事か分からない。
+   * スレッドの名前。渡すと、出した1通からスレッドを立ててそこも聞きに行く。
+   * **この1件への返事を、場所で受け取るため** — スレッド外の自由文はどれへの返事か分からない。
    */
   readonly thread?: string
 }
 
-/** 持ち主から返ってきた1件。押した印も自由文も、同じ形にして返す。 */
+/** ユーザーから返ってきた1件。押したリアクションも自由文も、同じ形にして返す。 */
 export interface Inbound {
   readonly id: string
   readonly text: string
@@ -89,16 +89,16 @@ const fixedChannel = (to: Desk): string | undefined => {
   return raw === undefined || raw.trim() === "" ? undefined : raw.trim()
 }
 
-/** 待っている印。`{ メッセージid: { 絵文字: 返る文 } }` を schema_meta に置く。 */
+/** 待っているリアクション。`{ メッセージid: { 絵文字: 返る文 } }` を schema_meta に置く。 */
 type Pending = Record<string, Record<string, string>>
 
 /** 覚えておく待ちの数。押されないまま溜まった古いものは落とす — 返事が来ないものは流れたもの。 */
 const MAX_PENDING = 20
 
 /**
- * 聞き続ける枝の数。**押された時点では閉じない** — 「直す」を押した人は、その後に
+ * 聞き続けるスレッドの数。**押された時点では閉じない** — 「直す」を押した人は、その後に
  * 何を直すかを書く。決着で閉じると、その自由文の行き先が無くなる。
- * 古いものから落ちる。1つ増えるごとに、口が30秒ごとに叩く先が1つ増える。
+ * 古いものから落ちる。1つ増えるごとに、poll が30秒ごとに叩く先が1つ増える。
  */
 const MAX_THREADS = 3
 
@@ -174,7 +174,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         }),
       )
 
-    /** DM のチャンネル。持ち主ごとに固定なので一度引いたら覚えておく。 */
+    /** DM のチャンネル。ユーザーごとに固定なので一度引いたら覚えておく。 */
     const dm = (): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
         const owner = ownerId()
@@ -196,7 +196,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
 
     /**
      * 出す先を決める。**最後に話しかけられた場所が最優先** — 返事は訊かれた場所に返す。
-     * 印を押させるものは、指してあれば専用の場所へ出す(黙らせる単位を会話と分けるため)。
+     * リアクションを押させるものは、指してあれば専用の場所へ出す(ミュートの単位を会話と分けるため)。
      */
     const channel = (to: Desk = "talk"): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
@@ -213,24 +213,24 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         return yield* dm()
       })
 
-    /** 印を1つ付ける。**押す側が絵文字を探さずに済むように、出した直後に自分で置く。** */
+    /** リアクションを1つ付ける。**押す側が絵文字を探さずに済むように、出した直後に自分で置く。** */
     const mark = (ch: string, messageId: string, emoji: string): Effect.Effect<void> =>
       call(`/channels/${ch}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`, {
         method: "PUT",
       }).pipe(Effect.ignore)
 
     /**
-     * 枝を1本生やす。**返事の宛先を場所で持つため。**
-     * 枝の中の発言は `channel_id` がそのまま元の1通を指すので、どれへの返事かを当てずに済む。
+     * スレッドを1本立てる。**返事の宛先を場所で持つため。**
+     * スレッドの中の発言は `channel_id` がそのまま元の1通を指すので、どれへの返事かを当てずに済む。
      *
      * 生やした直後に既読位置を起点へ置く。置かないと「位置を持たない場所」の規則に当たって、
-     * **持ち主が枝に書いた最初の1通が、取り込まれないまま位置だけ進む**(docs/adr/0015 の影響)。
+     * **ユーザーがスレッドに書いた最初の1通が、取り込まれないまま位置だけ進む**(docs/adr/0015 の影響)。
      */
     const branch = (ch: string, messageId: string, name: string): Effect.Effect<void, DbFailed> =>
       Effect.gen(function* () {
         const made = yield* call(`/channels/${ch}/messages/${messageId}/threads`, {
           method: "POST",
-          // 名前は 100 字まで。超えると 400 で弾かれる(枝ごと立たない)。
+          // 名前は 100 字まで。超えると 400 で弾かれる(スレッドが立たない)。
           body: JSON.stringify({ name: name.slice(0, 100), auto_archive_duration: 1440 }),
         }).pipe(
           Effect.flatMap((r) => Effect.tryPromise(() => r.json() as Promise<{ id?: string }>)),
@@ -245,7 +245,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
 
     /**
      * 1通出す。**失敗しても例外にしない** — 送れたらメッセージ id、駄目なら undefined。
-     * 印は自分で先に付ける。押す側が絵文字を選ぶ手間を消すため。
+     * リアクションは自分で先に付ける。押す側が絵文字を選ぶ手間を消すため。
      */
     const post = (p: Post): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
@@ -266,7 +266,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
           )
         }
         if (!last) return last
-        // 枝は印より先に。印を付けてから落ちても、返事の行き先だけは立っている。
+        // スレッドはリアクションより先に。リアクションを付けてから落ちても、返事の行き先だけは立っている。
         if (p.thread) yield* branch(ch, last, p.thread)
         if (!p.taps?.length) return last
         for (const t of p.taps) yield* mark(ch, last, t.emoji)
@@ -279,8 +279,8 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
 
     /**
      * 読みに行く場所。**出す先を全部聞く** — 出した場所に返事が来るし、
-     * DM は出し先をチャンネルに移した後も残る(持ち主がそちらに書いたら黙って落ちる、が起きない)。
-     * 生やした枝も聞く。枝は自分で出した1件に紐づくので、そこに他人は書けない。
+     * DM は出し先をチャンネルに移した後も残る(ユーザーがそちらに書いたら黙って落ちる、が起きない)。
+     * 立てたスレッドも聞く。スレッドは自分で出した1件に紐づくので、そこに他人は書けない。
      */
     const listening = (): Effect.Effect<readonly string[], DbFailed> =>
       Effect.gen(function* () {
@@ -308,13 +308,13 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       })
 
     /**
-     * 返ってきたものを読む。**印と自由文を同じ形で返す** — 呼ぶ側はどちらで来たかを気にしない。
-     * 一覧を1回引くだけで両方見る(印は古いメッセージに後から付くので、`after` では拾えない)。
+     * 返ってきたものを読む。**リアクションと自由文を同じ形で返す** — 呼ぶ側はどちらで来たかを気にしない。
+     * 一覧を1回引くだけで両方見る(リアクションは古いメッセージに後から付くので、`after` では拾えない)。
      *
      * 読んだものは二度返さない(既読位置と待ちリストをここで進める)。
      * 位置を持っていない初回は**自由文を取り込まずに位置だけ進める** — DM には過去の会話が
      * 残っているので、位置なしで引くと去年の一言が今日の指示として流れ込む。
-     * 印はこの制限を受けない(自分が出した通知に対してしか登録されていない)。
+     * リアクションはこの制限を受けない(自分が出した通知に対してしか登録されていない)。
      *
      * 取れなければ空 — 「届いていない」と「Discord が落ちている」を呼ぶ側に区別させない。
      */
@@ -338,11 +338,11 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
 
           const cursor = yield* cursorOf(ch)
 
-          // 古い順に見る。API は新しい順で返すので、そのまま流すと台帳の並びが逆になる。
+          // 古い順に見る。API は新しい順で返すので、そのまま流すと DB の並びが逆になる。
           for (const m of [...msgs].reverse()) {
             if (cursor && m.author.id === owner && m.content.trim() !== "" && newer(m.id, cursor)) {
               out.push({ id: m.id, text: m.content })
-              // **返す先はここ。** 一番新しい自由文の場所を覚える(印は場所を動かさない —
+              // **返す先はここ。** 一番新しい自由文の場所を覚える(リアクションは場所を動かさない —
               // 押すのは前に出したものへの返事で、話しかけられたのとは違う)。
               if (heard === undefined || newer(m.id, heard)) heard = ch
             }
@@ -350,7 +350,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
             if (!waiting) continue
             for (const r of m.reactions ?? []) {
               const reply = waiting[r.emoji.name]
-              // 自分で付けたぶんは数に入っている。それを超えていたら持ち主が押した。
+              // 自分で付けたぶんは数に入っている。それを超えていたらユーザーが押した。
               if (reply && r.count > (r.me ? 1 : 0)) {
                 out.push({ id: `${m.id}:${r.emoji.name}`, text: reply })
                 delete pending[m.id]

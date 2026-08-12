@@ -1,9 +1,9 @@
 /**
- * 通知の口の検査。**押せなかったときに黙って false を返すか**を主に見る。
+ * 通知の経路の検査。**押せなかったときに黙って false を返すか**を主に見る。
  *
- * ここが例外を投げると、通知先を書いていないだけで心拍が落ちる。届かないことより、
+ * ここが例外を投げると、通知先を書いていないだけで tick が落ちる。届かないことより、
  * 届かないせいで本体が止まることのほうが困る。だから「未設定」「繋がらない」を固定する。
- * 本文の形も見る — ntfy は JSON の発行口とヘッダの発行口で解釈が違い、
+ * 本文の形も見る — ntfy は JSON の発行形式とヘッダの発行形式で解釈が違い、
  * 日本語の見出しはヘッダに載せられない。
  */
 import assert from "node:assert/strict"
@@ -136,7 +136,7 @@ test("ntfy が断ったら false — 例外にはしない", async () => {
   }
 })
 
-test("繋がらなくても落ちない — 心拍は通知の失敗で止まらない", async () => {
+test("繋がらなくても落ちない — tick は通知の失敗で止まらない", async () => {
   // 1 番は特権ポートで、この環境では誰も listen していない(接続は即座に拒否される)。
   process.env.OPEN_ZERO_NTFY_URL = "http://127.0.0.1:1"
   process.env.OPEN_ZERO_NTFY_TOPIC = "oz-test"
@@ -231,7 +231,7 @@ test("受信トピックが無ければ受信箱は空", async () => {
   }
 })
 
-test("受信箱が読めなくても空を返す — 心拍は返事が読めないだけで止まらない", async () => {
+test("受信箱が読めなくても空を返す — tick は返事が読めないだけで止まらない", async () => {
   process.env.OPEN_ZERO_NTFY_URL = "http://127.0.0.1:1"
   process.env.OPEN_ZERO_NTFY_TOPIC = "oz-test"
   process.env.OPEN_ZERO_NTFY_TOPIC_IN = "oz-test-in"

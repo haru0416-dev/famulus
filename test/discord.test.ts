@@ -1,8 +1,8 @@
 /**
- * Discord の口の検査。**押されたことをどう見分けるか**を主に見る。
+ * Discord の検査。**押されたことをどう見分けるか**を主に見る。
  *
- * 印は自分で先に付けるので、絵文字の数は最初から 1 ある。そこを引かずに数えると、
- * 誰も押していない通知が全部「押された」になり、心拍が勝手に進む。
+ * リアクションは自分で先に付けるので、絵文字の数は最初から 1 ある。そこを引かずに数えると、
+ * 誰も押していない通知が全部「押された」になり、tick が勝手に進む。
  * 既読位置の扱いも見る — 初回に全部拾うと、DM に残っている過去の一言が今日の指示になる。
  */
 import assert from "node:assert/strict"
@@ -31,7 +31,7 @@ interface Msg {
 }
 
 /**
- * Discord 役。DM を開く・出す・印を付ける・一覧を返す、の4つだけ答える。
+ * Discord 役。DM を開く・出す・リアクションを付ける・一覧を返す、の4つだけ答える。
  * 出したものは `msgs` に積むので、テスト側から押されたことにできる。
  */
 const fakeDiscord = async (
@@ -45,7 +45,7 @@ const fakeDiscord = async (
 }> => {
   const hits: Hit[] = []
   let next = 100
-  // 場所ごとの中身。DM 以外は触られたときに生える(テスト側は id を決め打ちで渡す)。
+  // 場所ごとの中身。DM 以外は触られたときに作る(テスト側は id を決め打ちで渡す)。
   const rooms = new Map<string, Msg[]>([[CH, seed]])
   const at = (ch: string): Msg[] => {
     const got = rooms.get(ch) ?? []
@@ -71,14 +71,14 @@ const fakeDiscord = async (
         at(ch).unshift({ id, content: String(body?.content ?? ""), author: { id: "bot" } })
         return json({ id })
       }
-      // 枝。本物は起点の1通と同じ id を返す(枝そのものが場所になる)。
+      // スレッド。本物は起点の1通と同じ id を返す(スレッドそのものが場所になる)。
       const [, from] = /\/messages\/(\d+)\/threads$/.exec(path) ?? []
       if (from && req.method === "POST") {
         at(from)
         return json({ id: from, name: body?.name })
       }
       if (path.includes("/reactions/") && ch) {
-        // 自分で付けた印。押す側から見ると数は 1 から始まる。
+        // 自分で付けたリアクション。押す側から見ると数は 1 から始まる。
         const [, id, emoji] = /\/messages\/(\d+)\/reactions\/([^/]+)\/@me/.exec(path) ?? []
         const name = decodeURIComponent(emoji ?? "")
         const m = at(ch).find((x) => x.id === id)
@@ -154,7 +154,7 @@ test("トークンが無ければ何もしない — 叩かないし落ちない
   }
 })
 
-test("出したら印も自分で付く — 押す側は絵文字を探さない", async () => {
+test("出したらリアクションも自分で付く — 押す側は絵文字を探さない", async () => {
   const dc = await fakeDiscord()
   wire(dc.url)
   try {
@@ -180,7 +180,7 @@ test("出したら印も自分で付く — 押す側は絵文字を探さない
   }
 })
 
-test("2000 字を超えたら分ける — 印は最後の1通に付く", async () => {
+test("2000 字を超えたら分ける — リアクションは最後の1通に付く", async () => {
   const dc = await fakeDiscord()
   wire(dc.url)
   try {
@@ -212,7 +212,7 @@ test("押されるまでは空。押されたら割り当てた文が返る", as
       const r = m?.reactions?.[0]
       if (r) r.count = 2
       assert.deepEqual(await h.run(inbox), [{ id: `${id}:🛑`, text: "やめて" }])
-      // 二度は返らない。返ると同じ指示が心拍のたびに効き続ける。
+      // 二度は返らない。返ると同じ指示が tick のたびに効き続ける。
       assert.deepEqual(await h.run(inbox), [])
     })
   } finally {
@@ -239,7 +239,7 @@ test("初回は自由文を取り込まない — DM に残っている過去の
   }
 })
 
-test("自分の発言は拾わない — 出した文が次の心拍の入力に化けない", async () => {
+test("自分の発言は拾わない — 出した文が次の tick の入力に化けない", async () => {
   const dc = await fakeDiscord([{ id: "60", content: "位置合わせ", author: { id: OWNER } }])
   wire(dc.url)
   try {
@@ -254,7 +254,7 @@ test("自分の発言は拾わない — 出した文が次の心拍の入力に
   }
 })
 
-test("Discord が落ちていても空を返す — 心拍は返事が読めないだけで止まらない", async () => {
+test("Discord が落ちていても空を返す — tick は返事が読めないだけで止まらない", async () => {
   // 1 番は特権ポートで、この環境では誰も listen していない(接続は即座に拒否される)。
   wire("http://127.0.0.1:1")
   try {
@@ -271,8 +271,8 @@ const TALK = "7001"
 const DRAFT = "7002"
 
 /**
- * 分ける理由は**黙らせる単位**。下書きと会話が同じ場所に出ると、
- * 「読まなくていいものを黙らせる」と「返事が要るもの」も一緒に黙る。
+ * 分ける理由は**ミュートの単位**。下書きと会話が同じ場所に出ると、
+ * 「読まなくていいものをミュートする」と「返事が要るもの」も一緒に届かなくなる。
  */
 test("下書きは下書きの場所へ、会話は会話の場所へ出る", async () => {
   const dc = await fakeDiscord()
@@ -298,7 +298,7 @@ test("下書きは下書きの場所へ、会話は会話の場所へ出る", as
   }
 })
 
-test("印は出した場所に付く — 会話の場所に出した通知へ間違って付けない", async () => {
+test("リアクションは出した場所に付く — 会話の場所に出した通知へ間違って付けない", async () => {
   const dc = await fakeDiscord()
   wire(dc.url, { talk: TALK, draft: DRAFT })
   try {
@@ -408,10 +408,10 @@ test("呼びかけはチャンネルにだけ付く — DM では字が増える
 })
 
 /**
- * 印は「どれに」までしか言えない。**「直す」の中身は自由文でしか来ない**が、
- * 平場に書かれた自由文はどの1件への返事か分からない。枝なら場所そのものが宛先になる。
+ * リアクションは「どれに」までしか言えない。**「直す」の中身は自由文でしか来ない**が、
+ * スレッド外に書かれた自由文はどの1件への返事か分からない。スレッドなら場所そのものが宛先になる。
  */
-test("枝の名前を渡すと、出した1通から枝が生える", async () => {
+test("スレッドの名前を渡すと、出した1通からスレッドが立つ", async () => {
   const dc = await fakeDiscord()
   wire(dc.url, { draft: DRAFT })
   try {
@@ -428,7 +428,7 @@ test("枝の名前を渡すと、出した1通から枝が生える", async () =
 })
 
 /** 生やした場所は位置を持たない。**規則をそのまま当てると、最初の1通が黙って消える。** */
-test("枝に書かれた1通目から拾う — 生やした時点で位置を置く", async () => {
+test("スレッドに書かれた1通目から拾う — 立てた時点で位置を置く", async () => {
   const dc = await fakeDiscord()
   wire(dc.url, { talk: TALK, draft: DRAFT })
   try {
@@ -436,7 +436,7 @@ test("枝に書かれた1通目から拾う — 生やした時点で位置を�
       const id = await h.run(post({ text: "下書き本文", to: "draft", thread: "題名" }))
       dc.at(String(id)).unshift({ id: "900", content: "ここの数字を直して", author: { id: OWNER } })
       assert.deepEqual(await h.run(inbox), [{ id: "900", text: "ここの数字を直して" }])
-      // **返事は枝の中に返る。**平場に返すと、どれへの返事か読む側が探すことになる。
+      // **返事はスレッドの中に返る。**スレッド外に返すと、どれへの返事か読む側が探すことになる。
       await h.run(post({ text: "直した" }))
       assert.equal(dc.at(String(id))[0]?.content, "直した")
     })
@@ -446,7 +446,7 @@ test("枝に書かれた1通目から拾う — 生やした時点で位置を�
   }
 })
 
-test("聞き続ける枝には上限がある — 古いものから落ちる", async () => {
+test("聞き続けるスレッドには上限がある — 古いものから落ちる", async () => {
   const dc = await fakeDiscord()
   wire(dc.url, { draft: DRAFT })
   try {
@@ -462,8 +462,8 @@ test("聞き続ける枝には上限がある — 古いものから落ちる", 
         }),
       )
       assert.deepEqual(JSON.parse(open ?? "[]"), ids.slice(1))
-      // 落ちた枝に書いても拾わない(叩きに行っていない)。
-      dc.at(String(ids[0])).unshift({ id: "910", content: "古い枝への返事", author: { id: OWNER } })
+      // 落ちたスレッドに書いても拾わない(叩きに行っていない)。
+      dc.at(String(ids[0])).unshift({ id: "910", content: "古いスレッドへの返事", author: { id: OWNER } })
       assert.deepEqual(await h.run(inbox), [])
     })
   } finally {

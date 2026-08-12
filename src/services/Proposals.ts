@@ -1,8 +1,8 @@
 /**
- * 提案と裁可。**エージェントが実行しないための受け皿**。
+ * 提案と承認。**エージェントが実行しないための受け皿**。
  *
  * この設計の芯は「実行を伴うことはエージェントが直接やらず、提案として1件書いて止まる」ことなので、
- * 提案を作る側(ツール)と裁可する側(CLI)が同じ1本の API を通るようにしておく。
+ * 提案を作る側(ツール)と承認する側(CLI)が同じ1本の API を通るようにしておく。
  * ここが2箇所に分かれた瞬間、片方だけが状態機械を守る、という壊れ方をする。
  *
  * 状態機械(schema.sql の CHECK と一致):
@@ -10,9 +10,9 @@
  *      │ deny→ denied
  *      └ 期限切れ→ expired
  *
- * **approved の先は無い。** 実行器もコネクタも1つも書かれていないので、`executing` /
+ * **approved の先は無い。** 実行の仕組みもコネクタも1つも書かれていないので、`executing` /
  * `executed` / `failed` には**どの経路からも到達しない**(CHECK には残っているだけ)。
- * approved は「裁可済み・未実行」で止まり、実際に動かすのは持ち主。
+ * approved は「承認済み・未実行」で止まり、実際に動かすのはユーザー。
  * ここで実行したことにする方が嘘としては大きいので、止めたままにしてある。
  *
  * `approve` は **approvals 行を必ず書く**。承認した時点の payload の指紋を残すためで、
@@ -59,7 +59,7 @@ export interface CreateInput {
   readonly payload?: unknown
   readonly provenance?: unknown
   readonly at?: string
-  /** 未裁可のまま放置される上限日数。 */
+  /** 未承認のまま放置される上限日数。 */
   readonly pendingDays?: number
 }
 
@@ -83,7 +83,7 @@ export interface ProposalRow {
   readonly deny_reason: string | null
 }
 
-/** 未裁可のまま置ける日数。過ぎたものは list の前に expired に落とす。 */
+/** 未承認のまま置ける日数。過ぎたものは list の前に expired に落とす。 */
 export const MAX_PENDING_DAYS = 7
 
 const plusDays = (at: string, days: number) =>
@@ -92,7 +92,7 @@ const plusDays = (at: string, days: number) =>
 /** 承認した時点の payload の指紋。**照合する側を作るまでは、ただの記録。** */
 export const payloadHash = (payload: string): string => createHash("sha256").update(payload).digest("hex")
 
-/** 裁可を受け付ける状態。executing 以降は人の裁可の対象ではない。 */
+/** 承認を受け付ける状態。executing 以降は人の承認の対象ではない。 */
 const DECIDABLE: readonly ProposalStatus[] = ["proposed", "deferred"]
 
 export class Proposals extends Effect.Service<Proposals>()("Proposals", {
@@ -131,12 +131,12 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
 
     /**
      * id 前方一致で1件引く。CLI で 36 文字の UUID を打たせないため。
-     * **複数に当たったら選ばずに失敗させる** — 曖昧なまま裁可を通すのが一番まずい。
+     * **複数に当たったら選ばずに失敗させる** — 曖昧なまま承認を通すのが一番まずい。
      */
     const get = (idOrPrefix: string) =>
       Effect.gen(function* () {
         const rows = yield* db.all(
-          "SELECT * FROM proposals WHERE id = ? OR id LIKE ? || '%' ORDER BY created_at DESC LIMIT 5",
+          "SELECT * FROM proposals WHERE id = ?OR id LIKE ? || '%' ORDER BY created_at DESC LIMIT 5",
           idOrPrefix,
           idOrPrefix,
         )
@@ -155,7 +155,7 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
         return rows[0] as unknown as ProposalRow
       })
 
-    /** 期限切れを expired に落とす。裁可待ちの一覧が実態とずれないよう list の前に呼ぶ。 */
+    /** 期限切れを expired に落とす。承認待ちの一覧が実態とずれないよう list の前に呼ぶ。 */
     const expireDue = (at: string = nowIso()) =>
       db
         .run("UPDATE proposals SET status = 'expired' WHERE status = 'proposed' AND expires_at < ?", at)
@@ -168,17 +168,17 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
           status === "all"
             ? yield* db.all("SELECT * FROM proposals ORDER BY created_at DESC LIMIT ?", limit)
             : yield* db.all(
-                "SELECT * FROM proposals WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM proposals WHERE status = ?ORDER BY created_at DESC LIMIT ?",
                 status,
                 limit,
               )
         return rows as unknown as ProposalRow[]
       })
 
-    /** 裁可の生ログ。approve 率の飽和検知と deny の還流に使う(まだ読む側は無い)。 */
+    /** 承認の生ログ。approve 率の飽和検知と deny の還流に使う(まだ読む側は無い)。 */
     const noteDecision = (p: ProposalRow, verb: string, at: string) =>
       db.run(
-        "INSERT INTO decisions (id, proposal_id, at, verb, kind, latency_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO decisions (id, proposal_id, at, verb, kind, latency_ms)VALUES (?, ?, ?, ?, ?, ?)",
         randomUUID(),
         p.id,
         at,
@@ -191,7 +191,7 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
       DECIDABLE.includes(p.status)
         ? Effect.void
         : Effect.fail(
-            new Conflict({ what: "提案", id: p.id, reason: `裁可できる状態ではない(status=${p.status})` }),
+            new Conflict({ what: "提案", id: p.id, reason: `承認できる状態ではない(status=${p.status})` }),
           )
 
     /**
@@ -232,7 +232,7 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
         const at = opts?.at ?? nowIso()
         yield* db.run("BEGIN")
         yield* Effect.gen(function* () {
-          yield* db.run("UPDATE proposals SET status = 'denied', deny_reason = ? WHERE id = ?", reason, p.id)
+          yield* db.run("UPDATE proposals SET status = 'denied', deny_reason = ?WHERE id = ?", reason, p.id)
           yield* noteDecision(p, "deny", at)
           yield* db.run("COMMIT")
         }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
@@ -241,7 +241,7 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
 
     /** 承認記録。payload_hash を照合する側を作ったときに、ここを引く。 */
     const approvalOf = (proposalId: string) =>
-      db.get("SELECT * FROM approvals WHERE proposal_id = ? ORDER BY at DESC LIMIT 1", proposalId)
+      db.get("SELECT * FROM approvals WHERE proposal_id = ?ORDER BY at DESC LIMIT 1", proposalId)
 
     return { create, get, list, expireDue, approve, deny, approvalOf } as const
   }),

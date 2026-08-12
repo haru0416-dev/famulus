@@ -31,7 +31,7 @@ export class DailyRunLimit extends Data.TaggedError("DailyRunLimit")<{
   readonly limit: number
 }> {}
 
-/** 単価未登録モデルの事前拒否(従量経路のみ。記帳されずに USD 上限を素通りする穴を塞ぐ)。 */
+/** 単価未登録モデルの事前拒否(従量経路のみ。記録されずに USD 上限を素通りする穴を塞ぐ)。 */
 export class UnpricedModel extends Data.TaggedError("UnpricedModel")<{
   readonly model: string
 }> {}
@@ -57,8 +57,8 @@ export class RunnerFailed extends Data.TaggedError("RunnerFailed")<{
 /**
  * 指定した行が無い。CLI の打ち間違い(id 前方一致で当たらない)もここ。
  *
- * `what` は何の台帳を引いたか(「提案」「問い」「見張り」)。**必須にしてある** —
- * 省けるようにすると、提案の文言が問いにも見張りにも流用されて
+ * `what` は何の DB を引いたか(「提案」「問い」「watch」)。**必須にしてある** —
+ * 省けるようにすると、提案の文言が問いにも watch にも流用されて
  * 「そんな提案は無い」と言いながら問いを探している、が起きる。
  */
 export class NotFound extends Data.TaggedError("NotFound")<{
@@ -67,8 +67,8 @@ export class NotFound extends Data.TaggedError("NotFound")<{
 }> {}
 
 /**
- * 行の状態が操作と噛み合わない(裁可済みを再裁可、id 前方一致が複数など)。
- * **曖昧なまま裁可を通さない**ための失敗で、拒否(Refusal)とは別物 — 統治が止めたのではない。
+ * 行の状態が操作と噛み合わない(承認済みを再承認、id 前方一致が複数など)。
+ * **曖昧なまま承認を通さない**ための失敗で、拒否(Refusal)とは別物 — 統治が止めたのではない。
  */
 export class Conflict extends Data.TaggedError("Conflict")<{
   readonly what: string
@@ -105,7 +105,7 @@ export function causeReason(e: unknown): string {
   return String(e)
 }
 
-/** 人間に見せる一行(裁可ボード・CLI 共通)。 */
+/** 人間に見せる一行(承認ボード・CLI 共通)。 */
 export function describeRefusal(r: Refusal): string {
   switch (r._tag) {
     case "Halt":

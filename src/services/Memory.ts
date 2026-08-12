@@ -4,7 +4,7 @@
  * **消せないことを SQL 側で強制する。** 忘却は DELETE ではなく `forget` イベントの追記、
  * 抹消は `content := NULL` の UPDATE だけ(それ以外の UPDATE はトリガが ABORT する)。
  *
- * `remember` は引数を最小・既定値を厚くしてある。**器があっても記録が溜まらなければ台帳は無いのと同じ**で、
+ * `remember` は引数を最小・既定値を厚くしてある。**仕組みがあっても記録が溜まらなければ DB は無いのと同じ**で、
  * 溜まらない原因が API の摩擦なら、それは設計の側で消せる。
  */
 import { randomUUID } from "node:crypto"
@@ -69,11 +69,11 @@ const IS_CURRENT =
 /**
  * 層の重み。bm25 は「小さいほど関連が強い」負の値なので、**引くと前に出る**。
  *
- * 台帳は平らに1本だが、読む価値は平らではない。確定した事実(belief)は持ち主に確かめた1行、
+ * DB は平らに1本だが、読む価値は平らではない。確定した事実(belief)はユーザーに確かめた1行、
  * `source='system'` は自分が書いた記録。同じ語を含んでいても、探しものとして役に立つ度合いが違う。
  *
  * **`kind` と `source` は別の問いに答えている**。source は誰が書いたか、kind はどんな記録か。
- * 取り込み(`import`)は自分が書くので source は system だが、中身は持ち主の判断の要約であって
+ * 取り込み(`import`)は自分が書くので source は system だが、中身はユーザーの判断の要約であって
  * 独り言ではない。source だけで下げると、入口から入れたものが全部検索の底に沈む。
  * だから `import` を `source='system'` より**先に**判定する。順序がそのまま意味になっている。
  */
@@ -93,7 +93,7 @@ const LAYER_BIAS = `CASE
  * 併せて**どの層の1行なのか**を頭に付ける — 確定した事実と自分の独り言を、
  * 読む側が区別できないまま並べない。
  *
- * 時刻は**持ち主の時計**で出す(`localStamp`)。UTC のまま帯なしで渡すと、
+ * 時刻は**ユーザーの時計**で出す(`localStamp`)。UTC のまま帯なしで渡すと、
  * 夜中の記録が前日として読まれる。
  */
 export function renderRecall(rows: readonly EventRow[], perRow = 180): string {
@@ -106,7 +106,7 @@ export function renderRecall(rows: readonly EventRow[], perRow = 180): string {
             ? "確定"
             : "確定(旧版)"
           : r.kind === "import"
-            ? // 由来が要約であることを隠さない。持ち主が直接そう言った1行と混ぜて読ませない。
+            ? // 由来が要約であることを隠さない。ユーザーが直接そう言った1行と混ぜて読ませない。
               "取り込み"
             : r.source === "system"
               ? "自分の記録"
@@ -130,7 +130,7 @@ function safeText(content: string | null): string {
 
 /**
  * 同じ本文の行を畳む。関連度順で最初に出たものを残す。
- * 同じことを5回言われた台帳では、畳まないと1つの話題だけで枠が埋まる。
+ * 同じことを5回言われた DB では、畳まないと1つの話題だけで枠が埋まる。
  */
 function dedupe(rows: readonly EventRow[], limit: number): EventRow[] {
   const seen = new Set<string>()
@@ -203,7 +203,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
             content,
           )
           if (text.length > 0) {
-            yield* db.run("INSERT INTO events_fts (event_id, text) VALUES (?, ?)", id, text)
+            yield* db.run("INSERT INTO events_fts (event_id, text)VALUES (?, ?)", id, text)
           }
           yield* db.run("COMMIT")
           return id
@@ -216,12 +216,12 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
      * (`resolved_from` が NOT NULL の FK なので、根拠なしにスロットは立たない)。
      *
      * 上書きしない。**今の区間に `valid_until` を打って閉じ、次の区間を隣に足す。**
-     * 上書きにすると「転職活動中」だった時期そのものが台帳から消え、
+     * 上書きにすると「転職活動中」だった時期そのものが DB から消え、
      * 過去形の問い(「去年の今ごろ何をしていたか」)に答えられなくなる。
      *
-     * `validFrom` は**その事実がいつ真になったか**で、記帳時刻とは別物。
+     * `validFrom` は**その事実がいつ真になったか**で、記録時刻とは別物。
      * 「6月に終わっていたと8月に知った」なら validFrom は6月、updated_at は8月。
-     * 分からなければ記帳時刻に落ちる — 推測で埋めるより「遅くともこの時点」のほうが正しい。
+     * 分からなければ記録時刻に落ちる — 推測で埋めるより「遅くともこの時点」のほうが正しい。
      */
     const believe = (
       slot: string,
@@ -232,7 +232,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
         const at = nowIso()
         const exposure = opts?.exposure ?? "private"
         const cur = yield* db.get(
-          "SELECT resolved_from, valid_from FROM belief_slots WHERE slot = ? AND valid_until IS NULL",
+          "SELECT resolved_from, valid_from FROM belief_slots WHERE slot = ?AND valid_until IS NULL",
           slot,
         )
         // 遡って書くとき、前の区間より前には戻さない(区間が裏返るとどの並びも壊れる)。
@@ -255,7 +255,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
           yield* db.run(
             `UPDATE belief_slots
                 SET valid_until = ?, invalidated_by = ?, invalidated_reason = ?
-              WHERE slot = ? AND valid_until IS NULL`,
+              WHERE slot = ?AND valid_until IS NULL`,
             validFrom,
             eventId,
             opts?.reason ?? null,
@@ -265,7 +265,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
         yield* db.run(
           `INSERT INTO belief_slots (slot, value, exposure, resolved_from, updated_at, valid_from)
            VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(slot, valid_from) DO UPDATE SET
+           ON CONFLICT(slot, valid_from)DO UPDATE SET
              value = excluded.value, exposure = excluded.exposure,
              resolved_from = excluded.resolved_from, updated_at = excluded.updated_at,
              valid_until = NULL, invalidated_by = NULL, invalidated_reason = NULL`,
@@ -299,7 +299,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
     /** 今の値。**閉じていない区間は slot ごとに高々1本**(部分 UNIQUE が保証している)。 */
     const belief = (slot: string) =>
       db
-        .get(`SELECT ${SLOT_COLS} FROM belief_slots WHERE slot = ? AND valid_until IS NULL`, slot)
+        .get(`SELECT ${SLOT_COLS} FROM belief_slots WHERE slot = ?AND valid_until IS NULL`, slot)
         .pipe(Effect.map((r) => view(slot, r)))
 
     /**
@@ -310,7 +310,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
       db
         .get(
           `SELECT ${SLOT_COLS} FROM belief_slots
-            WHERE slot = ? AND valid_from <= ? AND (valid_until IS NULL OR valid_until > ?)`,
+            WHERE slot = ?AND valid_from <= ?AND (valid_until IS NULL OR valid_until > ?)`,
           slot,
           at,
           at,
@@ -320,11 +320,11 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
     /** 値の変遷。古い順。 */
     const beliefHistory = (slot: string) =>
       db
-        .all(`SELECT ${SLOT_COLS} FROM belief_slots WHERE slot = ? ORDER BY valid_from ASC`, slot)
+        .all(`SELECT ${SLOT_COLS} FROM belief_slots WHERE slot = ?ORDER BY valid_from ASC`, slot)
         .pipe(Effect.map((rows) => rows.map((r) => view(slot, r)).filter((v) => v !== undefined)))
 
     /**
-     * **確かめてから時間が経った事実**。転職が終わったのに台帳が知らない、を見つける唯一の口。
+     * **確かめてから時間が経った事実**。転職が終わったのに DB が知らない、を見つける唯一の手段。
      *
      * 陳腐化は検索では絶対に見つからない。古い値も新しい値と同じくらい自然に検索に当たるから。
      * 「最後に真だと確かめたのがいつか」を持っている側から引くしかない。
@@ -341,9 +341,9 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
         .pipe(Effect.map((rows) => rows.map((r) => view(String(r.slot), r)).filter((v) => v !== undefined)))
 
     /**
-     * いま閉じていない区間の全部。**新しい値を上げる前に、既にある名前を見せるための口。**
+     * いま閉じていない区間の全部。**新しい値を上げる前に、既にある名前を見せるための一覧。**
      *
-     * 同じ事柄に別名の slot を作られると、どちらを引いても片方しか出てこない台帳になる。
+     * 同じ事柄に別名の slot を作られると、どちらを引いても片方しか出てこない DB になる。
      * 検索では防げない — 別名は別名として素直に当たるので、書く側に既存の名前を見せるしかない。
      */
     const currentBeliefs = (limit = 50) =>
@@ -360,22 +360,22 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
      *
      * **2文字以下は FTS では引けない**(trigram は3文字窓)。日本語は「会議」「予定」「金額」のように
      * 常用語の多くが2文字なので、ここで空を返すと「無いのか引けないのか分からない」状態になる。
-     * その帯だけ LIKE の素朴な走査に落とす(events は個人の台帳規模で、走査しても実用上問題ない)。
+     * その帯だけ LIKE の素朴な走査に落とす(events は個人の DB 規模で、走査しても実用上問題ない)。
      *
      * 並びは **bm25 の関連度**。`at DESC` にすると「一致した中の新着順」でしかなくなり、
-     * 心拍が毎回書く長い自己言及が"新しい"というだけで上位を占めて、探している事実を押し下げる。
+     * tick が毎回書く長い自己言及が"新しい"というだけで上位を占めて、探している事実を押し下げる。
      *
      * 併せて層で重みを付ける。**同じ語を含むだけの独り言より、確定した1行のほうが常に役に立つ。**
-     * 台帳は平らだが、読む価値は平らではない。
+     * DB は平らだが、読む価値は平らではない。
      */
     /**
      * @param exclude 検索から外す event id。**今のターンの入力そのものを渡す**。
      *
-     * 入力は モデルを呼ぶ前に台帳へ落ちる(assistant.ts の useAgentStart)ので、これが無いと
+     * 入力は モデルを呼ぶ前に DB へ落ちる(assistant.ts の useAgentStart)ので、これが無いと
      * 自分が今受け取ったばかりの発言が検索に当たり、**過去の記録として読まれる**
      * (「さっき言われたこと」を「前にも言っていた」と言い出す)。
      * 自走側は `text: ""` で索引に入れないことで同じ穴を塞いでいるが、対話の入力は索引に要る
-     * (溜まらないと育たない)ので、除外は検索の側でやる。
+     * (溜まらないと引けるようにならない)ので、除外は検索の側でやる。
      */
     const recall = (query: string, limit = 10, exclude?: string) =>
       Effect.gen(function* () {
@@ -399,8 +399,8 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
 
         const rows =
           indexed.length === 0
-            ? // **内部結合**なのが要る: 索引を持たない行(心拍が自分に出したプロンプトなど)は
-              // 台帳には残すが検索には出さない。`text: ""` の意味を両経路で揃える。
+            ? // **内部結合**なのが要る: 索引を持たない行(tick が自分に出したプロンプトなど)は
+              // DB には残すが検索には出さない。`text: ""` の意味を両経路で揃える。
               yield* db.all(
                 `SELECT e.*, f.text AS text, ${IS_CURRENT} AS is_current FROM events e
                    JOIN events_fts f ON f.event_id = e.id
@@ -452,7 +452,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
         })
       })
 
-    const count = db.get("SELECT COUNT(*) n FROM events").pipe(Effect.map((r) => Number(r?.n ?? 0)))
+    const count = db.get("SELECT COUNT(*)n FROM events").pipe(Effect.map((r) => Number(r?.n ?? 0)))
 
     return {
       remember,

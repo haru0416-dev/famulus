@@ -23,8 +23,8 @@ const PROMPTS = ["SOUL.md", "src/agent/soul.ts", "src/agent/assistant.ts", "src/
 
 /** 道具ではないと分かっている語。**足すときは「なぜ道具ではないか」を書く。** */
 const NOT_TOOLS = new Set([
-  "oz", // CLI の名前(持ち主が端末で叩くもの)
-  "owner", // 台帳の列の値
+  "oz", // CLI の名前(ユーザーが端末で叩くもの)
+  "owner", // DB の列の値
   "commit", // Attention の関数(冷却の起点を進める側)。モデルからは呼べない
   "at", // 道具の引数名(`ran` に渡す、実際に回した時刻)
   "since", // keeper の引数名(この回の起点)。モデルには見えない

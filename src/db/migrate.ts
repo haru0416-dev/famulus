@@ -23,7 +23,7 @@ const columns = (d: DatabaseSync, table: string): string[] => {
  * belief_slots を bitemporal にする(slot ごと1行 → slot ごとに区間の並び)。
  *
  * 旧い行は「いつから真だったか」を持っていない。**そこを推測で埋めない。**
- * 台帳が知った時刻(`updated_at`)をそのまま `valid_from` に置く — これは
+ * DB が知った時刻(`updated_at`)をそのまま `valid_from` に置く — これは
  * 「いつからかは分からないが、遅くともこの時点では真だった」という、記録として正しい読み。
  */
 function bitemporalBeliefSlots(d: DatabaseSync): boolean {
@@ -54,7 +54,7 @@ function bitemporalBeliefSlots(d: DatabaseSync): boolean {
 /**
  * ledger に cache_write を足す。
  *
- * 入力トークンは3つに割れて返るのに、台帳は2つしか持っていなかった。落ちていたのは
+ * 入力トークンは3つに割れて返るのに、DB は2つしか持っていなかった。落ちていたのは
  * `cache_creation_input_tokens` で、ここが素の `input_tokens` を桁で上回る。
  * これが無いと `in_tok` を「入力」として読んだ人が実際よりはるかに小さい値を見る。
  * 既存行は当時の値が復元できないので 0 のまま置く(**推測で埋めない**)。
@@ -72,7 +72,7 @@ function ledgerCacheWrite(d: DatabaseSync): boolean {
  *
  * 既存行の `last_run_at` は NULL のまま置く。**「まだ一度も回していない」と読むのが記録として正しい**
  * — 回した跡はどこにも残っていないので、`opened_at` や `last_activity_at` で埋めると
- * 回していないものを回したことにする。NULL は最初の心拍で1回だけ机に載り、そこから冷却が始まる。
+ * 回していないものを回したことにする。NULL は最初の tick で1回だけプロンプトに載り、そこから冷却が始まる。
  */
 function watchlistFiring(d: DatabaseSync): boolean {
   const cols = columns(d, "watchlist")
@@ -85,12 +85,12 @@ function watchlistFiring(d: DatabaseSync): boolean {
 }
 
 /**
- * 読み書きする側の無い卓を落とす(docs/adr/0007)。
+ * 読み書きする側の無いテーブルを落とす(docs/adr/0007)。
  *
- * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、卓は残り続ける。
+ * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、テーブルは残り続ける。
  * 残ると `.schema` を読んだ側が「その仕組みが在る」と読む — 消したい理由がそれなので、実物も落とす。
  *
- * **空のときだけ落とす。** 行があるなら、それは想定と違うことが起きている印で、
+ * **空のときだけ落とす。** 行があるなら、それは想定と違うことが起きている兆候で、
  * ここで消してよいものではない。名前を返さないので、残ったことは表に出ない。
  */
 const DROPPED = [
@@ -106,7 +106,7 @@ function dropUnusedTables(d: DatabaseSync): string[] {
   const gone: string[] = []
   for (const t of DROPPED) {
     if (columns(d, t).length === 0) continue
-    const row = d.prepare(`SELECT count(*) AS n FROM ${t}`).get() as { n: number } | undefined
+    const row = d.prepare(`SELECT count(*)AS n FROM ${t}`).get() as { n: number } | undefined
     if ((row?.n ?? 0) > 0) continue
     d.exec(`DROP TABLE ${t}`)
     gone.push(t)

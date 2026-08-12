@@ -1,16 +1,16 @@
 /**
- * 持ち主とやり取りする口。**こちらから行ける唯一の経路であり、向こうから返ってくる唯一の経路。**
+ * ユーザーとやり取りする経路。**こちらから行ける唯一の経路であり、向こうから返ってくる唯一の経路。**
  *
- * 記録に書くだけのものは、持ち主が `oz recall` を打つまで誰も読まない。取りに来させる形は、
+ * 記録に書くだけのものは、ユーザーが `oz recall` を打つまで誰も読まない。取りに来させる形は、
  * 取りに来なくなった日に全部止まる。押す側を持っていないと、調べたことは溜まるだけで届かない。
  *
  * 出し先は tailnet の中に閉じた ntfy(`tailscale serve --https=8443` の先)。
- * ufw は開けていないので、本文は持ち主の端末以外には届かない。
+ * ufw は開けていないので、本文はユーザーの端末以外には届かない。
  *
  * 返りは別トピックで受ける。**同じトピックに混ぜない** — 出したものが自分の受信箱に戻ってきて、
- * 自分の発言を持ち主の発言として取り込む輪ができる。
+ * 自分の発言をユーザーの発言として取り込む輪ができる。
  *
- * 設定が無ければ**黙って何もしない**。通知の口が塞がっていることで心拍を止めない
+ * 設定が無ければ**黙って何もしない**。通知の経路が塞がっていることで tick を止めない
  * — 届かないより、動かないほうが困る。
  */
 import { Effect } from "effect"
@@ -32,11 +32,11 @@ const inTopic = (): string | undefined => process.env.OPEN_ZERO_NTFY_TOPIC_IN
  */
 const publicUrl = (): string | undefined => process.env.OPEN_ZERO_NTFY_PUBLIC_URL
 
-/** 通知に付ける押し戻し。押すと `reply` が持ち主の発言として受信箱に入る。 */
+/** 通知に付ける押し戻し。押すと `reply` がユーザーの発言として受信箱に入る。 */
 export interface Action {
   /** ボタンの文字。ロック画面に並ぶので短く。 */
   readonly label: string
-  /** 押されたときに受信箱へ入る文。次の心拍がこれを持ち主の発言として読む。 */
+  /** 押されたときに受信箱へ入る文。次の tick がこれをユーザーの発言として読む。 */
   readonly reply: string
 }
 
@@ -58,7 +58,7 @@ export interface Inbound {
   readonly text: string
 }
 
-/** ヘッダに日本語を載せると符号化が要るので、JSON の発行口を使う。 */
+/** ヘッダに日本語を載せると符号化が要るので、JSON の発行形式を使う。 */
 const body = (topic: string, p: Push) => ({
   topic,
   title: p.title,
@@ -70,7 +70,7 @@ const body = (topic: string, p: Push) => ({
 
 /**
  * 押し戻しを ntfy の action に組み立てる。**押すと受信箱に発行する http action** にしてある
- * — ntfy 以外に口を開けずに済み、返りの経路が1本で済む。
+ * — ntfy 以外に受信の経路を増やさずに済み、返りの経路が1本で済む。
  * 受信トピックか外向き URL が無ければボタンごと落とす。
  */
 const buttons = (actions: readonly Action[] | undefined) => {
@@ -112,11 +112,11 @@ export class Notify extends Effect.Service<Notify>()("Notify", {
       }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
     /**
-     * 受信箱を覗く。`since` は前回読んだ最後の id。**常駐して待たない** — 心拍が起きたときに
+     * 受信箱を覗く。`since` は前回読んだ最後の id。**常駐して待たない** — tick が起きたときに
      * 溜まっているぶんを引くだけにしてある。待ち受けを増やすと落ちたときに黙って死ぬ経路が1本増える。
      *
      * 取れなければ空。**「届いていない」と「受信箱が壊れている」を呼ぶ側に区別させない**
-     * — どちらの場合も、心拍がやることは変わらない。
+     * — どちらの場合も、tick がやることは変わらない。
      */
     const inbox = (since: string): Effect.Effect<readonly Inbound[]> =>
       Effect.gen(function* () {

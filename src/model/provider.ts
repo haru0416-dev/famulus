@@ -70,7 +70,7 @@ function model(id: string, name: string, contextWindow: number, maxTokens: numbe
  *
  * 認証は ChatGPT の OAuth(`~/.codex/auth.json`、auth_mode=chatgpt)。API キーではないので
  * 限界費用 0 の前提は Claude 側と変わらない。ただし**枠は別**で、`quotaCooldown` が見ているのは
- * Claude の使用率だけ。GPT 側を焚いても今のところ統治には映らない。
+ * Claude の使用率だけ。GPT 側を回しても今のところ統治には映らない。
  */
 const GPT_CONTEXT = 272_000
 
@@ -83,7 +83,7 @@ const MODELS: readonly Model<typeof API>[] = [
   model("gpt-5.6-terra", "GPT-5.6 Terra (ChatGPT, via rmod)", GPT_CONTEXT, 64_000),
   model("gpt-5.6-luna", "GPT-5.6 Luna (ChatGPT, via rmod)", GPT_CONTEXT, 32_000),
   // `-web` は**外を見に行ける経路**(rmod のサーバ側 web_search)。上流に渡る id は接尾辞を外したもので、
-  // 台帳にはこの id のまま残る — 外に出た呼び出しを後から数えるための印(claude-cli.ts の isWebModel)。
+  // DB にはこの id のまま残る — 外に出た呼び出しを後から数えるための目印(claude-cli.ts の isWebModel)。
   model("gpt-5.6-luna-web", "GPT-5.6 Luna + web 検索 (via rmod)", GPT_CONTEXT, 32_000),
   model("gpt-5.6-sol-web", "GPT-5.6 Sol + web 検索 (via rmod)", GPT_CONTEXT, 64_000),
 ]
@@ -188,7 +188,7 @@ function normalizeToolName(raw: string | undefined, context: PiContext): string 
  * 内側の claude が提出用の名前をネイティブに呼んで CLI に弾かれ、そのまま「使えなかった」と
  * 手ぶらで戻ってくることがある。
  * 判定に使うのは CLI が流した tool_use_error だけで、応答の文面は読まない —
- * 「ツールが無い」と書いてあるかどうかで決めると、正しく諦めた回まで焚き直す。
+ * 「ツールが無い」と書いてあるかどうかで決めると、正しく諦めた回までやり直す。
  */
 export function needsResubmit(
   hasTools: boolean,
@@ -217,7 +217,7 @@ function emptyUsage(): Usage {
 
 /**
  * この経路がどちらの枠を食うか。**プロセス単位で決まる**。
- * 心拍(src/tick.ts)は systemd から別プロセスで起きるので、環境変数で仕切るのが素直で嘘が無い
+ * tick(src/tick.ts)は systemd から別プロセスで起きるので、環境変数で仕切るのが素直で嘘が無い
  * (1プロセスの中で対話と自走が混ざることがない、という事実をそのまま型ではなく配置で表している)。
  */
 // **読み込み時ではなく呼び出し時に見る**。const にすると import の順序が意味を持ってしまい、
@@ -239,7 +239,7 @@ async function gate(model: string): Promise<void> {
       const gov = yield* Governance
       yield* gov.precheck({
         meter: "quota",
-        // **pool はモデルで決まる**(GPT を焚いても Claude の窓は閉じない、逆も)。
+        // **pool はモデルで決まる**(GPT を回しても Claude の窓は閉じない、逆も)。
         pool: poolForModel(model),
         model,
         at: nowIso(),
@@ -254,9 +254,9 @@ async function gate(model: string): Promise<void> {
 }
 
 /**
- * 会計と枠記帳。**Flue 経路と Runner 経路が同じ台帳に載る**ようにしてある。
+ * 会計と枠の計上。**Flue 経路と Runner 経路が同じ DB に載る**ようにしてある。
  * ここを飛ばすと ledger が空のままになり、日次 run 数の歯止め(ledger を数える)が永久に効かない。
- * 記帳の失敗で応答そのものを落とすのは割に合わないので、失敗は握って進む。
+ * 記録の失敗で応答そのものを落とすのは割に合わないので、失敗は握って進む。
  */
 async function account(model: string, result: Awaited<ReturnType<typeof callClaude>>): Promise<void> {
   const at = nowIso()
@@ -368,7 +368,7 @@ function stream(m: Model<string>, context: PiContext, options?: StreamOptions) {
                 },
               }),
         })
-        // 会計・枠記帳。1回のモデル呼び出しにつき1行(取り直した分も別行で残す)。
+        // 会計・枠の計上。1回のモデル呼び出しにつき1行(取り直した分も別行で残す)。
         await account(m.id, r)
         return r
       }

@@ -1,5 +1,5 @@
 /**
- * governance サービス。モデルを呼ぶ前の関門を層に分けて順に見る。
+ * governance サービス。モデルを呼ぶ前の検査を層に分けて順に見る。
  *
  * 拒否は `{ ok: false, layer, detail }` のような直和ではなく**拒否ごとに別タグの失敗**にしてある。
  * 直和だと呼び出し側が拒否を無視しても型が通るが、失敗チャネルに載っていれば
@@ -37,9 +37,9 @@ export interface QuotaState {
 export interface BudgetConfig {
   readonly dailyRuns: number
   /**
-   * そのうち自走(心拍)に使ってよい上限。**対話を飢えさせないための仕切り**。
+   * そのうち自走(tick)に使ってよい上限。**対話を飢えさせないための仕切り**。
    * 自走を入れると走行回数を決めるのが人間ではなくタイマーになるので、
-   * 全体上限だけだと「気づいたら心拍が枠を食い切っていて、話しかけたら止まっている」が起きる。
+   * 全体上限だけだと「気づいたら tick が枠を食い切っていて、話しかけたら止まっている」が起きる。
    */
   readonly autonomousRuns: number
   readonly dailyUsd: number
@@ -56,13 +56,13 @@ const envInt = (key: string, fallback: number): number => {
  *
  * **`dailyRuns` は予算ではなく暴走の歯止め**。1回ごとに課金されるなら run 数が金額の代理になるが、
  * 定額枠ではならない(USD 上限が無意味なのと同じ理由 — precheck の 4 番を見よ)。
- * 定額枠でも無料ではなく、消えているのは金ではなく**持ち主自身の Claude の枠**で、
+ * 定額枠でも無料ではなく、消えているのは金ではなく**ユーザー自身の Claude の枠**で、
  * それを測るのは run 数ではなく `quotaCooldown`(実際の使用率)。run 数は
  * 「同じことを無限に繰り返している」を止めるための上限として、実運用より十分高く置く。
  */
 export const BUDGET: BudgetConfig = {
   dailyRuns: envInt("OPEN_ZERO_DAILY_RUNS", 2000),
-  // 割って投げる心拍は1回で 20 run 使う(子の1ターンも1行として数えるため)。docs/adr/0011。
+  // 割って投げる tick は1回で 20 run 使う(子の1ターンも1行として数えるため)。docs/adr/0011。
   autonomousRuns: envInt("OPEN_ZERO_AUTONOMOUS_RUNS", 500),
   dailyUsd: envInt("OPEN_ZERO_DAILY_USD", 20),
   monthlyUsd: envInt("OPEN_ZERO_MONTHLY_USD", 200),
@@ -71,7 +71,7 @@ export const BUDGET: BudgetConfig = {
 /** どちらの経路の run か。自走は別枠で数える。 */
 export type Lane = "interactive" | "autonomous"
 
-/** 自走 run の記帳 role。日次の自走枠はこの role の行を数える。 */
+/** 自走 run の記録 role。日次の自走枠はこの role の行を数える。 */
 export const AUTONOMOUS_ROLE = "autonomous"
 
 /** 使用率がこれ以上なら枯渇の手前として扱い、窓が明けるまで避ける(残りは朝会のために取っておく)。 */
@@ -119,7 +119,7 @@ export interface PrecheckOptions {
   readonly at: string
   readonly nowMs: number
   readonly hasPricing?: (model: string) => boolean
-  /** 既定は対話。自走(心拍)は別枠を追加で見る。 */
+  /** 既定は対話。自走(tick)は別枠を追加で見る。 */
   readonly lane?: Lane
 }
 
@@ -160,7 +160,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         return state
       })
 
-    /** run の結果に載ってきた枠シグナルを記帳する。健全なら既存状態を消す。 */
+    /** run の結果に載ってきた枠シグナルを記録する。健全なら既存状態を消す。 */
     const noteQuota = (signal: QuotaSignal, at: string, nowMs: number) =>
       Effect.gen(function* () {
         const strained =
@@ -200,7 +200,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
           )
         }
 
-        // 3. 日次 run 数 — 暴走の歯止め。境界は**持ち主の1日**(core/time.ts)。
+        // 3. 日次 run 数 — 暴走の歯止め。境界は**ユーザーの1日**(core/time.ts)。
         // UTC で切ると日本時間の朝9時に枠が戻る。
         //
         // **halt は立てない。** 1回ごとに課金される前提なら上限に当たること自体が
@@ -209,7 +209,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         // **対話まで含めた全停止**として残る(3b の自走枠で halt を立てないのと同じ判断)。
         const day = dayRange(opts.at)
         const row = yield* db.get(
-          "SELECT COUNT(*) n FROM ledger WHERE role IS NOT NULL AND at >= ? AND at < ?",
+          "SELECT COUNT(*)n FROM ledger WHERE role IS NOT NULL AND at >= ?AND at < ?",
           day.startIso,
           day.endIso,
         )
@@ -218,12 +218,12 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
           return yield* Effect.fail(new DailyRunLimit({ count: runs, limit: config.dailyRuns }))
         }
 
-        // 3b. 自走枠 — 心拍が対話の取り分まで食べないように仕切る。
+        // 3b. 自走枠 — tick が対話の取り分まで食べないように仕切る。
         // **ここでは halt を立てない**。自走が枠を使い切っただけで人との対話まで止めるのは行き過ぎで、
         // 翌日には自動で戻るべきもの(halt は人が解除するまで明けない)。
         if (opts.lane === "autonomous") {
           const a = yield* db.get(
-            "SELECT COUNT(*) n FROM ledger WHERE role = ? AND at >= ? AND at < ?",
+            "SELECT COUNT(*)n FROM ledger WHERE role = ?AND at >= ?AND at < ?",
             AUTONOMOUS_ROLE,
             day.startIso,
             day.endIso,
@@ -237,15 +237,15 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         // ここから下は USD 会計だけ。定額枠(quota)の run は限界費用 0 なので USD 上限に意味が無い。
         if (opts.meter !== "usd") return
 
-        // 4. 単価未登録の事前拒否(記帳されずに USD 上限を素通りする穴を塞ぐ)。
+        // 4. 単価未登録の事前拒否(記録されずに USD 上限を素通りする穴を塞ぐ)。
         if (opts.hasPricing && !opts.hasPricing(opts.model)) {
           return yield* Effect.fail(new UnpricedModel({ model: opts.model }))
         }
 
-        // 5. 日次/月次 USD(記帳済み usd の合算)。
+        // 5. 日次/月次 USD(記録済み usd の合算)。
         const month = monthRange(opts.at)
         const d = yield* db.get(
-          "SELECT COALESCE(SUM(usd),0) s FROM ledger WHERE at >= ? AND at < ?",
+          "SELECT COALESCE(SUM(usd),0)s FROM ledger WHERE at >= ?AND at < ?",
           day.startIso,
           day.endIso,
         )
@@ -255,7 +255,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
           return yield* Effect.fail(new Halt({ reason: detail, at: opts.at }))
         }
         const m = yield* db.get(
-          "SELECT COALESCE(SUM(usd),0) s FROM ledger WHERE at >= ? AND at < ?",
+          "SELECT COALESCE(SUM(usd),0)s FROM ledger WHERE at >= ?AND at < ?",
           month.startIso,
           month.endIso,
         )

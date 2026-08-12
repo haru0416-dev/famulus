@@ -3,8 +3,8 @@
 --   1. 正本は events。belief_slots / events_fts は projection(silent overwrite 禁止)。
 --   2. 時刻は ISO-8601 UTC 'Z'(src/core/brand.ts の IsoUtc)。TEXT で保持。
 --   3. bool は INTEGER 0/1。直列化値は JSON を TEXT で保持し json_valid で守る。
---   4. **ここに在るのは、読み書きする側が実際に書かれている卓だけ。**
---      先取りで置いた卓は「その仕組みが在る」と読まれてしまうので置かない(docs/adr/0007)。
+--   4. **ここに在るのは、読み書きする側が実際に書かれているテーブルだけ。**
+--      先取りで置いたテーブルは「その仕組みが在る」と読まれてしまうので置かない(docs/adr/0007)。
 -- 実行時の PRAGMA(接続時に適用、ここには書かない): journal_mode=WAL, foreign_keys=ON, busy_timeout。
 
 -- スキーマ版管理(移植・マイグレーションの土台)。
@@ -48,7 +48,7 @@ WHEN
   OR NEW.provenance IS NOT OLD.provenance
   OR NEW.content IS NOT NULL              -- 許すのは content := NULL(抹消)だけ
 BEGIN
-  SELECT RAISE(ABORT, 'events is append-only: only content:=NULL (redact) is permitted');
+  SELECT RAISE(ABORT, 'events is append-only: only content:=NULL (redact)is permitted');
 END;
 
 -- ============================================================================
@@ -56,9 +56,9 @@ END;
 --    どちらも events から再構築可能。正本ではない。
 -- ============================================================================
 -- **時間軸を2本持つ**(bitemporal)。1本だと「6月に転職が終わっていたことを8月に知った」が書けず、
--- 「8月に転職が終わった」としか記録できない。事実がいつ真だったかと、台帳がいつ知ったかは別の話。
---   valid time       … valid_from / valid_until。**その事実がいつ真だったか**
---   transaction time … updated_at。**台帳がいつそれを知ったか**
+-- 「8月に転職が終わった」としか記録できない。事実がいつ真だったかと、DB がいつ知ったかは別の話。
+--   valid time       …valid_from / valid_until。**その事実がいつ真だったか**
+--   transaction time …updated_at。**DB がいつそれを知ったか**
 -- 上書きはしない。古い値は valid_until を打って閉じるだけで、行としては残る
 -- (Zep/Graphiti の edge invalidation、SCD Type 2、複式簿記の赤伝と同じ形)。
 -- projection なので events から再構築できる。正本ではない。
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS belief_slots (
   value        TEXT CHECK (value IS NULL OR json_valid(value)),  -- **この区間の**値(JsonValue)
   exposure     TEXT NOT NULL CHECK (exposure IN ('private','public')),
   resolved_from TEXT NOT NULL REFERENCES events(id),  -- どの belief event が確立したか(訂正鮮度)
-  updated_at   TEXT NOT NULL,                         -- transaction time: 台帳が知った時刻(IsoUtc)
+  updated_at   TEXT NOT NULL,                         -- transaction time: DB が知った時刻(IsoUtc)
   valid_from   TEXT NOT NULL,                         -- valid time: いつからそうなったか
   valid_until  TEXT,                                  -- いつまでそうだったか。**NULL = 今も真**
   -- 何がこの値を終わらせたか。STALE(arXiv 2605.06527)の言う「無効化の出所を残す」。
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS belief_slots (
 -- slot ごとに「今の値」は高々1本。**この部分 UNIQUE がバイテンポラルの不変条件そのもの**で、
 -- 区間を閉じ忘れたまま次を入れると、ここで落ちる(黙って2つの現在値が並ばない)。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_belief_current
-  ON belief_slots (slot) WHERE valid_until IS NULL;
+  ON belief_slots (slot)WHERE valid_until IS NULL;
 CREATE INDEX IF NOT EXISTS idx_belief_history
   ON belief_slots (slot, valid_from, valid_until);
 
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS proposals (
   kind           TEXT NOT NULL CHECK (kind IN
                    ('reminder','research','plan','vault-update','outbound-draft','skill-promote','skill-retire')),
   created_at     TEXT NOT NULL,                       -- IsoUtc
-  -- 裁可カード面
+  -- 承認カード面
   summary        TEXT NOT NULL,
   assessment     TEXT NOT NULL,
   ask            TEXT NOT NULL,
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS proposals (
   -- 実行内容(JSON に直列化して丸ごと持つ)
   payload        TEXT NOT NULL CHECK (json_valid(payload)),
   provenance     TEXT NOT NULL CHECK (json_valid(provenance)),
-  -- **executing / executed / failed には今どの経路からも到達しない。** 実行器が無い(docs/adr/0007)。
+  -- **executing / executed / failed には今どの経路からも到達しない。** 実行の仕組みが無い(docs/adr/0007)。
   status         TEXT NOT NULL CHECK (status IN
                    ('proposed','approved','deferred','denied','expired','executing','executed','failed')),
   deferred_until TEXT,                                -- later 時のみ(IsoUtc)
@@ -122,8 +122,8 @@ CREATE TABLE IF NOT EXISTS proposals (
   deny_reason    TEXT                                 -- deny 時。次の生成へ還流(学習信号)
 );
 CREATE INDEX IF NOT EXISTS idx_proposals_status  ON proposals(status);
-CREATE INDEX IF NOT EXISTS idx_proposals_expires ON proposals(expires_at) WHERE status = 'proposed';
-CREATE INDEX IF NOT EXISTS idx_proposals_deferred ON proposals(deferred_until) WHERE status = 'deferred';
+CREATE INDEX IF NOT EXISTS idx_proposals_expires ON proposals(expires_at)WHERE status = 'proposed';
+CREATE INDEX IF NOT EXISTS idx_proposals_deferred ON proposals(deferred_until)WHERE status = 'deferred';
 
 -- 承認記録。誰が・いつ・何を(hash)承認したかを独立レコードに。
 -- **照合する側はまだ無い。** 承認後に payload が差し替わっていないかを後から見られるように残すだけ。
@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS approvals (
 CREATE INDEX IF NOT EXISTS idx_approvals_proposal ON approvals(proposal_id);
 
 -- ============================================================================
--- 4. ledger(全 run・全 turn の記帳。unpriced も 0円にしない)
+-- 4. ledger(全 run・全 turn の記録。unpriced も 0円にしない)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS ledger (
   id           TEXT PRIMARY KEY,
@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS ledger (
   cache_write  INTEGER NOT NULL DEFAULT 0,            -- 初回に書いた分(定義文・system はここに入る)
   usd          REAL NOT NULL DEFAULT 0,
   unpriced     INTEGER NOT NULL DEFAULT 0 CHECK (unpriced IN (0,1)),  -- 単価不明を黙って0円にしない
-  proposal_id  TEXT REFERENCES proposals(id),         -- 実行記帳のとき
+  proposal_id  TEXT REFERENCES proposals(id),         -- 実行記録のとき
   summary      TEXT,                                  -- 秘密リダクション済みの要約
   provenance   TEXT CHECK (provenance IS NULL OR json_valid(provenance))
 );
@@ -168,7 +168,7 @@ CREATE INDEX IF NOT EXISTS idx_ledger_kind ON ledger(kind, at);
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS watchlist (
   id              TEXT PRIMARY KEY,
-  subject         TEXT NOT NULL,                      -- 何を見張っているか(例: 'A社 契約更新の返信')
+  subject         TEXT NOT NULL,                      -- 何を watch しているか(例: 'A社 契約更新の返信')
   opened_at       TEXT NOT NULL,                      -- IsoUtc
   last_activity_at TEXT NOT NULL,                     -- 最終動き(滞留日数の起点)
   next_move_owner TEXT NOT NULL CHECK (next_move_owner IN ('human','counterparty','famulus')),
@@ -176,15 +176,15 @@ CREATE TABLE IF NOT EXISTS watchlist (
   source_ref      TEXT CHECK (source_ref IS NULL OR json_valid(source_ref)),  -- SourceRef
   -- 発火の記録。**登録した時刻ではなく、実際に一周回した時刻で冷却を数える。**
   last_run_at     TEXT,                               -- 最後に回した時刻。NULL = 一度も回していない
-  cooldown_hours  REAL NOT NULL DEFAULT 24,           -- 回した後、次に机へ載せるまで
+  cooldown_hours  REAL NOT NULL DEFAULT 24,           -- 回した後、次にプロンプトに載せるまで
   run_count       INTEGER NOT NULL DEFAULT 0,         -- 通算で何周回したか
   last_result     TEXT                                -- 前回回して分かったこと。次の回に渡す
 );
-CREATE INDEX IF NOT EXISTS idx_watchlist_open ON watchlist(status) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_watchlist_open ON watchlist(status)WHERE status = 'open';
 
 -- ============================================================================
--- 6. questions(問いレジストリ。belief と question を分けるための独立台帳)
---    「未 probe の仮説」を belief に昇格させないための独立台帳。
+-- 6. questions(問いレジストリ。belief と question を分けるための独立 DB)
+--    「未 probe の仮説」を belief に昇格させないための独立 DB。
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS questions (
   id                TEXT PRIMARY KEY,
@@ -196,11 +196,11 @@ CREATE TABLE IF NOT EXISTS questions (
   answer            TEXT,
   resolved_event_id TEXT REFERENCES events(id)        -- answered 時、根拠 event
 );
-CREATE INDEX IF NOT EXISTS idx_questions_open ON questions(status) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_questions_open ON questions(status)WHERE status = 'open';
 
 -- ============================================================================
--- 7. decisions(裁可の生ログ。deny 還流・提示から親指までの所要)
---     集計した重みの卓は持たない。要るときに events から数える(docs/adr/0007)。
+-- 7. decisions(承認の生ログ。deny 還流・提示から親指までの所要)
+--     集計した重みのテーブルは持たない。要るときに events から数える(docs/adr/0007)。
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS decisions (
   id          TEXT PRIMARY KEY,
@@ -208,7 +208,7 @@ CREATE TABLE IF NOT EXISTS decisions (
   at          TEXT NOT NULL,                          -- IsoUtc
   verb        TEXT NOT NULL CHECK (verb IN ('approve','edit','deny','later','expire')),
   kind        TEXT NOT NULL,                          -- 提案 kind(飽和検知を kind 別に見る)
-  latency_ms  INTEGER                                 -- 提示→裁可の所要(親指の速さ = UX 指標)
+  latency_ms  INTEGER                                 -- 提示→承認の所要(親指の速さ = UX 指標)
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_at ON decisions(at);
 

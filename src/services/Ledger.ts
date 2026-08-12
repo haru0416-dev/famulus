@@ -1,5 +1,5 @@
 /**
- * 記帳。全 run を1行残す。**単価不明を黙って 0 円にしない**(`unpriced=1` で立てる)。
+ * 記録。全 run を1行残す。**単価不明を黙って 0 円にしない**(`unpriced=1` で立てる)。
  *
  * 定額枠(meter="quota")の run は `usd=0` かつ `unpriced=0` で入れる。
  * ここが従量経路との決定的な違いで、「値段が分からないから0」ではなく「限界費用が本当に0」。
@@ -79,20 +79,20 @@ export class Ledger extends Effect.Service<Ledger>()("Ledger", {
     /** 今日の使用状況。CLI と朝会が同じ数字を見るための1点。 */
     const today = (at: string = nowIso()) =>
       Effect.gen(function* () {
-        // 見出しも集計も**持ち主の1日**で切る(core/time.ts)。
+        // 見出しも集計も**ユーザーの1日**で切る(core/time.ts)。
         const day = dayRange(at)
         const month = monthRange(at)
         const r = yield* db.get(
           // 入力は3列の和で出す。in_tok だけを「入力」として出すと、桁の違う数字が表に出る。
-          `SELECT COUNT(*) runs, COALESCE(SUM(usd),0) usd, COALESCE(SUM(unpriced),0) unpriced,
-                  COALESCE(SUM(in_tok + cache_read + cache_write),0) in_tok,
-                  COALESCE(SUM(out_tok),0) out_tok
-             FROM ledger WHERE role IS NOT NULL AND at >= ? AND at < ?`,
+          `SELECT COUNT(*)runs, COALESCE(SUM(usd),0)usd, COALESCE(SUM(unpriced),0)unpriced,
+                  COALESCE(SUM(in_tok + cache_read + cache_write),0)in_tok,
+                  COALESCE(SUM(out_tok),0)out_tok
+             FROM ledger WHERE role IS NOT NULL AND at >= ?AND at < ?`,
           day.startIso,
           day.endIso,
         )
         const m = yield* db.get(
-          "SELECT COALESCE(SUM(usd),0) usd FROM ledger WHERE at >= ? AND at < ?",
+          "SELECT COALESCE(SUM(usd),0)usd FROM ledger WHERE at >= ?AND at < ?",
           month.startIso,
           month.endIso,
         )

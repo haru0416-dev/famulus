@@ -1,12 +1,12 @@
 /**
- * 日付境界。**持ち主の1日**で数える。
+ * 日付境界。**ユーザーの1日**で数える。
  *
  * 記録そのものは UTC で持つのが正しいが、**上限が切り替わる瞬間を UTC にすると
  * 日本時間の朝9時に日次枠がリセットされる**。「今日はあと何回使えるか」を人が判断する量なので、
  * 境界は人の1日に合わせる。
  *
  * 保存形式は変えない(`at` は ISO UTC のまま)。範囲を JS 側で instant に直して
- * `at >= ? AND at < ?` で引く。文字列 substr より DST にも強く、索引も効く。
+ * `at >= ?AND at < ?` で引く。文字列 substr より DST にも強く、索引も効く。
  */
 
 /** 集計に使うタイムゾーン。既定はこのホストの設定。 */
@@ -53,7 +53,7 @@ function offsetMs(ms: number): number {
   return asUtc - (ms - (ms % 1000))
 }
 
-/** ローカルの (y, m, d) 00:00 が指す instant。DST の切り替え日でもずれないよう2回で収束させる。 */
+/** ローカルの (y, m, d)00:00 が指す instant。DST の切り替え日でもずれないよう2回で収束させる。 */
 function startOfLocalDate(year: number, month: number, day: number): number {
   const wall = Date.UTC(year, month - 1, day)
   let t = wall - offsetMs(wall)
@@ -64,13 +64,13 @@ function startOfLocalDate(year: number, month: number, day: number): number {
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z")
 
 /**
- * 記録に押す「いま」。**保存は常に UTC** で、持ち主の時計に直すのは見せるときだけ(`localStamp`)。
+ * 記録に押す「いま」。**保存は常に UTC** で、ユーザーの時計に直すのは見せるときだけ(`localStamp`)。
  * 前は同じ1行が10ファイルに写してあった。書式が1か所だけずれると、
- * `at >= ? AND at < ?` の文字列比較が静かに外れる。
+ * `at >= ?AND at < ?` の文字列比較が静かに外れる。
  */
 export const nowIso = (): string => iso(Date.now())
 
-/** 持ち主の時計での時刻(0〜23)。1日1回のものを「いつ出すか」で使う。 */
+/** ユーザーの時計での時刻(0〜23)。1日1回のものを「いつ出すか」で使う。 */
 export const localHour = (atIso: string): number => localParts(Date.parse(atIso)).hour
 
 export interface Range {
@@ -95,17 +95,17 @@ export function dayRange(atIso: string): Range {
 }
 
 /**
- * 記録の時刻を**持ち主の時計で**見せる。保存は UTC のまま、見せ方だけ変える。
+ * 記録の時刻を**ユーザーの時計で**見せる。保存は UTC のまま、見せ方だけ変える。
  *
- * **これが無いと、夜中の記録が前日として読まれる。** 台帳は UTC で持つので、日本時間の 0〜9時に
- * 起きたことは前日の日付で入る。モデルには別口で今日の日付が渡るため、
+ * **これが無いと、夜中の記録が前日として読まれる。** DB は UTC で持つので、日本時間の 0〜9時に
+ * 起きたことは前日の日付で入る。モデルには別経路で今日の日付が渡るため、
  * 帯を付けずに時刻だけ見せると数十分前の出来事が昨日の午後になる。
  *
  * @param withTime false なら 'YYYY-MM-DD' まで。
  */
 export function localStamp(atIso: string, withTime = true): string {
   const ms = Date.parse(atIso)
-  if (Number.isNaN(ms)) return atIso // 解釈できない値は触らずに返す(台帳の古い行を壊さない)
+  if (Number.isNaN(ms)) return atIso // 解釈できない値は触らずに返す(DB の古い行を壊さない)
   const p = localParts(ms)
   const date = `${p.year}-${pad(p.month)}-${pad(p.day)}`
   return withTime ? `${date} ${pad(p.hour)}:${pad(p.minute)}` : date

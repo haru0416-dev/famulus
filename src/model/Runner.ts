@@ -1,5 +1,5 @@
 /**
- * 統治された推論の唯一の入口。**precheck → 実行 → 枠記帳 → 会計** を1本にまとめる。
+ * 統治された推論の唯一の入口。**precheck → 実行 → 枠の計上 → 会計** を1本にまとめる。
  *
  * governance・runner・ledger を別々に呼ぶ形にすると「ゲートを通さずに走らせる経路」が
  * 型の上で常に可能になる。ここでは Runner を通す以外にモデルへ届く道を作らない。
@@ -21,9 +21,9 @@ export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
 /**
  * 役割→モデル。品質が製品そのものになる役だけ opus に置く。
  *
- * **作業系は GPT(rmod 経由)へ逃がす。** 減っているのは金ではなく持ち主の Claude の枠なので、
- * 量で焚く役をそちらから外すと、声に使える枠が残る。ChatGPT 側も OAuth の定額枠で、
- * `poolForModel` が別の pool に数えるため、片方を焚いてももう片方は止まらない。
+ * **作業系は GPT(rmod 経由)へ逃がす。** 減っているのは金ではなくユーザーの Claude の枠なので、
+ * 量を使う役をそちらから外すと、対話に使える枠が残る。ChatGPT 側も OAuth の定額枠で、
+ * `poolForModel` が別の pool に数えるため、片方を回してももう片方は止まらない。
  *
  * **この表で今このプロセスから実際に呼ばれるのは `scout` / `reviewer` / `structurer` だけ**
  * (src/services/Intake.ts の取り込み、src/agent/assistant.ts の `draft`、src/agent/keeper.ts の締め)。
@@ -41,11 +41,11 @@ export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
 export const ROLE_MODEL: Record<Role, string> = {
   briefing: "claude-opus-5", // 朝会執筆
   dialogue: "claude-opus-5", // 対話(声。下げない)
-  // 締めの記録係(keeper)。**持ち主の発言から引用を写す仕事**で、写せなかったものはコードが落とす
-  // (keepGrounded)。scout と同じ性質なので同じ側に置く。持ち主が話した回ごとに1回通るため、
-  // ここを opus にすると声と同じ枠を毎回2回叩くことになる。
+  // 締めの keeper(keeper)。**ユーザーの発言から引用を写す仕事**で、写せなかったものはコードが落とす
+  // (keepGrounded)。scout と同じ性質なので同じ側に置く。ユーザーが話した回ごとに1回通るため、
+  // ここを opus にすると対話と同じ枠を毎回2回叩くことになる。
   structurer: "gpt-5.6-luna",
-  reviewer: "claude-opus-5", // 下書きの精査(assistant の draft)。**外に出る前の最後の関門**
+  reviewer: "claude-opus-5", // 下書きの精査(assistant の draft)。**外に出る前の最後の検査**
   scout: "gpt-5.6-luna", // 取り込みの構造化。**引用を写す役**(Intake.ingest)
   classify: "gpt-5.6-luna", // 分類(呼び手はまだ無い)
 }
@@ -99,7 +99,7 @@ export interface RunnerApi {
 export class Runner extends Context.Tag("Runner")<Runner, RunnerApi>() {}
 
 /**
- * precheck → run → 枠記帳 → 会計 の共通骨格。実行本体だけ差し替えられるようにしてある
+ * precheck → run → 枠の計上 → 会計 の共通骨格。実行本体だけ差し替えられるようにしてある
  * (これが ClaudeCli 層と Stub 層の唯一の違い)。
  */
 const makeRunner = (
@@ -213,7 +213,7 @@ export interface StubReply {
 
 /**
  * テスト用の層。**API キーも `claude` バイナリも要らない**。
- * 台本を順に返し、尽きたら最後を繰り返す。precheck・記帳・枠冷却は本番と同じ骨格を通るので、
+ * 台本を順に返し、尽きたら最後を繰り返す。precheck・記録・枠冷却は本番と同じ骨格を通るので、
  * 「ゲートが実際に効くか」をモデルを呼ばずに端から端まで確かめられる。
  */
 export const RunnerStub = (script: readonly StubReply[]) => {

@@ -8,7 +8,7 @@
  *
  * **1回あたりの入力は CLI 側の前置きで数千 tok から始まる。**`--system-prompt` を渡しても消えない。
  * `--bare` なら落とせるが、あれは認証を `ANTHROPIC_API_KEY` に固定するので**サブスクで走らせる
- * 目的と両立しない**。逃がせるのは呼ぶ回数のほうで、量で焚く役を rmod に置いてあるのはこの差による。
+ * 目的と両立しない**。逃がせるのは呼ぶ回数のほうで、量を使う役を rmod に置いてあるのはこの差による。
  *
  * `--json-schema` は StructuredOutput という**ツール**として実装されているため、
  * `--tools ""` と併用すると拒否されて `structured_output` が null になる。
@@ -20,7 +20,7 @@
  *  - 5xx は CLI 内で3分ほどリトライする。in-band には何も出ないので掴めるのは timeout だけ。
  *  - `rate_limit_event` が in-band で流れる(`{status, resetsAt, rateLimitType}`)= 枠ブレーカーの入力。
  *  - **`usage.input_tokens` だけ見ると嘘。**前置きは `cache_creation_input_tokens`(初回)と
- *    `cache_read_input_tokens`(2回目以降)へ回る。台帳もこの3つを別々に持つ。
+ *    `cache_read_input_tokens`(2回目以降)へ回る。DB もこの3つを別々に持つ。
  */
 import { spawn } from "node:child_process"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
@@ -32,7 +32,7 @@ export const CLAUDE_POOL = "claude-max"
 
 /**
  * GPT 経路の枠。**Claude と同じ pool に混ぜてはいけない。**
- * `quotaCooldown` は `quota:<pool>` を鍵に持つので、混ぜると「GPT を焚いたから Claude を止める」
+ * `quotaCooldown` は `quota:<pool>` を鍵に持つので、混ぜると「GPT を回したから Claude を止める」
  * (逆も)が起きる。減っているものが違う以上、数える場所も分ける。
  */
 export const RMOD_POOL = "chatgpt-rmod"
@@ -72,7 +72,7 @@ export function sanitizedEnv(source: NodeJS.ProcessEnv = process.env): Record<st
 /**
  * `claude` の置き場所。**PATH に頼らない**。
  * systemd --user から起動すると子に渡る PATH は systemd の既定で `~/.local/bin` を含まないので、
- * PATH 解決にすると心拍からの呼び出しだけが `Executable not found` で落ちる。
+ * PATH 解決にすると tick からの呼び出しだけが `Executable not found` で落ちる。
  * フォールバックがあるとその失敗は表に出ず、片方の枠だけで走り続ける。
  */
 const BIN_CANDIDATES = [".local/bin/claude", ".claude/local/claude", ".bun/bin/claude"]
@@ -116,15 +116,15 @@ export function resolveRmodBin(explicit?: string, env: NodeJS.ProcessEnv = proce
 export const isGptModel = (model: string): boolean => model.startsWith("gpt-")
 
 /**
- * 外を見に行ける経路の印。**能力をモデル id が持つ**ようにしてある。
+ * 外を見に行ける経路の目印。**能力をモデル id が持つ**ようにしてある。
  *
  * こうしておくと、呼ぶ側(Runner の役割表・useSubagent の model)は id を選ぶだけでよく、
- * 「検索を許すかどうか」の分岐がフラグとして各所に散らない。台帳にもこの id のまま残るので、
+ * 「検索を許すかどうか」の分岐がフラグとして各所に散らない。DB にもこの id のまま残るので、
  * **外に出た呼び出しは後から数えられる**(`SELECT ... WHERE model LIKE '%-web'`)。
  */
 const WEB_SUFFIX = "-web"
 export const isWebModel = (model: string): boolean => model.endsWith(WEB_SUFFIX)
-/** 上流に渡す本当のモデル id。`-web` は open-zero 側の印なので、そのままでは通らない。 */
+/** 上流に渡す本当のモデル id。`-web` は open-zero 側の目印なので、そのままでは通らない。 */
 export const baseModel = (model: string): string =>
   isWebModel(model) ? model.slice(0, -WEB_SUFFIX.length) : model
 
@@ -132,7 +132,7 @@ export const baseModel = (model: string): string =>
  * 検索結果に混ざる引用マーカーを落とす。
  *
  * Responses の hosted web_search は本文に私用領域の制御文字を差し込んでくる
- * (U+E200 で開き、U+E202 で区切り、U+E201 で閉じる)。これを残したまま台帳に入れると、
+ * (U+E200 で開き、U+E202 で区切り、U+E201 で閉じる)。これを残したまま DB に入れると、
  * 全文検索の索引にも見えない文字が混ざり、表示は `citeturn2search2` のような塊になる。
  */
 export const stripCitationMarkers = (s: string): string =>
@@ -224,7 +224,7 @@ export interface ClaudeCallResult {
   readonly quota?: QuotaSignal
   readonly model: string
   /**
-   * 内側の claude が、提出用の一覧に載っている名前を**ネイティブのツールとして呼ぼうとして弾かれた**印。
+   * 内側の claude が、提出用の一覧に載っている名前を**ネイティブのツールとして呼ぼうとして弾かれた**跡。
    * CLI が `No such tool available: <名前>`(tengu_tool_use_error)を stream に流す。
    * これが立って toolCalls が空なら、それは「道具が無い」のではなく**呼び方を間違えた**だけ。
    */
@@ -291,7 +291,7 @@ export async function callClaude(opts: ClaudeCallOptions): Promise<ClaudeCallRes
     "--setting-sources",
     "",
     // **MCP を子に持ち込ませない。** `--mcp-config` を渡さずにこれだけ立てると、
-    // 他の設定源にある MCP サーバは全部無視される。持ち主のシェルから起きた場合に
+    // 他の設定源にある MCP サーバは全部無視される。ユーザーのシェルから起きた場合に
     // 「親の Claude Code に繋がっている連携」が子の一覧に混ざるのを塞ぐ。
     "--strict-mcp-config",
     "--no-session-persistence",
@@ -306,7 +306,7 @@ export async function callClaude(opts: ClaudeCallOptions): Promise<ClaudeCallRes
   const env = sanitizedEnv()
   env.PATH = [dirname(bin), env.PATH].filter(Boolean).join(":")
   // **外向きは既定で閉じる。** 明示的に "none" を入れるのが要点で、未設定のままにすると
-  // 持ち主のシェルに RMOD_HOSTED_TOOLS が立っているだけで、内部作業の全部が外に出られてしまう。
+  // ユーザーのシェルに RMOD_HOSTED_TOOLS が立っているだけで、内部作業の全部が外に出られてしまう。
   env.RMOD_HOSTED_TOOLS = isWebModel(opts.model) ? "web_search" : "none"
 
   const child = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] })

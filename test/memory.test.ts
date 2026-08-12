@@ -1,5 +1,5 @@
 /**
- * 台帳の検査。**append-only が SQL 側で強制されている**ことを、アプリを経由せずに直接叩いて確かめる。
+ * DB の検査。**append-only が SQL 側で強制されている**ことを、アプリを経由せずに直接叩いて確かめる。
  * (アプリが行儀よく書いているだけなら、別経路が一つ増えた時点で不変条件は消える)
  */
 import assert from "node:assert/strict"
@@ -50,7 +50,7 @@ test("events の UPDATE は content := NULL(抹消)だけ通る", async () => {
     const e = await h.fail(
       Effect.gen(function* () {
         const db = yield* Db
-        yield* db.run("UPDATE events SET content = ? WHERE id = ?", '"別の話"', id)
+        yield* db.run("UPDATE events SET content = ?WHERE id = ?", '"別の話"', id)
       }),
     )
     assert.equal((e as { _tag: string })._tag, "DbFailed")
@@ -96,7 +96,7 @@ test("recall は trigram で部分一致する(日本語が分かち書きなし
 })
 
 /**
- * 入力はモデルを呼ぶ前に台帳へ落ちる。除外しないと**自分が今言われたことを過去の記録として読む**
+ * 入力はモデルを呼ぶ前に DB へ落ちる。除外しないと**自分が今言われたことを過去の記録として読む**
  * — 「最近疲れてる」の 49 秒後に「それ昨日も言ってる」と返す事故が実際に起きた。
  * 索引に入れない手(自走側の `text: ""`)は対話の入力には使えないので、検索の側で外す。
  */
@@ -107,7 +107,7 @@ test("recall は今のターンの入力を過去の記録として返さない"
         const mem = yield* Memory
         // 本当に過去にある記録。同じ本文だと dedupe が畳むので、別の言い回しにする。
         yield* mem.remember({ kind: "observe", content: { said: "先週から疲れが抜けない" } })
-        // 今このターンで受け取った入力。台帳には残るが、検索の根拠にしてはいけない。
+        // 今このターンで受け取った入力。DB には残るが、検索の根拠にしてはいけない。
         const now = yield* mem.remember({
           kind: "observe",
           content: { said: "最近ちょっと疲れてるんだよね" },
@@ -183,7 +183,7 @@ test("抹消したイベントは recall に出てこない", async () => {
 // ── 置き方(何が上位に来るか)の検査。
 //
 // 検索が「一致するか」だけを見ていた頃は、並びが `at DESC` = **一致した中の新着順**だった。
-// 心拍は起きるたびに長い自己言及を書くので、新しさだけで独り言が上位を占め、
+// tick は起きるたびに長い自己言及を書くので、新しさだけで独り言が上位を占め、
 // 探している事実を押し下げていた(`recall 予約` の上位10件のうち5件が自分の独り言)。
 // 引けるかどうかと同じくらい、**何が先に見えるか**が記憶の質を決める。
 
@@ -193,7 +193,7 @@ test("recall は関連度と層で並ぶ — 新しいだけの独り言が確�
       Effect.gen(function* () {
         const mem = yield* Memory
         yield* mem.believe("dentist.next_appt", "歯医者の次回予約は8月12日18:00")
-        // 心拍が後から書く記録。**新しくて語も多く含む**が、探しものとしては役に立たない。
+        // tick が後から書く記録。**新しくて語も多く含む**が、探しものとしては役に立たない。
         yield* mem.remember({
           source: "system",
           content: { tick: "起動した。次回予約の件は動かない。次回予約について今は判断しない。" },
@@ -207,18 +207,18 @@ test("recall は関連度と層で並ぶ — 新しいだけの独り言が確�
   })
 })
 
-test("索引に入れなかった行は検索に出ない — 台帳には残る", async () => {
+test("索引に入れなかった行は検索に出ない — DB には残る", async () => {
   await withHarness(async (h) => {
     const out = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
         yield* mem.remember({ content: "面談は9時から" })
-        // 心拍が自分に出したプロンプト。監査には要るが、検索では邪魔にしかならない。
+        // tick が自分に出したプロンプト。監査には要るが、検索では邪魔にしかならない。
         yield* mem.remember({ source: "system", content: { tickPrompt: "面談 面談 面談" }, text: "" })
         return { hits: yield* mem.recall("面談"), all: yield* mem.count }
       }),
     )
-    assert.equal(out.all, 2, "台帳(正本)からは消さない")
+    assert.equal(out.all, 2, "DB(正本)からは消さない")
     // 2文字クエリは LIKE 経路。**両経路とも索引を持つ行だけ**を返すのでないと意味が揃わない。
     assert.equal(out.hits.length, 1, "検索に出るのは索引を持つ1件だけ")
     assert.match(String(out.hits[0]?.text), /9時/)
@@ -235,7 +235,7 @@ test("上書きした belief の旧版は『確定』として前に出ない", 
         return yield* mem.recall("次回予約")
       }),
     )
-    assert.equal(rows.length, 2, "旧版が台帳から消えるわけではない")
+    assert.equal(rows.length, 2, "旧版が DB から消えるわけではない")
     assert.equal(rows[0]?.is_current, 1, "今の値が先頭")
     assert.match(String(rows[0]?.text), /8月13日/)
     assert.equal(rows[1]?.is_current, 0)
@@ -267,7 +267,7 @@ test("recall の描画は JSON の殻を出さず、どの層の1行かを示す
         return renderRecall(yield* mem.recall("歯医者"))
       }),
     )
-    // 殻は保存の都合であって中身ではない。読む相手(モデル・持ち主)に見せない。
+    // 殻は保存の都合であって中身ではない。読む相手(モデル・ユーザー)に見せない。
     assert.doesNotMatch(out, /\{"said"/)
     assert.match(out, /owner\]/)
     assert.match(out, /歯医者は8月12日/)
@@ -324,8 +324,8 @@ test("belief は上書きされるが、履歴は events に残る", async () =>
 /**
  * 事実が変わったとき、**古い値は消えず、区間として閉じる**。
  *
- * ここが上書きだった頃は「転職活動中だった時期」そのものが台帳から消えていた。
- * 今の値しか持たない台帳は現在形の問いにしか答えられず、
+ * ここが上書きだった頃は「転職活動中だった時期」そのものが DB から消えていた。
+ * 今の値しか持たない DB は現在形の問いにしか答えられず、
  * 「去年の今ごろ何をしていたか」を聞かれると何も言えない。
  */
 test("値が変わっても古い区間は残る — 今の値と、あの時点の値が両方引ける", async () => {
@@ -338,7 +338,7 @@ test("値が変わっても古い区間は残る — 今の値と、あの時点
         })
         yield* mem.believe("work.job_search", "終わった。今の会社に残る", {
           validFrom: "2026-09-01T00:00:00Z",
-          reason: "持ち主が転職の終了を明言した",
+          reason: "ユーザーが転職の終了を明言した",
         })
         return {
           now: yield* mem.belief("work.job_search"),
@@ -354,7 +354,7 @@ test("値が変わっても古い区間は残る — 今の値と、あの時点
     // **過去形の問いに答えられる。** 上書きしていたらここは今の値を返してしまう。
     assert.match(String(out.past?.value), /転職活動中/)
     assert.equal(out.past?.validUntil, "2026-09-01T00:00:00Z", "古い区間はそこで閉じている")
-    assert.equal(out.past?.invalidatedReason, "持ち主が転職の終了を明言した", "なぜ閉じたかが残る")
+    assert.equal(out.past?.invalidatedReason, "ユーザーが転職の終了を明言した", "なぜ閉じたかが残る")
 
     assert.equal(out.history.length, 2)
   })
@@ -469,7 +469,7 @@ test("空白で区切った複数語は AND で絞る(フレーズ一致にし�
       Effect.gen(function* () {
         const mem = yield* Memory
         yield* mem.remember({ content: "エージェントの記憶をどう置くか。メモリの設計を考え直した。" })
-        yield* mem.remember({ content: "エージェントの自走。心拍を systemd timer で回す。" })
+        yield* mem.remember({ content: "エージェントの自走。tick を systemd timer で回す。" })
         return {
           both: yield* mem.recall("エージェント メモリ"),
           one: yield* mem.recall("エージェント"),

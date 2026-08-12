@@ -1,5 +1,5 @@
 /**
- * 検索の口の検査。**外へ出ない。** 見ているのは「相手の応答をどう読むか」だけ。
+ * 検索の検査。**外へ出ない。** 見ているのは「相手の応答をどう読むか」だけ。
  *
  * 実際に引けることは probe で外へ出して測った(2026-08-11: 既定の先へ同時に出して
  * 0.8〜1.3秒で 14〜16件)。ここで押さえたいのは、その測定では通らない側 —
@@ -134,7 +134,7 @@ test("stackoverflow — unix 秒を ISO に直し、解決済みかを出す", (
   assert.match(hits[1]?.note ?? "", /未解決/)
 })
 
-test("wikipedia — 一致箇所の印を落とし、curid で開ける URL にする", () => {
+test("wikipedia — 一致箇所のマーカーを落とし、curid で開ける URL にする", () => {
   const hits = parse("wikipedia", {
     query: {
       search: [
@@ -232,7 +232,7 @@ test("SearXNG の応答を読む — 索引の数と要約が入る", () => {
         publishedDate: "2025-03-04T00:00:00",
         score: 3.5,
       },
-      // 日付を出さない索引が混ざる。1つだけが拾った頁も、そう分かる形で出す。
+      // 日付を出さない索引が混ざる。1つだけが拾ったページも、そう分かる形で出す。
       { url: "https://effect.website/", title: "Effect", content: "", engines: ["seznam"] },
       // 題か URL が欠けた項は落とす(並べても開けない)。
       { url: "https://example.com/x", engines: ["gmx"] },
@@ -245,7 +245,7 @@ test("SearXNG の応答を読む — 索引の数と要約が入る", () => {
   assert.equal(hits?.[1]?.note, "1索引")
   assert.equal(hits?.[1]?.at, undefined)
   // **SearXNG の日付には時間帯が付かない。** `Z` も `+09:00` も無い `2025-03-04T00:00:00` が来る。
-  // これを持ち主の時刻として読むと 2025-03-03T15:00Z になり、持ち主の時計へ戻すと元の日に戻る。
+  // これをユーザーの時刻として読むと 2025-03-03T15:00Z になり、ユーザーの時計へ戻すと元の日に戻る。
   // UTC として読むと逆に、夕方以降の記事が翌日としてずれる。**見せる日を文字列と一致させる**ほうを取る。
   assert.equal(hits?.[0]?.at, "2025-03-03T15:00:00.000Z")
   assert.equal(renderHits([{ source: "web", hits: hits ?? [] }]).includes("2025-03-04"), true)
@@ -386,7 +386,7 @@ test("回数制限に当たった先は、解けるまで叩かない", async ()
     const first = await searchWeb("Effect", { where: ["qiita"] })
     assert.equal(calls, 1)
     assert.match(first[0]?.failed ?? "", /回数制限に当たった/)
-    // 解除時刻は持ち主の時計で見せる。
+    // 解除時刻はユーザーの時計で見せる。
     assert.match(first[0]?.failed ?? "", /\d{4}-\d{2}-\d{2} \d{2}:\d{2} まで/)
 
     const second = await searchWeb("別の語", { where: ["qiita"] })
@@ -402,19 +402,19 @@ test("見せる形 — 先ごとに分け、同じ URL は最初の1つだけ残
     {
       source: "zenn",
       hits: [
-        { title: "同じ頁", url: "https://example.com/a", by: "haru", at: "2026-08-10T15:52:00Z" },
-        { title: "別の頁", url: "https://example.com/b", note: "♡7" },
+        { title: "同じページ", url: "https://example.com/a", by: "haru", at: "2026-08-10T15:52:00Z" },
+        { title: "別のページ", url: "https://example.com/b", note: "♡7" },
       ],
     },
-    { source: "hn", hits: [{ title: "同じ頁", url: "https://example.com/a" }] },
+    { source: "hn", hits: [{ title: "同じページ", url: "https://example.com/a" }] },
     { source: "qiita", hits: [] },
     { source: "web", hits: [], failed: "BRAVE_API_KEY が無いので引けない" },
   ])
   assert.match(text, /## zenn\(2件\)/)
-  // 日付は持ち主の時計。UTC のまま出すと夜中の記事が前日として読まれる。
+  // 日付はユーザーの時計。UTC のまま出すと夜中の記事が前日として読まれる。
   assert.match(text, /haru \/ 2026-08-11/)
   assert.match(text, /## hn\(1件\)/)
-  assert.match(text, /- 同じ頁 — zenn にも同じものが出た/)
+  assert.match(text, /- 同じページ — zenn にも同じものが出た/)
   // 重なった項は URL を繰り返さない(1回だけ出る)。
   assert.equal(text.split("https://example.com/a").length - 1, 1)
   assert.match(text, /## qiita — 0件/)
@@ -447,7 +447,7 @@ test("x — site:x.com は実装が付ける。呼ぶ側が書いた site: と�
   // 呼ぶ側の `site:zenn.dev` は落ちている。残ると 2つの site: で 0 件になる。
   assert.ok(!q.includes("zenn.dev"), `別の site: が残っている: ${q}`)
   assert.ok(q.includes("schema"), `語が消えている: ${q}`)
-  // 自前の口なので、外向きの制限を免除する origin が付いている。
+  // 自前のサーバなので、外向きの制限を免除する origin が付いている。
   assert.ok(called[0]?.startsWith("http://127.0.0.1:8888/"), `SearXNG 以外へ出た: ${called[0]}`)
 })
 
@@ -549,13 +549,13 @@ test("x — 投稿でない項は落とす(site:x.com を守らない索引が�
     results: [
       { url: "https://x.com/youyuxi/status/1904855853037215958", title: "残る", content: "本文" },
       { url: "https://twitter.com/EffectTS_/status/1848719287013544194", title: "残る(旧ドメイン)" },
-      // 索引が `site:` を無視して返した、x.com ですらない頁。
+      // 索引が `site:` を無視して返した、x.com ですらないページ。
       { url: "https://vite.dev/guide/", title: "落ちる — 別のドメイン" },
       { url: "https://en.wikipedia.org/wiki/Vite", title: "落ちる — 別のドメイン" },
-      // x.com だが投稿の永久リンクではない。説明が無いか、案内頁。
-      { url: "https://x.com/?lang=ja", title: "落ちる — 入口の頁" },
+      // x.com だが投稿の永久リンクではない。説明が無いか、案内ページ。
+      { url: "https://x.com/?lang=ja", title: "落ちる — 入口のページ" },
       { url: "https://developer.x.com/", title: "落ちる — 別のホスト" },
-      { url: "https://x.com/YandR_CBS", title: "落ちる — 個人頁" },
+      { url: "https://x.com/YandR_CBS", title: "落ちる — 個人ページ" },
       { url: "https://x.com/i/trending/2032170876888850542", title: "落ちる — 永久リンクではない" },
       // ホスト名を装った URL を通さない。
       { url: "https://x.com.evil.test/haru/status/1", title: "落ちる — 別のホスト" },
@@ -599,13 +599,13 @@ test("x — 殻を拾った要約は外す。ただし題に中身が残って�
   assert.equal(hits[1]?.url, "https://x.com/youyuxi/status/3")
 })
 
-test("showhn — hn と同じ口に tags=show_hn を足すだけ(枠も鍵も増やさない)", async () => {
+test("showhn — hn と同じ API に tags=show_hn を足すだけ(枠も鍵も増やさない)", async () => {
   const called = await urlsFor("showhn", "AI agent", '{"hits":[]}')
   assert.equal(called.length, 1)
   const u = new URL(called[0] ?? "http://x/")
   assert.equal(u.host, "hn.algolia.com")
   assert.equal(u.searchParams.get("tags"), "show_hn")
-  // 新着順の口ではない。`search_by_date` にすると語が効かなくなる(`showhn` の注)。
+  // 新着順の API ではない。`search_by_date` にすると語が効かなくなる(`showhn` の注)。
   assert.equal(u.pathname, "/api/v1/search")
 })
 
@@ -711,7 +711,7 @@ test("仕事を探す語なら、web と並べて job も出す(置き換えな�
     // 媒体選びの調査(web)と募集そのもの(job)は別の問い。両方要る。
     assert.ok(
       called.some((u) => !u.includes("site%3Acrowdworks")),
-      "web の口を叩いていない",
+      "web の API を叩いていない",
     )
   } finally {
     globalThis.fetch = original
@@ -736,7 +736,7 @@ test("仕事と関係ない語では job を足さない", async () => {
   }
 })
 
-test("job — 媒体ごとに口を分けて引く", async () => {
+test("job — 媒体ごとに問い合わせを分けて引く", async () => {
   const called = await urlsFor("job", "React 週2", '{"results":[]}')
   // 1媒体ずつ投げる。`(site:a OR site:b)` は索引が潰す(`job` の注)。
   const qs = called.map((u) => new URL(u).searchParams)
@@ -748,7 +748,7 @@ test("job — 媒体ごとに口を分けて引く", async () => {
 
 test("job — 期間で絞らない(絞ると語が当たらなくなる)", async () => {
   // 週で絞ると「React フロントエンド 週1 リモート」の上位が経理・OCR校正になり、
-  // 募集頁かつ語が当たりかつ受付中は 2件 対 23件で絞りなしが上だった(`job` の注)。
+  // 募集ページかつ語が当たりかつ受付中は 2件 対 23件で絞りなしが上だった(`job` の注)。
   const called = await urlsFor("job", "React", '{"results":[]}')
   assert.equal(called.length, 3, `0件でも引き直さない: ${called.length}回`)
   assert.ok(
@@ -757,13 +757,17 @@ test("job — 期間で絞らない(絞ると語が当たらなくなる)", asyn
   )
 })
 
-test("job — 募集頁だけ残して、媒体ごとに新しい順に並べる", () => {
+test("job — 募集ページだけ残して、媒体ごとに新しい順に並べる", () => {
   const hits = parse("job", {
     results: [
       { url: "https://crowdworks.jp/public/jobs/13300000", title: "古いほう", content: "本文" },
       { url: "https://react.dev/", title: "site: を守らなかった索引の結果", content: "本文" },
       { url: "https://crowdworks.jp/public/jobs/13372848", title: "新しいほう", content: "本文" },
-      { url: "https://crowdworks.jp/public/jobs/13372848/apply", title: "募集頁ではない", content: "本文" },
+      {
+        url: "https://crowdworks.jp/public/jobs/13372848/apply",
+        title: "募集ページではない",
+        content: "本文",
+      },
       { url: "https://www.wantedly.com/projects/2526090", title: "別の媒体", content: "本文" },
       { url: "https://crowdworks.jp/public/jobs.rss", title: "一覧", content: "本文" },
     ],

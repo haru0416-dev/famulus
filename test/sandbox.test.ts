@@ -1,7 +1,7 @@
 /**
- * 走らせる口の検査。**通ることではなく、境界が外れないことを見る。**
+ * 走らせる手段の検査。**通ることではなく、境界が外れないことを見る。**
  *
- * 実際に器が動くかどうかは docker を立てて確かめた(そちらはここでは回さない —
+ * 実際にコンテナが動くかどうかは docker を立てて確かめた(そちらはここでは回さない —
  * 検査に docker の生死を持ち込むと、境界の壊れとホストの都合が同じ赤で出る)。
  * ここに残すのは、モデルが書いた文字列がそのまま境界を広げうる2か所:
  * 作業場の名前と、docker に渡す引数。
@@ -60,12 +60,12 @@ test("既定では外に出られない。net を渡したときだけ開く", (
   assert.equal(open[open.indexOf("--network") + 1], "bridge")
 })
 
-test("書けるのは作業場だけ。器は毎回捨てる", () => {
+test("書けるのは作業場だけ。コンテナは毎回捨てる", () => {
   const args = dockerArgs("echo hi", { workDir: "/tmp/w", name: "oz-run-test" })
   const mounts = args.filter((_, i) => args[i - 1] === "-v")
   assert.deepEqual(mounts, ["/tmp/w:/work"], "作業場以外が繋がっている")
-  assert.ok(args.includes("--rm"), "器が残ると走行のたびに溜まる")
-  // **持ち主の uid で走らせる。** root のままだと、器が作ったファイルを心拍が消せない。
+  assert.ok(args.includes("--rm"), "コンテナが残ると走行のたびに溜まる")
+  // **ユーザーの uid で走らせる。** root のままだと、コンテナが作ったファイルを tick が消せない。
   assert.equal(args[args.indexOf("--user") + 1], `${process.getuid?.()}:${process.getgid?.()}`)
 })
 

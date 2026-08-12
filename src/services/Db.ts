@@ -5,7 +5,7 @@
  * (DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)。不変条件を SQL 側に置いてあるので、
  * どのドライバから触っても同じように掛かる。
  *
- * **外に出る行為の冪等性は、いま担保されていない。** それ用の卓は作ってあったが読み書きする側が
+ * **外に出る行為の冪等性は、いま担保されていない。** それ用のテーブルは作ってあったが読み書きする側が
  * 一度も書かれなかったので落とした(docs/adr/0007)。予告→猶予→実行を作るときに改めて決める。
  *
  * Tag + Layer にしてあるのは**接続先を積み替えられるようにするため**。
@@ -57,7 +57,7 @@ export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed
             // **schema.sql より先**。旧い形を寄せてから `IF NOT EXISTS` を通す(src/db/migrate.ts)。
             migrate(d)
             d.exec(readFileSync(SCHEMA_PATH, "utf8"))
-            d.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)").run(
+            d.prepare("INSERT OR REPLACE INTO schema_meta (key, value)VALUES ('version', ?)").run(
               SCHEMA_VERSION,
             )
             return d
@@ -89,7 +89,7 @@ export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed
         )
 
       const setMeta = (key: string, value: string) =>
-        run("INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)", key, value)
+        run("INSERT OR REPLACE INTO schema_meta (key, value)VALUES (?, ?)", key, value)
 
       return { raw: db, all, get, run, meta, setMeta } satisfies DbApi
     }),

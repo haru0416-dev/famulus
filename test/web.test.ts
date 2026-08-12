@@ -79,7 +79,7 @@ test("HTML は本文だけにする(script の中身を資料として渡さな�
   assert.equal(toText(json, "application/json"), json)
 })
 
-test("日本語の頁は utf-8 とは限らない(Shift_JIS / EUC-JP を宣言どおり読む)", () => {
+test("日本語のページは utf-8 とは限らない(Shift_JIS / EUC-JP を宣言どおり読む)", () => {
   // 実測: 青空文庫(Shift_JIS)を utf-8 で読むと 12,000字中 7,734 字が置換文字になった。
   const sjis = Buffer.concat([
     Buffer.from('<html><head><meta charset="Shift_JIS"></head><body>', "latin1"),
@@ -109,7 +109,7 @@ test("読めない形式は本文を渡さない", () => {
 })
 
 test("本文の周りを落とす。ただし一番長い塊を採る", () => {
-  // 実測: 最初の article を採ると GitHub は 7,028字 → 1,895字、Qiita は 8,234字 → 86字に痩せた。
+  // 実測: 最初の article を採ると GitHub は 7,028字 → 1,895字、Qiita は 8,234字 → 86字まで減った。
   const html = `<html><body>
     <nav>ホーム 検索 ログイン 閉じる</nav>
     <article>読み込みに失敗しました</article>
@@ -123,9 +123,9 @@ test("本文の周りを落とす。ただし一番長い塊を採る", () => {
   assert.ok(!text.includes("ログイン"), "nav が落ちている")
 })
 
-test("main も article も無い頁は class/id で本文を選ぶ", () => {
+test("main も article も無いページは class/id で本文を選ぶ", () => {
   // 実測、実サイト16件: はてブ・価格.com はどちらも `<main>`/`<article>` を1つも
-  // 持たず、`<ul>` が 260 / 123 個あった。頁ごと使うと窓の頭を絞り込みメニューが食う。
+  // 持たず、`<ul>` が 260 / 123 個あった。ページごと使うと窓の頭を絞り込みメニューが食う。
   // はてブ 933 → 55字目 / 価格.com 3,239 → 217字目 / 食べログ 231 → 3字目。
   const noise = "絞り込み ".repeat(200)
   const html = `<html><body>
@@ -146,19 +146,19 @@ test("main も article も無い頁は class/id で本文を選ぶ", () => {
   assert.ok(t2.includes("引用"), "内側の div の閉じで切っていない")
   assert.ok(t2.includes("末尾の段"), "本文の最後まで残っている")
 
-  // 閉じないまま終わる頁がある。そこまでを本文として扱い、落とさない。
+  // 閉じないまま終わるページがある。そこまでを本文として扱い、落とさない。
   const unclosed = `<html><body><div class="content">${"閉じない本文。".repeat(200)}</body></html>`
   assert.ok(toText(unclosed, "text/html").includes("閉じない本文。"))
 
-  // **一般語だけで選ぶ。** サイト固有語を足すと、その頁でしか当たらない規則が増える。
+  // **一般語だけで選ぶ。** サイト固有語を足すと、そのページでしか当たらない規則が増える。
   const specific = `<html><body><div class="hotentry">${"独自の語。".repeat(200)}</div></body></html>`
-  assert.ok(toText(specific, "text/html").includes("独自の語。"), "選べなくても頁ごと返せば本文は残る")
+  assert.ok(toText(specific, "text/html").includes("独自の語。"), "選べなくてもページごと返せば本文は残る")
 })
 
-test("本文だけ切り出しても、どの頁かは残す", () => {
+test("本文だけ切り出しても、どのページかは残す", () => {
   // 実測: 塊を選ぶようにしたら Wikipedia 日本語版から「日本語 - Wikipedia」が、
   // はてブから「はてなブックマーク - 人気エントリー - テクノロジー」が先頭から消えた。
-  // 読み手は頁を並べて読むので、見出しが無いとどれの話か取り違える。
+  // 読み手はページを並べて読むので、見出しが無いとどれの話か取り違える。
   const html = `<html><head><title>日本語 - Wikipedia</title></head><body>
     <div class="mw-content-ltr">${"本文である。".repeat(60)}</div></body></html>`
   const text = toText(html, "text/html")
@@ -200,7 +200,7 @@ test("詰まる先には回り道を返す(実測した先だけ)", () => {
 
   // 2026-08-10 の広い巡回(75件)で足した6件。どれも 200 で返るのに本文が 10〜50字しか無く、
   // 代わりの出口を実測で確かめた先だけ載せる。
-  // 法令の条文: 頁の HTML は 800B・本文 10字。API は同じ番号で XML 431KB(条文そのもの)。
+  // 法令の条文: ページの HTML は 800B・本文 10字。API は同じ番号で XML 431KB(条文そのもの)。
   assert.match(
     detour("https://laws.e-gov.go.jp/law/322AC0000000049") ?? "",
     /laws\.e-gov\.go\.jp\/api\/1\/lawdata\/322AC0000000049/,
@@ -247,7 +247,7 @@ test("詰まる先には回り道を返す(実測した先だけ)", () => {
     detour("https://github.com/search?q=effect") ?? "",
     /api\.github\.com\/search\/repositories\?q=effect/,
   )
-  // 書き手の頁: zenn.dev/mizchi は 105字、/feed は 8,638字で 20 件。
+  // 書き手のページ: zenn.dev/mizchi は 105字、/feed は 8,638字で 20 件。
   assert.match(detour("https://zenn.dev/mizchi") ?? "", /zenn\.dev\/mizchi\/feed/)
   assert.match(detour("https://qiita.com/mizchi") ?? "", /qiita\.com\/mizchi\/feed/)
 
@@ -256,7 +256,7 @@ test("詰まる先には回り道を返す(実測した先だけ)", () => {
   // Issue 一覧(番号無し)は別物なので出さない。
   assert.equal(detour("https://github.com/Effect-TS/effect/issues"), undefined)
   assert.equal(detour("https://www.youtube.com/results?search_query=a"), undefined)
-  // 記事そのものは JS 頁ではない。一覧だけを振り替える。
+  // 記事そのものは JS ページではない。一覧だけを振り替える。
   assert.equal(detour("https://zenn.dev/someone/articles/abc123"), undefined)
   assert.equal(detour("https://qiita.com/someone/items/abc123"), undefined)
   // 質問1件は 403 ではない(一覧だけが弾かれる)。
@@ -265,7 +265,7 @@ test("詰まる先には回り道を返す(実測した先だけ)", () => {
 
 test("そっくりなホスト名を本物と取り違えない", () => {
   // ホストの判定を `endsWith("qiita.com")` で書いていたので、`evilqiita.com` も当たっていた。
-  // 当たると何が起きるか: 別人の頁を読んでいるのに「qiita.com/x/feed を開け」と案内し、
+  // 当たると何が起きるか: 別人のページを読んでいるのに「qiita.com/x/feed を開け」と案内し、
   // 読み手はその先を本物の記事一覧として読む。ドットまで見て判定する。
   for (const host of ["evilqiita.com", "notgithub.com", "myreddit.com", "fake-note.com", "xarxiv.org"]) {
     assert.equal(detour(`https://${host}/someone`), undefined, host)
@@ -280,9 +280,9 @@ test("そっくりなホスト名を本物と取り違えない", () => {
 })
 
 test("切れた script を本文として渡さない", () => {
-  // 実測、YouTube の視聴頁: 400KB で切ると `<script>` の開き13に対し閉じ12。
+  // 実測、YouTube の視聴ページ: 400KB で切ると `<script>` の開き13に対し閉じ12。
   // 閉じない1つの中身がそのまま本文になり、返った 12,000字はすべて `ytcfg.set({...` の JS だった。
-  // 上限は 1.5MB にしたので**この頁では**起きなくなったが、それを超える頁では今も起きる。
+  // 上限は 1.5MB にしたので**このページでは**起きなくなったが、それを超えるページでは今も起きる。
   const html = `<html><body><main>${"本文である。".repeat(60)}</main><script>var a = {"k":"${"x".repeat(500)}"`
   const text = toText(html, "text/html")
   assert.ok(text.includes("本文である。"))
@@ -292,7 +292,7 @@ test("切れた script を本文として渡さない", () => {
   assert.ok(!toText(`<html><body><p>本文</p><!-- 途中で切れた注釈`, "text/html").includes("注釈"))
 })
 
-test("本文が組み上がらない頁でも、meta の題と説明は返す", () => {
+test("本文が組み上がらないページでも、meta の題と説明は返す", () => {
   // 実測: YouTube・ニコニコ・note・Bluesky・Mastodon は本文が 0〜50字しか無い。
   // og: と description を拾うと 67〜181字返る(ニコニコ 20 → 67 / note 36 → 181 / Bluesky 20 → 153)。
   const html = `<html><head><meta property="og:title" content="動画ランキング「総合」">
@@ -302,10 +302,10 @@ test("本文が組み上がらない頁でも、meta の題と説明は返す", 
   const text = toText(html, "text/html")
   assert.match(text, /動画ランキング「総合」/)
   assert.match(text, /ニコニコ動画の「総合」/)
-  // 同じ文が og: と description の両方に入っている頁が多い。二重に並べない。
+  // 同じ文が og: と description の両方に入っているページが多い。二重に並べない。
   assert.equal(text.match(/ニコニコ動画の「総合」/g)?.length, 1)
 
-  // **本文が取れている頁では触らない。** 拾った説明は本文の要約なので、並べると同じ話が二重になる。
+  // **本文が取れているページでは触らない。** 拾った説明は本文の要約なので、並べると同じ話が二重になる。
   const rich = `<html><head><meta name="description" content="これは要約です">
     </head><body><main>${"本文がある。".repeat(60)}</main></body></html>`
   assert.ok(!toText(rich, "text/html").includes("これは要約です"))
@@ -315,7 +315,7 @@ test("空白だけの行で枠を食わない(CR・全角空白・ゼロ幅も�
   // 実測、実サイト8件: 返した本文に占める空白行の割合は
   // GitHub 42% / PyPI 28% / はてブ 27% / 価格.com 21%。原因は2つあった。
   //  (1) タグを剥がした跡が「空白1つの行」として残り、`\n{3,}` の畳み込みに当たらない
-  //  (2) CRLF の頁は行末に `\r` が残るので、そもそも空白行として見えない(価格.com は先頭27行が "\r")
+  //  (2)CRLF のページは行末に `\r` が残るので、そもそも空白行として見えない(価格.com は先頭27行が "\r")
   const html = `<html><body><main>\r\n<div>見出し</div>\r\n<div> </div>\r\n<div>　</div>\r\n<div>​</div>\r\n<div></div>\r\n<div>本文${"あ".repeat(300)}</div>\r\n</main></body></html>`
   const text = toText(html, "text/html")
   assert.ok(!text.includes("\r"), "CR が残っていない")
@@ -403,12 +403,12 @@ test("新着の一覧は1件ずつに割る(見出しと日付を結び直す)",
   assert.match(at, /https:\/\/example\.com\/tag\/107/)
 
   // feed でない XHTML を新着一覧として組み直さない。
-  assert.equal(renderFeed("<html><body><p>ふつうの頁</p></body></html>"), undefined)
+  assert.equal(renderFeed("<html><body><p>ふつうのページ</p></body></html>"), undefined)
 })
 
 test("新着一覧から書き手を落とさない", () => {
   // 実測: Zenn のトピック feed は1件ごとに dc:creator を持っているのに拾っていなかった。
-  // 「記事と書き手を2本挙げて」に対し、役は書き手が無いものと見て記事頁を2つ余計に開き(+60秒)、
+  // 「記事と書き手を2本挙げて」に対し、役は書き手が無いものと見て記事ページを2つ余計に開き(+60秒)、
   // それでも分からず「取れなかった」と返した。答えは渡したバイト列の中にあった。
   const rss = `<rss xmlns:dc="http://purl.org/dc/elements/1.1/"><channel><title>Zennの「Rust」のフィード</title>
 <item><title><![CDATA[Rustのマクロの作り方]]></title><dc:creator><![CDATA[fits]]></dc:creator>
@@ -430,7 +430,7 @@ test("新着一覧から書き手を落とさない", () => {
 })
 
 test("同じ URL を続けて開いたら取りに行かず「さっき開いた」と返す", async () => {
-  // 実測: 1回の対話で外へ出た 18 回のうち 10 回が同じ registry の頁だった。
+  // 実測: 1回の対話で外へ出た 18 回のうち 10 回が同じ registry のページだった。
   const originalFetch = globalThis.fetch
   let hits = 0
   globalThis.fetch = (async () => {
@@ -450,7 +450,7 @@ test("同じ URL を続けて開いたら取りに行かず「さっき開いた
     assert.match(b.note ?? "", /3 秒前にも開いた/)
     assert.equal(a.note, undefined, "1回目には付けない")
 
-    // 期限が切れたら取り直す。**古い頁を永遠に返し続けない。**
+    // 期限が切れたら取り直す。**古いページを永遠に返し続けない。**
     const c = await fetchPage(url, { nowMs: t0 + 6 * 60_000 })
     assert.equal(hits, 2)
     assert.equal(c.note, undefined)
@@ -503,7 +503,7 @@ test("続きを読むのに取り直さない(全文を覚えて切り出す)", 
   }
 })
 
-test("大きい頁は窓で舐めず、語で当てる", () => {
+test("大きいページは窓で少しずつ読まず、語で当てる", () => {
   // 実測: 40万字の registry JSON を offset で 300,000→408,000 まで 12,000字刻みで
   // 10 ターン進めて空振りした(1ターンごとにモデル呼び出しが要るので約130秒)。
   const full = `${"x".repeat(50_000)}"3.22.1":"2026-07-30T04:29:21.637Z"${"y".repeat(50_000)}`
@@ -534,7 +534,7 @@ test("find は取りに行かず、覚えた全文の中を探す", async () => 
     const url = `https://example.com/reg-${Math.random().toString(36).slice(2)}`
     const t0 = 3_000_000
     const first = await fetchPage(url, { nowMs: t0 })
-    // 刻み始める前に、窓で舐めると何回かかるかを数字で見せる。
+    // 刻み始める前に、窓で読むと何回かかるかを数字で見せる。
     assert.match(first.note ?? "", /窓\(12000字\)で頭から読むと 4 回/)
     assert.match(first.note ?? "", /`find` に語を渡す/)
 
@@ -546,14 +546,14 @@ test("find は取りに行かず、覚えた全文の中を探す", async () => 
     const missing = await fetchPage(url, { find: "9.9.9", nowMs: t0 + 2_000 })
     assert.equal(hits, 1)
     assert.equal(missing.text, "")
-    assert.match(missing.note ?? "", /「9\.9\.9」はこの頁.*に無い/)
+    assert.match(missing.note ?? "", /「9\.9\.9」はこのページ.*に無い/)
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test("本文が頭 400KB より後ろにある頁も読む", async () => {
-  // 実測: JS で組み立てる頁は、人が読む文字を JS の後ろに置く。
+test("本文が頭 400KB より後ろにあるページも読む", async () => {
+  // 実測: JS で組み立てるページは、人が読む文字を JS の後ろに置く。
   // 東京都は `<title>` まで 400KB 以上あり、上限 400KB では 38字、上限を上げると 5,962字。
   // メルカリ 32→206字、YouTube 0→426字(`<title>` が 684,015 バイト目)。
   const originalFetch = globalThis.fetch
@@ -574,7 +574,7 @@ test("本文が頭 400KB より後ろにある頁も読む", async () => {
     assert.match(p.text, /お知らせ 令和8年の支援の取組。/, "400KB の JS の後ろにある本文が読めている")
     assert.match(p.text, /都庁総合ホームページ/, "同じく後ろにある題も読めている")
     assert.doesNotMatch(p.text, /var x=1/, "JS そのものは本文に混ぜない")
-    assert.equal(p.note, undefined, "読めた頁に「薄い」とは言わない")
+    assert.equal(p.note, undefined, "読めたページに「薄い」とは言わない")
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -595,7 +595,7 @@ test("上限で切ったときは、切ったと分かる言い方をする", as
       nowMs: 4_000_000,
     })
     assert.equal(p.text, "", "閉じない script は本文にしない")
-    assert.equal(p.truncated, true, "上限で切った頁は、全部は読めていないと伝える")
+    assert.equal(p.truncated, true, "上限で切ったページは、全部は読めていないと伝える")
     assert.match(p.note ?? "", /本文がほとんど無い/)
     assert.match(p.note ?? "", /頭 1500KB を読んだ範囲に本文が無かった/)
   } finally {
@@ -603,7 +603,7 @@ test("上限で切ったときは、切ったと分かる言い方をする", as
   }
 })
 
-test("読めている頁に「別を当たれ」と言わない", async () => {
+test("読めているページに「別を当たれ」と言わない", async () => {
   // 実測(86件の巡回): 一段の判定だと tenki.jp 1,719字・Yahoo 天気 1,954字・
   // JR東 運行情報 1,146字・みんかぶ 1,559字に「別の出典を当たったほうが早い」が付いた。
   // どれも目的の語は本文に入っていた。無いのと少ないのは別のことなので、言い方を分ける。

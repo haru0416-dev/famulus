@@ -1,8 +1,8 @@
 /**
  * 自走の検査。**「起きるべきときに起き、起きるべきでないときに起きない」だけを見る**。
  *
- * 心拍で怖いのは動かないことではなく、止まらないことのほう。
- * 自分の書き込みで自分を起こす / 解消しない理由で永久に焚く、の2つは実装を見ても気づきにくく、
+ * tick で怖いのは動かないことではなく、止まらないことのほう。
+ * 自分の書き込みで自分を起こす / 解消しない理由で永久に起こす、の2つは実装を見ても気づきにくく、
  * 気づくのは「一晩で枠を使い切っていた」ときになる。だからここで固定する。
  */
 import assert from "node:assert/strict"
@@ -59,7 +59,7 @@ test("自分が書いたもの(source=system)では起きない — 外から来
         const att = yield* Attention
         const mem = yield* Memory
         yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
-        // 心拍が自分の結果を残す。これで起きたら自家中毒。
+        // tick が自分の結果を残す。これで起きたら自家中毒。
         yield* mem.remember({ source: "system", content: { tick: "動いた" } })
       }),
     )
@@ -67,7 +67,7 @@ test("自分が書いたもの(source=system)では起きない — 外から来
     assert.equal(d.idle, true)
     assert.equal(d.newEvents.length, 0)
 
-    // 持ち主の入力なら、冷却の途中でも起きる。
+    // ユーザーの入力なら、冷却の途中でも起きる。
     await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
@@ -81,7 +81,7 @@ test("自分が書いたもの(source=system)では起きない — 外から来
   })
 })
 
-test("commit は心拍自身の書き込みも消費する(同じ入力で二度起きない)", async () => {
+test("commit は tick 自身の書き込みも消費する(同じ入力で二度起きない)", async () => {
   await withHarness(async (h) => {
     const before = await h.run(
       Effect.gen(function* () {
@@ -97,7 +97,7 @@ test("commit は心拍自身の書き込みも消費する(同じ入力で二度
       Effect.gen(function* () {
         const mem = yield* Memory
         const att = yield* Attention
-        // 心拍が応答を残してから消費位置を確定する。
+        // tick が応答を残してから消費位置を確定する。
         yield* mem.remember({ source: "system", content: { said: "見た" } })
         yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
         return yield* att.digest(T0 + hours(0.1))
@@ -108,7 +108,7 @@ test("commit は心拍自身の書き込みも消費する(同じ入力で二度
   })
 })
 
-test("自分が動く番の見張りは起こす理由になる — ただし冷却中は起きない", async () => {
+test("自分が動く番の watch は起こす理由になる — ただし冷却中は起きない", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -119,7 +119,7 @@ test("自分が動く番の見張りは起こす理由になる — ただし冷
     )
 
     const early = await h.run(digestAt(T0 + hours(ACTIVE_COOLDOWN_HOURS - 0.1)))
-    assert.equal(early.idle, true, "冷却中は同じ見張りで起きない")
+    assert.equal(early.idle, true, "冷却中は同じ watch で起きない")
 
     const cooled = await h.run(digestAt(T0 + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
     assert.equal(cooled.idle, false)
@@ -132,16 +132,16 @@ test("自分が動く番の見張りは起こす理由になる — ただし冷
  * 回しても静かにならない、を止める(docs/adr/0013)。
  *
  * `next_move_owner = 'famulus'` は**無条件で**滞留に入るので、`last_activity_at` を更新しても
- * 自分持ちの見張りは次の心拍でまた上がってくる。実際にそうなり、モデルは**最終走行時刻を
+ * 自分持ちの watch は次の tick でまた上がってくる。実際にそうなり、モデルは**最終走行時刻を
  * subject の文字列に書き込んで登録し直す**という回避をしていた(列が無いのでそうするしかない)。
  * 止めるのは経過日数ではなく、回した時刻と冷却。
  */
-test("一周回した見張りは、冷却が明けるまで机に載らない", async () => {
+test("一周回した watch は、冷却が明けるまでプロンプトに載らない", async () => {
   await withHarness(async (h) => {
     const id = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
-        const w = yield* att.watch("AI追跡: HN の新着を舐める", "famulus", {
+        const w = yield* att.watch("AI追跡: HN の新着を全部見る", "famulus", {
           at: "2026-08-08T09:00:00Z",
           cooldownHours: 24,
         })
@@ -168,12 +168,12 @@ test("一周回した見張りは、冷却が明けるまで机に載らない",
     const back = await h.run(digestAt(T0 + hours(26)))
     assert.equal(back.stalled.length, 1, "冷却が明ければまた上がる")
     assert.equal(back.stalled[0]?.run_count, 1)
-    // 前回の結果を渡さないと、毎回まっさらな状態で同じ一覧を舐め直すことになる。
+    // 前回の結果を渡さないと、毎回まっさらな状態で同じ一覧を読み直すことになる。
     assert.equal(back.stalled[0]?.last_result, "8/8 時点で新着に該当なし")
   })
 })
 
-test("何も出てこなかった回も『回した』— 空振りこそ次の心拍に伝える必要がある", async () => {
+test("何も出てこなかった回も『回した』— 空振りこそ次の tick に伝える必要がある", async () => {
   await withHarness(async (h) => {
     const id = await h.run(
       Effect.gen(function* () {
@@ -220,36 +220,36 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の�
 })
 
 /**
- * 後から記帳する道。**これが無いと記帳そのものが見送られる。**
+ * 後から記録する道。**これが無いと記録そのものが見送られる。**
  *
- * 数時間前に回したものを「今」で記帳すると、冷却がその分だけ後ろへずれる。実際に、
- * ずれるくらいなら呼ばないという判断が起き(端から端まで走らせた回で観測)、見張りは机に残った。
+ * 数時間前に回したものを「今」で記録すると、冷却がその分だけ後ろへずれる。実際に、
+ * ずれるくらいなら呼ばないという判断が起き(端から端まで走らせた回で観測)、watch はプロンプトに残った。
  */
-test("回した時刻を渡して後から記帳できる。先の時刻は取らない", async () => {
+test("回した時刻を渡して後から記録できる。先の時刻は取らない", async () => {
   await withHarness(async (h) => {
     const id = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
-        const w = yield* att.watch("朝に回した見張り", "famulus", { at: "2026-08-08T09:00:00Z" })
+        const w = yield* att.watch("朝に回した watch", "famulus", { at: "2026-08-08T09:00:00Z" })
         yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
         return w
       }),
     )
-    // 実際に回したのは 8/8 09:00。記帳はそのあと。
+    // 実際に回したのは 8/8 09:00。記録はそのあと。
     const rec = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
         return yield* att.ranWatch(id, "該当なし", "2026-08-08T09:00:00Z")
       }),
     )
-    assert.equal(rec.last_run_at, "2026-08-08T09:00:00Z", "記帳した時刻ではなく回した時刻")
+    assert.equal(rec.last_run_at, "2026-08-08T09:00:00Z", "記録した時刻ではなく回した時刻")
 
     const before = await h.run(digestAt(T0 + hours(23)))
     assert.equal(before.stalled.length, 0)
     const after = await h.run(digestAt(T0 + hours(25)))
-    assert.equal(after.stalled.length, 1, "冷却は回した時刻から数える(記帳の分だけ後ろへずれない)")
+    assert.equal(after.stalled.length, 1, "冷却は回した時刻から数える(記録の分だけ後ろへずれない)")
 
-    // **未来は取らない。** 取ると、一度の記帳で好きなだけ黙らせられる。
+    // **未来は取らない。** 取ると、一度の記録で好きなだけ冷却を伸ばせる。
     const far = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
@@ -260,7 +260,7 @@ test("回した時刻を渡して後から記帳できる。先の時刻は取�
   })
 })
 
-test("相手が動く番の見張りは、動きが止まって初めて起こす", async () => {
+test("相手が動く番の watch は、動きが止まって初めて起こす", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -275,7 +275,7 @@ test("相手が動く番の見張りは、動きが止まって初めて起こ�
   })
 })
 
-test("未解決の問いは起こす理由にしない(自分では解消できないので永久に焚くことになる)", async () => {
+test("未解決の問いは起こす理由にしない(自分では解消できないので永久に起こすことになる)", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -291,8 +291,8 @@ test("未解決の問いは起こす理由にしない(自分では解消でき�
 })
 
 /**
- * 問いの出口。**答えるのと取り下げるのは別**で、片方しか無いと机が一方通行で埋まる。
- * 起こす理由ではないぶん見落としやすいが、埋まった机は新しい問いを押し出す — そこまで見る。
+ * 問いの出口。**答えるのと取り下げるのは別**で、片方しか無いとプロンプトが一方通行で埋まる。
+ * 起こす理由ではないぶん見落としやすいが、埋まったプロンプトは新しい問いを押し出す — そこまで見る。
  */
 test("答えないまま取り下げられる。理由は残る", async () => {
   await withHarness(async (h) => {
@@ -301,19 +301,19 @@ test("答えないまま取り下げられる。理由は残る", async () => {
         const att = yield* Attention
         const id = yield* att.ask("現職の就業規則で副業は可能か")
         const dropped = yield* att.drop(id, "副業探し自体を中断した")
-        // 返り値と台帳の中身の両方を見る。**書けたことと、書けたと言うことは別。**
+        // 返り値と DB の中身の両方を見る。**書けたことと、書けたと言うことは別。**
         return { dropped, stored: yield* att.findQuestion(id), left: yield* att.openQuestions() }
       }),
     )
     assert.equal(dropped.status, "dropped")
     // SQLite の行は prototype 無しで返る。中身だけを比べたいので両方を素の object に均す。
-    assert.deepEqual({ ...stored }, { ...dropped }, "返した行が台帳に入っている行と一致する")
+    assert.deepEqual({ ...stored }, { ...dropped }, "返した行が DB に入っている行と一致する")
     assert.equal(stored.answer, "副業探し自体を中断した", "なぜ追わないかは残す")
-    assert.deepEqual(left, [], "取り下げた問いは心拍の材料から外れる")
+    assert.deepEqual(left, [], "取り下げた問いは tick の材料から外れる")
   })
 })
 
-test("死んだ問いが上限を埋めると新しい問いが心拍に届かない — 取り下げれば届く", async () => {
+test("死んだ問いが上限を埋めると新しい問いが tick に届かない — 取り下げれば届く", async () => {
   await withHarness(async (h) => {
     const ids = await h.run(
       Effect.gen(function* () {
@@ -368,7 +368,7 @@ test("同じ理由で起き続けると冷却が倍に伸びる。新しい入�
     for (let i = 0; i < 8; i++) {
       const d = await h.run(digestAt(at + hours(MAX_COOLDOWN_HOURS)))
       assert.equal(d.idle, false)
-      assert.equal(d.reasonKey, "stalled", "顔ぶれは経過時間で変わらない(変わると上限が上限でなくなる)")
+      assert.equal(d.reasonKey, "stalled", "組み合わせは経過時間で変わらない(変わると上限が上限でなくなる)")
       seen.push(d.cooldownHours)
       at += hours(d.cooldownHours + 0.1)
       await h.run(
@@ -378,7 +378,7 @@ test("同じ理由で起き続けると冷却が倍に伸びる。新しい入�
         }),
       )
     }
-    // 倍々に伸びて 24 時間で止まる = 最後は1日1回の棚卸しに落ち着く(完全には黙らせない)。
+    // 倍々に伸びて 24 時間で止まる = 最後は1日1回の棚卸しに落ち着く(完全には止めない)。
     assert.deepEqual(seen, [1.5, 3, 6, 12, 24, 24, 24, 24])
 
     const capped = await h.run(digestAt(at + hours(MAX_COOLDOWN_HOURS)))
@@ -406,7 +406,7 @@ test("同じ理由で起き続けると冷却が倍に伸びる。新しい入�
   })
 })
 
-test("期限が近い裁可待ちは起こす理由になる", async () => {
+test("期限が近い承認待ちは起こす理由になる", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -425,11 +425,11 @@ test("期限が近い裁可待ちは起こす理由になる", async () => {
     const d = await h.run(digestAt(T0 + hours(4)))
     assert.equal(d.idle, false)
     assert.equal(d.pending.length, 1)
-    assert.match(d.reasons.join(), /期限が近い裁可待ち/)
+    assert.match(d.reasons.join(), /期限が近い承認待ち/)
   })
 })
 
-/** 断られたぶんを入れる。理由まで揃っていないと机には載らない。 */
+/** 断られたぶんを入れる。理由まで揃っていないとプロンプトには載らない。 */
 const denied = (n: number, at: string, reason: string | null) =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -446,16 +446,16 @@ const denied = (n: number, at: string, reason: string | null) =>
   })
 
 /**
- * 断られたことを次の回に渡す。**渡さないと、同じ相手に同じ用件を撃ち直す。**
- * 見張りに前回の結果を渡すのと同じ理由(docs/adr/0013 / 0017)。
+ * 断られたことを次の回に渡す。**渡さないと、同じ相手に同じ用件を出し直す。**
+ * watch に前回の結果を渡すのと同じ理由(docs/adr/0013 / 0017)。
  */
-test("断られた提案は机に載る — ただし起こす理由にはしない", async () => {
+test("断られた提案はプロンプトに載る — ただし起こす理由にはしない", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
         yield* denied(1, "2026-08-08T08:00:00Z", "希望日が経過した")
-        // 理由の無いものは載せない。撃ち直しを止める材料になっていない。
+        // 理由の無いものは載せない。出し直しを止める材料になっていない。
         yield* denied(2, "2026-08-08T08:30:00Z", null)
         yield* att.commit({ active: true, at: new Date(T0).toISOString() })
       }),
@@ -489,12 +489,12 @@ test("断られたぶんは新しい順に決めた数だけ — 古いものか
 })
 
 /**
- * 1日1本の下書き。**回数が持ち主の集中の切断回数**なので、日を跨ぐまで二度立たないことを固定する。
+ * 1日1本の下書き。**回数がユーザーの集中の切断回数**なので、日を跨ぐまで二度立たないことを固定する。
  * 冷却の外に出してあるのも意図的で、夕方に別件で動いた日に下書きが落ちないため。
  */
 test("下書きは決めた時刻から1日1回だけ立つ", async () => {
   const keep = process.env.OPEN_ZERO_DAILY_HOUR
-  // T0 は 18:00(持ち主の時計)。17時を境にすると T0 の時点で既に過ぎている。
+  // T0 は 18:00(ユーザーの時計)。17時を境にすると T0 の時点で既に過ぎている。
   process.env.OPEN_ZERO_DAILY_HOUR = "17"
   try {
     await withHarness(async (h) => {
@@ -558,7 +558,7 @@ test("走っている最中に届いたぶんは既読にしない — 返さな
       Effect.gen(function* () {
         const mem = yield* Memory
         const att = yield* Attention
-        // 心拍が走り終える前に届いた2本目。この回の digest には載っていない。
+        // tick が走り終える前に届いた2本目。この回の digest には載っていない。
         yield* mem.remember({ source: "owner", content: "2本目" })
         yield* mem.remember({ source: "system", content: { said: "1本目に答えた" } })
         yield* att.commit({
@@ -571,7 +571,7 @@ test("走っている最中に届いたぶんは既読にしない — 返さな
     )
     assert.equal(after.newEvents.length, 1, "見ていない入力は残る")
     assert.equal(after.newEvents[0]?.content, '"2本目"')
-    assert.equal(after.idle, false, "残っている限り次の心拍が起きる")
+    assert.equal(after.idle, false, "残っている限り次の tick が起きる")
   })
 })
 

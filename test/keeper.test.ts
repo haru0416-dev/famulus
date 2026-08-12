@@ -1,5 +1,5 @@
 /**
- * 締めの記録係の検査。**上げてよいものだけが上がるか**を見る。
+ * 締めの keeper の検査。**上げてよいものだけが上がるか**を見る。
  *
  * ここで通したものは、後の回が「今の事実」として無検査で使う。だから怖いのは上げ損ねよりも、
  * 根拠の無いものが上がることのほう。引用の照合はコード側にあり(`keepGrounded`)、
@@ -51,7 +51,7 @@ test("同じ slot を1回で2度上げない(区間が同じ瞬間に2本立つ)
   assert.equal(kept[0]?.value, "8/12 18:00")
 })
 
-test("持ち主の発言が無い回はモデルを呼ばない", async () => {
+test("ユーザーの発言が無い回はモデルを呼ばない", async () => {
   await withHarness(async (h) => {
     const line = await h.run(keep({ material: "  \n " }))
     assert.match(line, /材料が無い/)
@@ -94,7 +94,7 @@ test("上げたものは確定値になり、既存の slot は区間が継が�
               value: "8/12(水)18:00",
               quote: "来週の水曜18時に変更した",
               validFrom: "2026-08-08T00:00:00Z",
-              reason: "持ち主が変更したと言った",
+              reason: "ユーザーが変更したと言った",
             },
             { slot: "dentist.clinic", value: "さくら歯科", quote: "通っているのはさくら歯科" },
           ],
@@ -108,16 +108,16 @@ test("上げたものは確定値になり、既存の slot は区間が継が�
  * 二人目の書き手にしない。**本体が既に確定させた slot は触らない。**
  *
  * 触ると、本体が書いた値を数十秒後に言い換えた区間が上に乗る。端から端まで走らせた回で実際に起き、
- * 寿命23秒の区間が2本できた上、記録係の側の短い言い換えが本体の書いた値を押し下げた。
+ * 寿命23秒の区間が2本できた上、keeper の側の短い言い換えが本体の書いた値を押し下げた。
  */
-test("この回で本体が確定させた slot は、記録係が書き直さない", async () => {
+test("この回で本体が確定させた slot は、keeper が書き直さない", async () => {
   await withHarness(
     async (h) => {
       const out = await h.run(
         Effect.gen(function* () {
           const mem = yield* Memory
           const since = "2026-08-08T09:00:00Z"
-          // 本体が道具で先に確定させた(記録係より詳しい)。
+          // 本体が道具で先に確定させた(keeper より詳しい)。
           yield* mem.believe("dentist.next_appt", "さくら歯科の次回予約は8/12(水)18:00。担当は鈴木さん")
           const line = yield* keep({ material: MATERIAL, since })
           return {
@@ -154,7 +154,7 @@ test("何も上げない回でも、何を見たかは残る", async () => {
   )
 })
 
-test("記録係が呼べなくても回は落ちない", async () => {
+test("keeper が呼べなくても回は落ちない", async () => {
   await withHarness(
     async (h) => {
       const line = await h.run(keep({ material: MATERIAL }))

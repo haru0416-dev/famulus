@@ -127,13 +127,13 @@ test("日次 run 数の上限は効くが、halt は立てない(翌日には自
         // role が入っている行だけが数えられる(= モデルを呼んだ run)。
         for (const i of [1, 2]) {
           yield* db.run(
-            "INSERT INTO ledger (id, at, kind, role) VALUES (?, ?, 'run', 'dialogue')",
+            "INSERT INTO ledger (id, at, kind, role)VALUES (?, ?, 'run', 'dialogue')",
             `r${i}`,
             AT,
           )
         }
         // role NULL の行は数えない。
-        yield* db.run("INSERT INTO ledger (id, at, kind) VALUES ('x', ?, 'note')", AT)
+        yield* db.run("INSERT INTO ledger (id, at, kind)VALUES ('x', ?, 'note')", AT)
         yield* gov.precheck({ ...base, at: AT, nowMs: NOW }, SMALL)
       }),
     )
@@ -162,7 +162,7 @@ test("自走が枠を使い切っても対話は止まらない(仕切りであ�
         const db = yield* Db
         for (const i of [1, 2]) {
           yield* db.run(
-            "INSERT INTO ledger (id, at, kind, role) VALUES (?, ?, 'turn', 'autonomous')",
+            "INSERT INTO ledger (id, at, kind, role)VALUES (?, ?, 'turn', 'autonomous')",
             `a${i}`,
             AT,
           )
@@ -198,7 +198,7 @@ test("定額枠(quota)の run は USD 上限を飛ばす — 従量(usd)は同�
         const db = yield* Db
         // 今日の USD が既に日次上限(20)を超えている状態を作る。
         yield* db.run(
-          "INSERT INTO ledger (id, at, kind, role, usd) VALUES ('big', ?, 'run', 'dialogue', 99.0)",
+          "INSERT INTO ledger (id, at, kind, role, usd)VALUES ('big', ?, 'run', 'dialogue', 99.0)",
           AT,
         )
       }),

@@ -3,7 +3,7 @@
  *
  * `schema.sql` は全部 `CREATE TABLE IF NOT EXISTS` なので、空の DB では新旧どちらの形も
  * 同じように「通ってしまう」。壊れるのは既に行がある DB のときだけで、しかも壊れ方は静かで、
- * 気付くのは持ち主が古い事実を喋られたときになる。だから旧い形を手で作ってから掛ける。
+ * 気付くのはユーザーが古い事実を喋られたときになる。だから旧い形を手で作ってから掛ける。
  */
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -67,7 +67,7 @@ test("旧い形の DB は開くだけで新しい形になる — 行は落ち�
       }),
     )
     assert.equal(out.cur?.value, "札幌", "既にあった行が消えていない")
-    // **いつから真だったかは旧い形には無い。** 推測せず「台帳が知った時刻」をそのまま置く。
+    // **いつから真だったかは旧い形には無い。** 推測せず「DB が知った時刻」をそのまま置く。
     assert.equal(out.cur?.validFrom, "2026-01-01T00:00:00Z")
     assert.equal(out.cur?.validUntil, null)
     assert.equal(out.after?.value, "東京")
@@ -109,7 +109,7 @@ test("cache_write の無い ledger は列が足され、既存の行は残る", 
   d.close()
 })
 
-test("発火の記録を持たない watchlist は列が足され、既存の見張りは「まだ回していない」になる", () => {
+test("発火の記録を持たない watchlist は列が足され、既存の watch は「まだ回していない」になる", () => {
   const path = join(ROOT, "watchlist-v1.db")
   const d = new DatabaseSync(path)
   d.exec(`
@@ -129,7 +129,7 @@ test("発火の記録を持たない watchlist は列が足され、既存の見
   d.close()
 })
 
-test("読み書きする側の無い卓は、空なら落ちる", () => {
+test("読み書きする側の無いテーブルは、空なら落ちる", () => {
   const path = join(ROOT, "unused.db")
   const d = new DatabaseSync(path)
   d.exec("CREATE TABLE outbox (id TEXT PRIMARY KEY, destination_key TEXT);")
@@ -139,13 +139,13 @@ test("読み書きする側の無い卓は、空なら落ちる", () => {
   d.close()
 })
 
-test("行が入っている卓は落とさない — 想定と違うことが起きている印なので残す", () => {
+test("行が入っているテーブルは落とさない — 想定と違うことが起きている兆候なので残す", () => {
   const path = join(ROOT, "unused-rows.db")
   const d = new DatabaseSync(path)
   d.exec("CREATE TABLE outbox (id TEXT PRIMARY KEY);")
-  d.exec("INSERT INTO outbox (id) VALUES ('o1')")
+  d.exec("INSERT INTO outbox (id)VALUES ('o1')")
   assert.deepEqual(migrate(d), [], "行があるので触らない")
-  const row = d.prepare("SELECT count(*) AS n FROM outbox").get() as { n: number }
+  const row = d.prepare("SELECT count(*)AS n FROM outbox").get() as { n: number }
   assert.equal(row.n, 1)
   d.close()
 })

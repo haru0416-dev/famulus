@@ -1,8 +1,8 @@
 /**
- * 台帳の入口の検査。
+ * DB の入口の検査。
  *
  * ここで一番壊れやすいのは**選別**のほう(モデルを呼ばない前段)で、
- * しかも壊れても静かに壊れる — 道具の出力が混ざっても、持ち主の発話が半分落ちても、
+ * しかも壊れても静かに壊れる — 道具の出力が混ざっても、ユーザーの発話が半分落ちても、
  * 出来上がった要約はそれらしく読める。だから「何を捨て、何を1文字も削らないか」を
  * 素材の段階で直接確かめる。要約の中身ではなく**素材の境界**が検査対象。
  */
@@ -47,7 +47,7 @@ const usedTool = (bytes: number) =>
     message: { content: [{ type: "tool_use", name: "Read", input: { file: "x".repeat(bytes) } }] },
   })
 
-/** サブエージェント側の往復。人が打った印は立つが、打ったのは人ではない。 */
+/** サブエージェント側の往復。人が打った目印は立つが、打ったのは人ではない。 */
 const sidechain = (sessionId: string, text: string) =>
   JSON.stringify({
     type: "user",
@@ -95,7 +95,7 @@ before(() => {
       usedTool(50_000),
       said("調べています。まず現在の予約を確認します。"),
       said("水曜18時で押さえました。金曜への振り替えは来週ぶんだけ別に入れます。"),
-      sidechain("s1", "サブエージェントへの指示。これは持ち主の言葉ではない。"),
+      sidechain("s1", "サブエージェントへの指示。これはユーザーの言葉ではない。"),
       injected("s1", "/compact"),
       typed(
         "s1",
@@ -255,7 +255,7 @@ test("Claude.ai の書き出しからも候補が上がる — 本文の落ち�
   })
 })
 
-test("殻でない会話の本文はそのまま素材になる — 応答は畳むが持ち主の発話は削らない", async () => {
+test("殻でない会話の本文はそのまま素材になる — 応答は畳むがユーザーの発話は削らない", async () => {
   await onlyWeb(async () => {
     await withHarness(async (h) => {
       const m = await h.run(
@@ -268,13 +268,13 @@ test("殻でない会話の本文はそのまま素材になる — 応答は畳
         }),
       )
       assert.ok(m)
-      assert.ok(m.text.includes(WEB_ASK), "持ち主の発話は途中で切らない")
+      assert.ok(m.text.includes(WEB_ASK), "ユーザーの発話は途中で切らない")
       assert.match(m.text, /agent: /, "応答も文脈として残る")
     })
   })
 })
 
-test("design_chats の定型の添付は素材に入らない — 持ち主が打った文字ではない", async () => {
+test("design_chats の定型の添付は素材に入らない — ユーザーが打った文字ではない", async () => {
   await onlyWeb(async () => {
     await withHarness(async (h) => {
       const m = await h.run(
@@ -287,13 +287,13 @@ test("design_chats の定型の添付は素材に入らない — 持ち主が�
         }),
       )
       assert.ok(m)
-      assert.match(m.text, /バンディング/, "持ち主の言葉は残る")
+      assert.match(m.text, /バンディング/, "ユーザーの言葉は残る")
       assert.doesNotMatch(m.text, /Design Components/, "仕組みが差し込む定型文は入らない")
     })
   })
 })
 
-test("記憶ファイルはモデルを呼ばずに台帳へ入る — 二度目は増えない", async () => {
+test("記憶ファイルはモデルを呼ばずに DB へ入る — 二度目は増えない", async () => {
   await onlyWeb(async () => {
     await withHarness(async (h) => {
       const out = await h.run(
@@ -315,7 +315,7 @@ test("記憶ファイルはモデルを呼ばずに台帳へ入る — 二度目
       assert.equal(out.hit.length, 2)
       assert.ok(
         out.hit.every((r) => r.taint === 1),
-        "書いたのは持ち主ではない。信用済みにしない",
+        "書いたのはユーザーではない。信用済みにしない",
       )
       assert.match(renderRecall(out.hit), /取り込み\]/)
     })
@@ -348,7 +348,7 @@ test("英語だけの覚え書きには日本語の見出しが付く — 本文
   })
 })
 
-test("選別は道具の入出力を捨て、持ち主の発話は1文字も削らない", async () => {
+test("選別は道具の入出力を捨て、ユーザーの発話は1文字も削らない", async () => {
   await withHarness(async (h) => {
     const m = await h.run(
       Effect.gen(function* () {
@@ -363,8 +363,8 @@ test("選別は道具の入出力を捨て、持ち主の発話は1文字も削�
     assert.ok(m.rawBytes > 100_000, `生ログは 100KB 超のはず: ${m.rawBytes}`)
     assert.ok(m.keptBytes < 2_000, `残すのは 2KB 未満のはず: ${m.keptBytes}`)
     assert.doesNotMatch(m.text, /xxxx/, "道具の入力は素材に入らない")
-    // **持ち主の言葉だけは全文。**要約させる前に削ると、原文はもうどこにも無い。
-    assert.ok(m.text.includes(LONG_ASK), "持ち主の発話は途中で切らない")
+    // **ユーザーの言葉だけは全文。**要約させる前に削ると、原文はもうどこにも無い。
+    assert.ok(m.text.includes(LONG_ASK), "ユーザーの発話は途中で切らない")
     assert.ok(m.text.includes("確認メールは要らないって言ったよね"))
     assert.doesNotMatch(m.text, /サブエージェント/, "サブエージェントの往復は入らない")
     assert.doesNotMatch(m.text, /compact/, "打鍵していない入力は入らない")
@@ -400,7 +400,7 @@ test("取り込みは1セッション1イベント — system が書いた impor
         }),
       )
       assert.equal(out.n, 1, "1セッション = 1行")
-      assert.equal(out.row?.source, "system", "書いたのは自分。持ち主が言ったことにしない")
+      assert.equal(out.row?.source, "system", "書いたのは自分。ユーザーが言ったことにしない")
       assert.equal(out.row?.taint, 1, "コーディングログは web もファイルも通り抜けている。信用済みにしない")
       // 二重取り込みの歯止めは events 自身が持つ(別表を作らない)。
       assert.match(String(out.row?.provenance), /"ref":"s1"/)
@@ -412,7 +412,7 @@ test("取り込みは1セッション1イベント — system が書いた impor
         structured: {
           topic: "歯医者の予約の調整",
           decisions: [
-            { what: "予約は水曜18時", why: "持ち主の希望", said: "歯医者の予約は水曜の18時にしたい" },
+            { what: "予約は水曜18時", why: "ユーザーの希望", said: "歯医者の予約は水曜の18時にしたい" },
           ],
           preferences: [
             { what: "予約の確認メールは本人宛てには送らない", said: "確認メールは送らなくていい" },
@@ -426,7 +426,7 @@ test("取り込みは1セッション1イベント — system が書いた impor
   )
 })
 
-test("引用の無い好み・訂正は台帳に入らない — 印象と本人の言葉を混ぜない", async () => {
+test("引用の無い好み・訂正は DB に入らない — 印象と本人の言葉を混ぜない", async () => {
   await withHarness(
     async (h) => {
       const out = await h.run(
@@ -476,7 +476,7 @@ test("素材は境界マーカーの中に入る(ログの中の文を指示と�
       const prompt = h.calls[0]?.prompt ?? ""
       assert.match(prompt, /<<<EXTERNAL source=transcript/)
       assert.match(prompt, /<<<END EXTERNAL/)
-      // 持ち主の言葉は柵の**内側**にある。外側にあるのは自分が書いた指示だけ。
+      // ユーザーの言葉は柵の**内側**にある。外側にあるのは自分が書いた指示だけ。
       const outside = prompt.slice(prompt.indexOf("<<<END EXTERNAL"))
       assert.doesNotMatch(outside, /歯医者/)
     },
@@ -484,7 +484,7 @@ test("素材は境界マーカーの中に入る(ログの中の文を指示と�
   )
 })
 
-test("同じセッションは二度取り込まない — 台帳の provenance が歯止め", async () => {
+test("同じセッションは二度取り込まない — DB の provenance が歯止め", async () => {
   await withHarness(
     async (h) => {
       const out = await h.run(
@@ -522,7 +522,7 @@ test("取り込んだものは検索に出る — 自分の独り言より前、
       assert.equal(out.length, 2)
       assert.equal(out[0]?.kind, "import", "取り込んだ判断が先に出る")
       assert.equal(out[1]?.source, "system")
-      // 由来を隠さない。持ち主が直接そう言った1行と、要約の1行を混ぜて読ませない。
+      // 由来を隠さない。ユーザーが直接そう言った1行と、要約の1行を混ぜて読ませない。
       assert.match(renderRecall(out), /取り込み\]/)
     },
     [
@@ -550,7 +550,7 @@ test("抹消した取り込みは候補に戻る — 要約が的外れだった
           const mem = yield* Memory
           const r = yield* intake.ingest(only(yield* intake.scan(10)))
           assert.ok(r)
-          // 入口の間違いを台帳に固定しない。抹消が「無かったことにして取り直せ」の意味になる。
+          // 入口の間違いを DB に固定しない。抹消が「無かったことにして取り直せ」の意味になる。
           yield* mem.redact(r.id, "要約が作業報告になっていた")
           return yield* intake.scan(10)
         }),

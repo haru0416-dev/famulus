@@ -2,8 +2,8 @@
  * 拾ったものを**このホストで実際に動かす**ための1本道。
  *
  * 読むだけの記録は誰が書いても同じ文にしかならない。詰まった箇所・落ちた経路・要った時間は、
- * 自分で走らせないと出てこない。そのために任意のコマンドを動かす口が要るが、
- * このホストには持ち主の鍵も台帳(`.data/*.db`)も置いてある。**境界を先に引かないと口は開けられない。**
+ * 自分で走らせないと出てこない。そのために任意のコマンドを動かす手段が要るが、
+ * このホストにはユーザーの鍵も DB(`.data/*.db`)も置いてある。**境界を先に引かないと動かせない。**
  *
  * 境界に docker を選んだのは、srt(bubblewrap)と headless の `claude -p` を実測して落としたから。
  * 前者は AppArmor が入れ子の userns を塞いでいて動かず、後者は作業場の中にも書けない。
@@ -18,22 +18,22 @@ import { mkdirSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 
 /**
- * 走らせる器。`node` と `git` と `python3` が最初から入っている必要がある(拾い物は大抵どれかで動く)。
+ * 走らせるコンテナ。`node` と `git` と `python3` が最初から入っている必要がある(拾い物は大抵どれかで動く)。
  * 中身の実測は docs/adr/0001 — jq・cargo・go・uv は**入っていない**ので、要るなら中で取る。
  */
 const DEFAULT_IMAGE = "node:24-bookworm"
 /**
  * 1回の走行の上限。**依存の取得は分単位で掛かる**ので、web の 20 秒とは桁が違う。
  *
- * 上限を心拍の持ち時間(`OPEN_ZERO_TICK_TIMEOUT_MS`、既定 300 秒)より**短く**取ってある。
- * 走行が心拍を食い切ると、その回は丸ごと落ちて**走った記録が1行も残らない** —
- * 器の中で起きたことは器を捨てた時点で消えるので、書き残せなかった走行は無かったのと同じになる。
- * 長い作業は1回で終わらせず、同じ作業場に置いて次の心拍で続ける。
+ * 上限を tick の持ち時間(`OPEN_ZERO_TICK_TIMEOUT_MS`、既定 300 秒)より**短く**取ってある。
+ * 走行が tick を食い切ると、その回は丸ごと落ちて**走った記録が1行も残らない** —
+ * コンテナの中で起きたことはコンテナを捨てた時点で消えるので、書き残せなかった走行は無かったのと同じになる。
+ * 長い作業は1回で終わらせず、同じ作業場に置いて次の tick で続ける。
  */
 const DEFAULT_TIMEOUT_MS = 3 * 60_000
 /** モデルに渡す上限。ビルドログは平気で数MB出るが、読ませたいのは詰まった箇所だけ。 */
 const MAX_OUTPUT_CHARS = 12_000
-/** 器に許す上限。**このホストは 11GB / 6コアで、心拍自身もここで動いている。** 走行が全部食うと自分が死ぬ。 */
+/** コンテナに許す上限。**このホストは 11GB / 6コアで、tick 自身もここで動いている。** 走行が全部食うと自分が死ぬ。 */
 const MEMORY = "2g"
 const CPUS = "2"
 const PIDS = "512"
@@ -56,7 +56,7 @@ export interface RunResult {
   readonly elapsedMs: number
 }
 
-/** 走行の置き場。`.data/` の下に置くので gitignore 済みで、台帳と同じく外には出ない。 */
+/** 走行の置き場。`.data/` の下に置くので gitignore 済みで、DB と同じく外には出ない。 */
 export const runsRoot = (): string => resolve(process.env.OPEN_ZERO_RUNS ?? ".data/runs")
 
 /**
@@ -96,10 +96,10 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     CPUS,
     "--pids-limit",
     PIDS,
-    // **持ち主の uid で走らせる。** 既定の root で作ったファイルは、後で心拍(haru)が読めも消せもしない。
+    // **ユーザーの uid で走らせる。** 既定の root で作ったファイルは、後で tick(haru)が読めも消せもしない。
     "--user",
     `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
-    // uid を指定すると器の中に home が無くなる。npm も pip も HOME を要求するので作業場を充てる。
+    // uid を指定するとコンテナの中に home が無くなる。npm も pip も HOME を要求するので作業場を充てる。
     "-e",
     "HOME=/work",
     "-v",
@@ -122,7 +122,7 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
 export async function runInSandbox(command: string, opts: RunOptions): Promise<RunResult> {
   if (!isAbsolute(opts.workDir)) throw new Error(`作業場は絶対パスで渡す: ${opts.workDir}`)
   const startedAt = Date.now()
-  // 器の名前。**時刻で作る**(同じ走行を続けて呼んでも衝突しない)。時間切れのとき外から消すのに要る。
+  // コンテナの名前。**時刻で作る**(同じ走行を続けて呼んでも衝突しない)。時間切れのとき外から消すのに要る。
   const name = `oz-run-${startedAt.toString(36)}-${process.pid}`
   const child = spawn("docker", dockerArgs(command, { ...opts, name }), {
     stdio: ["ignore", "pipe", "pipe"],
@@ -139,7 +139,7 @@ export async function runInSandbox(command: string, opts: RunOptions): Promise<R
 
   const timer = setTimeout(() => {
     timedOut = true
-    // **クライアントを殺しても器は生き残る。** docker の子は daemon 側にいるので、
+    // **クライアントを殺してもコンテナは生き残る。** docker の子は daemon 側にいるので、
     // プロセス木を落としても中身は走り続ける。名前を指して外から消す。
     spawn("docker", ["rm", "-f", name], { stdio: "ignore" }).on("error", () => {})
     child.kill("SIGKILL")
@@ -148,7 +148,7 @@ export async function runInSandbox(command: string, opts: RunOptions): Promise<R
   const exitCode = await new Promise<number>((done) => {
     child.on("error", (e) => {
       // docker そのものが無い/動いていないとき。**理由を出力に混ぜて返す**(例外で落とすと、
-      // 呼んだ側は「コマンドが失敗した」と「走らせる口が無い」を区別できない)。
+      // 呼んだ側は「コマンドが失敗した」と「走らせる手段が無い」を区別できない)。
       out += `\n[走らせられなかった] ${e.message}`
       done(127)
     })

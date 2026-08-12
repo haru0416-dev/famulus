@@ -1,6 +1,6 @@
 /**
- * 裁可の検査。**「承認したのに承認記録が無い」状態を作れないこと**が主眼。
- * 実行器はまだ無いので、ここで守るのは「実行の前提条件が揃っているか」だけ。
+ * 承認の検査。**「承認したのに承認記録が無い」状態を作れないこと**が主眼。
+ * 実行の仕組みはまだ無いので、ここで守るのは「実行の前提条件が揃っているか」だけ。
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
@@ -62,7 +62,7 @@ test("approve は approvals 行と status 遷移を必ず一緒に残す", async
   })
 })
 
-test("二重承認はできない(裁可済みは裁可の対象ではない)", async () => {
+test("二重承認はできない(承認済みは承認の対象ではない)", async () => {
   await withHarness(async (h) => {
     const id = await h.run(
       Effect.gen(function* () {
@@ -84,7 +84,7 @@ test("二重承認はできない(裁可済みは裁可の対象ではない)", 
     const n = await h.run(
       Effect.gen(function* () {
         const db = yield* Db
-        const r = yield* db.get("SELECT COUNT(*) n FROM approvals WHERE proposal_id = ?", id)
+        const r = yield* db.get("SELECT COUNT(*)n FROM approvals WHERE proposal_id = ?", id)
         return Number(r?.n ?? 0)
       }),
     )
@@ -92,7 +92,7 @@ test("二重承認はできない(裁可済みは裁可の対象ではない)", 
   })
 })
 
-test("deny は理由を残し、以後は裁可できない", async () => {
+test("deny は理由を残し、以後は承認できない", async () => {
   await withHarness(async (h) => {
     const out = await h.run(
       Effect.gen(function* () {
@@ -131,7 +131,7 @@ test("id は前方一致で引ける。曖昧なら選ばずに失敗する", as
     )
     assert.equal(row.id, id)
 
-    // 空文字は全件に当たる。曖昧なまま裁可に進ませない。
+    // 空文字は全件に当たる。曖昧なまま承認に進ませない。
     await h.run(
       Effect.gen(function* () {
         const p = yield* Proposals
@@ -160,7 +160,7 @@ test("存在しない id は NotFound", async () => {
   })
 })
 
-test("期限切れは list の前に expired へ落ちる(裁可待ちが実態とずれない)", async () => {
+test("期限切れは list の前に expired へ落ちる(承認待ちが実態とずれない)", async () => {
   await withHarness(async (h) => {
     const out = await h.run(
       Effect.gen(function* () {

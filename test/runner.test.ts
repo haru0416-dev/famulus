@@ -1,6 +1,6 @@
 /**
  * Runner の検査。**ゲートを通さずにモデルへ届く道が無い**ことを、実行本体を差し替えて確かめる。
- * Stub は precheck・枠記帳・会計の骨格を本番と共有しているので、ここで通る配線は本番でも同じ。
+ * Stub は precheck・枠の計上・会計の骨格を本番と共有しているので、ここで通る配線は本番でも同じ。
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
@@ -19,7 +19,7 @@ import { Governance } from "../src/services/Governance.ts"
 import { Ledger } from "../src/services/Ledger.ts"
 import { withHarness } from "./helpers.ts"
 
-test("run は結果を返し、role 付きで記帳する(定額枠なので usd=0)", async () => {
+test("run は結果を返し、role 付きで記録する(定額枠なので usd=0)", async () => {
   await withHarness(
     async (h) => {
       const out = await h.run(
@@ -63,7 +63,7 @@ test("halt が立っていると run はモデルに到達しない", async () =
           return yield* (yield* Ledger).today()
         }),
       )
-      assert.equal(t.runs, 0) // 走っていないので記帳もされない
+      assert.equal(t.runs, 0) // 走っていないので記録もされない
     },
     [{ text: "走ってはいけない" }],
   )
@@ -154,9 +154,9 @@ test("モデルごとに実行ファイルと枠が分かれる", () => {
 
 /**
  * 外向きの経路。**能力はモデル id が持つ**ので、呼ぶ側にフラグが散らない。
- * 上流に `-web` のまま渡すと「不明なモデル」で落ちる — 印はこちら側にだけ在る。
+ * 上流に `-web` のまま渡すと「不明なモデル」で落ちる — 目印はこちら側にだけ在る。
  */
-test("`-web` は外に出られる印で、上流には接尾辞を外して渡す", () => {
+test("`-web` は外に出られる目印で、上流には接尾辞を外して渡す", () => {
   assert.equal(isWebModel("gpt-5.6-luna-web"), true)
   assert.equal(isWebModel("gpt-5.6-luna"), false)
   assert.equal(baseModel("gpt-5.6-luna-web"), "gpt-5.6-luna")
@@ -165,7 +165,7 @@ test("`-web` は外に出られる印で、上流には接尾辞を外して渡�
   assert.equal(poolForModel("gpt-5.6-luna-web"), "chatgpt-rmod")
 })
 
-test("検索結果の引用マーカーを台帳に持ち込まない", () => {
+test("検索結果の引用マーカーを DB に持ち込まない", () => {
   // 実測した形: U+E200 で開き、U+E202 で区切り、U+E201 で閉じる。
   const raw = "最新版は 3.22.0 です。\ue200cite\ue202turn2search2\ue201 以上。"
   const clean = stripCitationMarkers(raw)
@@ -178,7 +178,7 @@ test("検索結果の引用マーカーを台帳に持ち込まない", () => {
 /**
  * ネイティブ呼び出しで弾かれた回だけ取り直す。
  * **文面では判定しない** — 「ツールが使えない」と書いてあるかどうかで決めると、
- * 呼ぶ必要が無くてそう書いた回まで焚き直すことになる。見るのは CLI の tool_use_error だけ。
+ * 呼ぶ必要が無くてそう書いた回までやり直すことになる。見るのは CLI の tool_use_error だけ。
  */
 test("弾かれて手ぶらのときだけ取り直す", () => {
   assert.equal(needsResubmit(true, true, 0), true) // 弾かれた + 提出0 = 呼び方を間違えた
