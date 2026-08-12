@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { findLeaks, findSmells } from "../src/agent/drafting.ts"
+import { findLeaks, findShape, findSmells } from "../src/agent/drafting.ts"
 
 /** 非公開の確定値。台帳にはこの形で入っている(JSON 文字列の中身)。 */
 const SECRETS = [
@@ -82,4 +82,51 @@ test("比喩と擬人を落とす — 1本目が全部やっていた", () => {
 test("横棒は題では通し、本文では落とす", () => {
   assert.deepEqual(findSmells("提案が実行前に使えなくなる — n=1 の5日間", "5件中2件だった。"), [])
   assert.deepEqual(findSmells("題", "2件が実行不能になった — 理由は別々だった。"), ["—"])
+})
+
+/** 密度の検査に足りる長さの地の文。中身は問わないので、当たる語を含まないものを繰り返す。 */
+const filler = (chars: number) => "実行不能になった提案は5件中2件だった。".repeat(Math.ceil(chars / 20))
+
+test("太字が段落ごとに付いていたら出さない — 合図が多いと合図でなくなる", () => {
+  const body = ["**A**", "**B**", "**C**", "**D**", "**E**", filler(400)].join("\n\n")
+  const shape = findShape(body)
+  assert.equal(shape.length, 1)
+  assert.match(shape[0] ?? "", /^太字が 5 箇所ある/)
+})
+
+test("太字が1つなら通す — 強調そのものを禁じてはいない", () => {
+  assert.deepEqual(findShape(`**型エラーは2,641件だった。**\n\n${filler(600)}`), [])
+})
+
+test("役割の札を貼った見出しは、中身が付いていても落とす", () => {
+  const body = `## 課題：既存コードに linter を入れると失敗する\n\n${filler(300)}`
+  assert.deepEqual(findShape(body), [
+    "見出し「課題：既存コードに linter を入れると失敗する」が中身を名指していない。" +
+      "何が起きたかを見出しにする(役割の札は外す)",
+  ])
+})
+
+test("役割の名前だけの見出しも落とす", () => {
+  const body = `## まとめ\n\n${filler(300)}`
+  assert.equal(findShape(body).length, 1)
+})
+
+test("中身を名指す見出しは通す — 見出しを減らすこと自体は目的ではない", () => {
+  const body = `## 型エラーが2,641件出た\n\n${filler(400)}\n\n## any の半分は catch だった\n\n${filler(400)}`
+  assert.deepEqual(findShape(body), [])
+})
+
+test("時刻と URL を役割の札と読み違えない", () => {
+  const body = `## 18:00 の起動だけが落ちた\n\n${filler(400)}\n\n## https://example.test の応答\n\n${filler(400)}`
+  assert.deepEqual(findShape(body), [])
+})
+
+test("見出しが多いのは話が複数あるということ", () => {
+  const body = ["## 型が消えた", "## any が残った", "## 検査が落ちた", "## 走行が止まった", filler(200)].join(
+    "\n\n",
+  )
+  assert.equal(
+    findShape(body).some((s) => s.startsWith("見出しが 4 個ある")),
+    true,
+  )
 })

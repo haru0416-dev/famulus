@@ -40,7 +40,7 @@ import { Notify } from "../services/Notify.ts"
 import { Proposals } from "../services/Proposals.ts"
 import { defaultSources, renderHits, SOURCE_MENU, searchWeb } from "../services/Search.ts"
 import { fetchPage } from "../services/Web.ts"
-import { DRAFT_MAX, findLeaks, findSmells } from "./drafting.ts"
+import { DRAFT_MAX, findLeaks, findShape, findSmells } from "./drafting.ts"
 import { soulInstruction } from "./soul.ts"
 
 // `flue run` から起きる経路。ここも systemd/シェルを通らないので、自分で `.env` を読む。
@@ -673,6 +673,12 @@ export default function Assistant() {
               "その語を消したときに何も残らない文は、主張ごと落とす。残すなら「何が・どの対象で・" +
               "どう変わったか」に書き換える。直してから、もう一度呼ぶ。"
             )
+          }
+          // 語だけでは足りない。**材料が本物でも、並べ方だけで読む気は削がれる。**
+          // 太字と見出しの密度は語彙に現れないので、書き上がった形のほうを数える。
+          const shape = findShape(body)
+          if (shape.length > 0) {
+            return `出していない。**並べ方が読み手を疲れさせる形になっている**:\n${shape.map((s) => `- ${s}`).join("\n")}\n直してから、もう一度呼ぶ。`
           }
           const id = yield* discord.post({
             text: `**${title}**\n\n${body}\n\n---\n根拠: ${basis}`,
