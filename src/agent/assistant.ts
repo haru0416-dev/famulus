@@ -439,16 +439,15 @@ export default function Assistant() {
       run(
         Effect.gen(function* () {
           const mem = yield* Memory
-          // **書いた主体を偽らない**。自走中にこの道具を呼ぶのは自分であってユーザーではない。
-          // ここが `owner` 固定だったので、tick が自分で導いた推測が「ユーザーがそう言った」として
-          // DB に入り、次に読むときに裏の取れた事実と区別が付かなくなっていた。
+          // **書いた主体を偽らない**。この道具を呼ぶのは常に自分であって、ユーザーではない。
+          // ユーザーの発言は取り込みの側(Discord の poll / Intake)が `owner` で入れる。
+          // ここが `owner` だった間に書いた 18 行が DB に残っていて、ユーザーが言ったことと
+          // 自分が導いた推測が同じ `source` に混ざっている。**混ざると keeper と dream が壊れる** —
+          // 材料をユーザーの発言に限る規律が、列で判定している以上そこで効かなくなる。
+          // 自走かどうかは関係ない(以前は autonomous のときだけ system にしていた)。
           const id = slot
             ? yield* mem.believe(slot, content)
-            : yield* mem.remember({
-                kind: "observe",
-                source: lane() === "autonomous" ? "system" : "owner",
-                content,
-              })
+            : yield* mem.remember({ kind: "observe", source: "system", content })
           return slot ? `belief '${slot}' を確定した(event ${id})` : `覚えた(event ${id})`
         }),
       ),
