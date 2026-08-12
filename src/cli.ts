@@ -80,6 +80,53 @@ const STATUS_LABEL: Record<string, string> = {
   failed: "失敗",
 }
 
+/**
+ * `<id> <自由文>` を取る命令の引数(deny / answer / drop が同じ形)。
+ * シェルは自由文を空白で刻んで渡してくるので、繋ぎ直してから空を弾く。
+ * 足りないときは `null` を返し、**呼んだ側がその命令の使い方を出す** — 文言が一つに揃うと、
+ * どれが足りなかったのか読めなくなる。
+ */
+const idAndText = (rest: readonly string[]): { id: string; text: string } | null => {
+  const [id, ...words] = rest
+  const text = words.join(" ").trim()
+  return id && text ? { id, text } : null
+}
+
+/** `oz watch` で次に動く相手を指定する札。無指定は famulus。 */
+const NEXT_MOVE_FLAG: Readonly<Record<string, NextMove>> = {
+  "--famulus": "famulus",
+  "--human": "human",
+  "--counterparty": "counterparty",
+}
+
+/**
+ * `oz watch <やること> [--human]` の引数を割る。
+ *
+ * **知らない札は読み飛ばさずに弾く。** 読み飛ばすと、打ち間違えた札が見張りの本文から
+ * 一語消えたまま登録され、宛先も既定のままになる — 二重に化けたうえ、
+ * 登録は成功して見えるので気づく機会が無い。
+ */
+const parseWatch = (rest: readonly string[]) =>
+  Effect.gen(function* () {
+    let owner: NextMove = "famulus"
+    const words: string[] = []
+    for (const arg of rest) {
+      if (!arg.startsWith("--")) {
+        words.push(arg)
+        continue
+      }
+      const flag = NEXT_MOVE_FLAG[arg]
+      if (!flag) {
+        const known = Object.keys(NEXT_MOVE_FLAG).join(" / ")
+        return yield* Effect.fail(new Error(`知らない指定: ${arg}(使えるのは ${known})`))
+      }
+      owner = flag
+    }
+    const subject = words.join(" ").trim()
+    if (!subject) return yield* Effect.fail(new Error("中身が要る: oz watch <やること> [--human]"))
+    return { subject, owner }
+  })
+
 const line = (p: ProposalRow) => `${short(p.id)}  ${STATUS_LABEL[p.status] ?? p.status}  ${p.summary}`
 
 const card = (p: ProposalRow) =>
@@ -198,55 +245,40 @@ const program = (argv: readonly string[]) =>
       }
 
       /**
-       * 見ているものを畳む2本。**溜まったものを持ち主の側から下ろせないと、机は一方通行で埋まる。**
-       * 問いも見張りも増やす口はエージェント側にあるのに、減らす口が答えるときしか無かった。
+       * 心拍が見ているものを、持ち主の側から置く/畳む4本。
+       *
+       * 問いも見張りも、**増やす口はエージェントの道具にしかなく、減らす口は答えるときしか無かった**。
+       * 片方向しかない置き場は必ず溜まる。溜まった側は `openQuestions` の上限を埋めて、
+       * 新しく立った問いを心拍から押し出す(実測: open 38 件のうち心拍が見ていたのは 20 件)。
        */
       case "answer": {
-        const [id, ...text] = rest
-        const said = text.join(" ").trim()
-        if (!id || !said) return yield* Effect.fail(new Error("id と答えが要る: oz answer <id> <答え>"))
+        const a = idAndText(rest)
+        if (!a) return yield* Effect.fail(new Error("id と答えが要る: oz answer <id> <答え>"))
         const att = yield* Attention
-        const q = yield* att.findQuestion(id)
-        // 持ち主が打った答えは一次情報。ここだけは確認済みとして入れてよい。
-        yield* att.answer(id, said, { confirmed: true })
-        return `答えた: ${short(q.id)} ${q.question}\n  → ${said}`
+        // 持ち主が打った答えは一次情報。**この経路だけは確認済みとして入れてよい。**
+        const q = yield* att.answer(a.id, a.text, { confirmed: true })
+        return `答えた: ${short(q.id)} ${q.question}\n  → ${q.answer}`
       }
 
       case "drop": {
-        const [id, ...why] = rest
-        const reason = why.join(" ").trim()
-        if (!id || !reason) return yield* Effect.fail(new Error("id と理由が要る: oz drop <id> <理由>"))
+        const a = idAndText(rest)
+        if (!a) return yield* Effect.fail(new Error("id と理由が要る: oz drop <id> <理由>"))
         const att = yield* Attention
-        const q = yield* att.findQuestion(id)
-        yield* att.drop(id, reason)
-        return `問いを取り下げた: ${short(q.id)} ${q.question}\n  理由: ${reason}`
+        const q = yield* att.drop(a.id, a.text)
+        return `問いを取り下げた: ${short(q.id)} ${q.question}\n  理由: ${q.answer}`
       }
 
-      /**
-       * 持ち主の側から仕事を置く。**既定は famulus** — 置いた時点で心拍の起床理由になり、
-       * 次に冷却が明けた回で自分の番として出てくる。人待ちの件は `--human` で理由から外す。
-       */
       case "watch": {
-        const owner: NextMove = rest.includes("--human")
-          ? "human"
-          : rest.includes("--counterparty")
-            ? "counterparty"
-            : "famulus"
-        const subject = rest
-          .filter((a) => !a.startsWith("--"))
-          .join(" ")
-          .trim()
-        if (!subject) return yield* Effect.fail(new Error("中身が要る: oz watch <やること> [--human]"))
+        const w = yield* parseWatch(rest)
         const att = yield* Attention
-        const id = yield* att.watch(subject, owner)
-        return `見張りに入れた: ${short(id)} ${subject}\n  次に動くのは ${owner}`
+        const id = yield* att.watch(w.subject, w.owner)
+        return `見張りに入れた: ${short(id)} ${w.subject}\n  次に動くのは ${w.owner}`
       }
 
       case "unwatch": {
         if (!rest[0]) return yield* Effect.fail(new Error("id が要る: oz unwatch <id>"))
         const att = yield* Attention
-        const w = yield* att.findWatch(rest[0])
-        yield* att.closeWatch(rest[0])
+        const w = yield* att.closeWatch(rest[0])
         return `見張りを閉じた: ${short(w.id)} ${w.subject}`
       }
 
@@ -288,11 +320,10 @@ const program = (argv: readonly string[]) =>
       }
 
       case "deny": {
-        const [id, ...why] = rest
-        const reason = why.join(" ").trim()
-        if (!id || !reason) return yield* Effect.fail(new Error("id と理由が要る: oz deny <id> <理由>"))
-        const r = yield* proposals.deny(id, reason)
-        return `却下した: ${short(r.id)} — ${reason}`
+        const a = idAndText(rest)
+        if (!a) return yield* Effect.fail(new Error("id と理由が要る: oz deny <id> <理由>"))
+        const r = yield* proposals.deny(a.id, a.text)
+        return `却下した: ${short(r.id)} — ${a.text}`
       }
 
       case "recall": {
@@ -413,12 +444,14 @@ const program = (argv: readonly string[]) =>
 /** 失敗を人に読める1行にする。CLI にスタックトレースを出さない(読む相手は持ち主)。 */
 function describe(e: unknown): string {
   if (isRefusal(e)) return describeRefusal(e)
-  const err = e as { _tag?: string; message?: string; reason?: string; id?: string }
+  const err = e as { _tag?: string; message?: string; reason?: string; id?: string; what?: string }
   switch (err?._tag) {
-    case "ProposalNotFound":
-      return `そんな提案は無い: ${err.id}`
-    case "ProposalConflict":
-      return `${err.id}: ${err.reason}`
+    // 何を引いて外したかは失敗側が持っている。ここで「提案」と決め打つと、
+    // 問いや見張りを引いたときに**当たらなかった相手を偽って**報せることになる。
+    case "NotFound":
+      return `そんな${err.what}は無い: ${err.id}`
+    case "Conflict":
+      return `${err.what} ${err.id}: ${err.reason}`
     case "DbFailed":
       return `DB: ${err.message}`
     default:

@@ -54,16 +54,24 @@ export class RunnerFailed extends Data.TaggedError("RunnerFailed")<{
   readonly exhausted?: boolean
 }> {}
 
-/** 指定した提案が無い。CLI の打ち間違い(id 前方一致で当たらない)もここ。 */
-export class ProposalNotFound extends Data.TaggedError("ProposalNotFound")<{
+/**
+ * 指定した行が無い。CLI の打ち間違い(id 前方一致で当たらない)もここ。
+ *
+ * `what` は何の台帳を引いたか(「提案」「問い」「見張り」)。**必須にしてある** —
+ * 省けるようにすると、提案の文言が問いにも見張りにも流用されて
+ * 「そんな提案は無い」と言いながら問いを探している、が起きる。
+ */
+export class NotFound extends Data.TaggedError("NotFound")<{
+  readonly what: string
   readonly id: string
 }> {}
 
 /**
- * 提案の状態が操作と噛み合わない(裁可済みを再裁可、id 前方一致が複数など)。
+ * 行の状態が操作と噛み合わない(裁可済みを再裁可、id 前方一致が複数など)。
  * **曖昧なまま裁可を通さない**ための失敗で、拒否(Refusal)とは別物 — 統治が止めたのではない。
  */
-export class ProposalConflict extends Data.TaggedError("ProposalConflict")<{
+export class Conflict extends Data.TaggedError("Conflict")<{
+  readonly what: string
   readonly id: string
   readonly reason: string
 }> {}

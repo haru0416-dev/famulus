@@ -163,17 +163,19 @@ test("未解決の問いは起こす理由にしない(自分では解消でき�
  */
 test("答えないまま取り下げられる。理由は残る", async () => {
   await withHarness(async (h) => {
-    const left = await h.run(
+    const { dropped, stored, left } = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
         const id = yield* att.ask("現職の就業規則で副業は可能か")
-        yield* att.drop(id, "副業探し自体を中断した")
-        const q = yield* att.findQuestion(id)
-        assert.equal(q.status, "dropped")
-        assert.equal(q.answer, "副業探し自体を中断した")
-        return yield* att.openQuestions()
+        const dropped = yield* att.drop(id, "副業探し自体を中断した")
+        // 返り値と台帳の中身の両方を見る。**書けたことと、書けたと言うことは別。**
+        return { dropped, stored: yield* att.findQuestion(id), left: yield* att.openQuestions() }
       }),
     )
+    assert.equal(dropped.status, "dropped")
+    // SQLite の行は prototype 無しで返る。中身だけを比べたいので両方を素の object に均す。
+    assert.deepEqual({ ...stored }, { ...dropped }, "返した行が台帳に入っている行と一致する")
+    assert.equal(stored.answer, "副業探し自体を中断した", "なぜ追わないかは残す")
     assert.deepEqual(left, [], "取り下げた問いは心拍の材料から外れる")
   })
 })

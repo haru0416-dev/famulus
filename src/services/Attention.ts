@@ -13,7 +13,7 @@
  */
 import { randomUUID } from "node:crypto"
 import { Effect } from "effect"
-import { ProposalConflict, ProposalNotFound } from "../core/errors.ts"
+import { Conflict, NotFound } from "../core/errors.ts"
 import { dayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
@@ -174,33 +174,40 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           idOrPrefix,
           idOrPrefix,
         )
-        if (rows.length === 0) return yield* Effect.fail(new ProposalNotFound({ id: idOrPrefix }))
+        if (rows.length === 0) return yield* Effect.fail(new NotFound({ what: "見張り", id: idOrPrefix }))
         if (rows.length > 1) {
           return yield* Effect.fail(
-            new ProposalConflict({ id: idOrPrefix, reason: `見張りの id が ${rows.length} 件に当たる` }),
+            new Conflict({ what: "見張り", id: idOrPrefix, reason: `${rows.length} 件に当たる` }),
           )
         }
         return rows[0] as unknown as WatchRow
       })
 
-    /** 動きがあったことを記録する。滞留日数の起点を今に戻す。 */
+    /**
+     * 動きがあったことを記録する。滞留日数の起点を今に戻す。
+     *
+     * 書き換えたあとの行を返す(以下の書き換えも同じ)。**id だけ返すと、呼んだ側が
+     * 何を触ったのかを言うためにもう一度引く必要が出る** — 前方一致で受けている以上、
+     * その引き直しは同じ行に当たる保証が無い。
+     */
     const touchWatch = (idOrPrefix: string, nextMoveOwner?: NextMove, at: string = nowIso()) =>
       Effect.gen(function* () {
         const w = yield* findWatch(idOrPrefix)
+        const owner = nextMoveOwner ?? w.next_move_owner
         yield* db.run(
           "UPDATE watchlist SET last_activity_at = ?, next_move_owner = ? WHERE id = ?",
           at,
-          nextMoveOwner ?? w.next_move_owner,
+          owner,
           w.id,
         )
-        return w.id
+        return { ...w, last_activity_at: at, next_move_owner: owner } satisfies WatchRow
       })
 
     const closeWatch = (idOrPrefix: string) =>
       Effect.gen(function* () {
         const w = yield* findWatch(idOrPrefix)
         yield* db.run("UPDATE watchlist SET status = 'closed' WHERE id = ?", w.id)
-        return w.id
+        return { ...w, status: "closed" } satisfies WatchRow
       })
 
     const openWatches = (nowMs: number = Date.now()) =>
@@ -234,10 +241,10 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           idOrPrefix,
           idOrPrefix,
         )
-        if (rows.length === 0) return yield* Effect.fail(new ProposalNotFound({ id: idOrPrefix }))
+        if (rows.length === 0) return yield* Effect.fail(new NotFound({ what: "問い", id: idOrPrefix }))
         if (rows.length > 1) {
           return yield* Effect.fail(
-            new ProposalConflict({ id: idOrPrefix, reason: `問いの id が ${rows.length} 件に当たる` }),
+            new Conflict({ what: "問い", id: idOrPrefix, reason: `${rows.length} 件に当たる` }),
           )
         }
         return rows[0] as unknown as QuestionRow
@@ -246,14 +253,15 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
     const answer = (idOrPrefix: string, text: string, opts?: { eventId?: string; confirmed?: boolean }) =>
       Effect.gen(function* () {
         const q = yield* findQuestion(idOrPrefix)
+        const confidence = opts?.confirmed ? "confirmed" : "unverified"
         yield* db.run(
           "UPDATE questions SET status = 'answered', answer = ?, confidence = ?, resolved_event_id = ? WHERE id = ?",
           text,
-          opts?.confirmed ? "confirmed" : "unverified",
+          confidence,
           opts?.eventId ?? null,
           q.id,
         )
-        return q.id
+        return { ...q, status: "answered", answer: text, confidence } satisfies QuestionRow
       })
 
     /**
@@ -269,7 +277,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       Effect.gen(function* () {
         const q = yield* findQuestion(idOrPrefix)
         yield* db.run("UPDATE questions SET status = 'dropped', answer = ? WHERE id = ?", why, q.id)
-        return q.id
+        return { ...q, status: "dropped", answer: why } satisfies QuestionRow
       })
 
     const openQuestions = (limit = 20) =>

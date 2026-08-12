@@ -523,9 +523,14 @@ export default function Assistant() {
         Effect.gen(function* () {
           const att = yield* Attention
           const mem = yield* Memory
-          const closed = yield* att.closeWatch(id)
-          if (note) yield* mem.remember({ source: "system", content: { closedWatch: closed, note } })
-          return `見張り ${closed.slice(0, 8)} を閉じた。`
+          const w = yield* att.closeWatch(id)
+          // 件名も一緒に残す。id だけの行は、後から台帳を引いたとき何の決着か読めない。
+          if (note)
+            yield* mem.remember({
+              source: "system",
+              content: { closedWatch: w.id, subject: w.subject, note },
+            })
+          return `見張り ${w.id.slice(0, 8)}「${w.subject}」を閉じた。`
         }),
       ),
   })
@@ -562,8 +567,8 @@ export default function Assistant() {
       run(
         Effect.gen(function* () {
           const att = yield* Attention
-          const closed = yield* att.answer(id, answer, { confirmed })
-          return `問い ${closed.slice(0, 8)} を閉じた(${confirmed ? "確認済み" : "未確認"})。`
+          const q = yield* att.answer(id, answer, { confirmed })
+          return `問い ${q.id.slice(0, 8)}「${q.question}」を閉じた(${confirmed ? "確認済み" : "未確認"})。`
         }),
       ),
   })
@@ -580,8 +585,8 @@ export default function Assistant() {
       run(
         Effect.gen(function* () {
           const att = yield* Attention
-          const closed = yield* att.drop(id, why)
-          return `問い ${closed.slice(0, 8)} を取り下げた: ${why}`
+          const q = yield* att.drop(id, why)
+          return `問い ${q.id.slice(0, 8)}「${q.question}」を取り下げた: ${why}`
         }),
       ),
   })

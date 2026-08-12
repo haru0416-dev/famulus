@@ -78,7 +78,7 @@ test("二重承認はできない(裁可済みは裁可の対象ではない)", 
         yield* p.approve(id)
       }),
     )
-    assert.equal((e as { _tag: string })._tag, "ProposalConflict")
+    assert.equal((e as { _tag: string })._tag, "Conflict")
 
     // 承認記録は1件のまま(二重に積まれていない)。
     const n = await h.run(
@@ -111,7 +111,7 @@ test("deny は理由を残し、以後は裁可できない", async () => {
         yield* p.approve(out.id)
       }),
     )
-    assert.equal((e as { _tag: string })._tag, "ProposalConflict")
+    assert.equal((e as { _tag: string })._tag, "Conflict")
   })
 })
 
@@ -144,11 +144,11 @@ test("id は前方一致で引ける。曖昧なら選ばずに失敗する", as
         yield* p.get("")
       }),
     )
-    assert.equal((e as { _tag: string })._tag, "ProposalConflict")
+    assert.equal((e as { _tag: string })._tag, "Conflict")
   })
 })
 
-test("存在しない id は ProposalNotFound", async () => {
+test("存在しない id は NotFound", async () => {
   await withHarness(async (h) => {
     const e = await h.fail(
       Effect.gen(function* () {
@@ -156,7 +156,7 @@ test("存在しない id は ProposalNotFound", async () => {
         yield* p.get("zzzzzzzz")
       }),
     )
-    assert.equal((e as { _tag: string })._tag, "ProposalNotFound")
+    assert.equal((e as { _tag: string })._tag, "NotFound")
   })
 })
 

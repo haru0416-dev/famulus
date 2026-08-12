@@ -16,7 +16,7 @@
  */
 import { createHash, randomUUID } from "node:crypto"
 import { Effect } from "effect"
-import { ProposalConflict, ProposalNotFound } from "../core/errors.ts"
+import { Conflict, NotFound } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
@@ -137,12 +137,13 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
         )
         const exact = rows.find((r) => r.id === idOrPrefix)
         if (exact) return exact as unknown as ProposalRow
-        if (rows.length === 0) return yield* Effect.fail(new ProposalNotFound({ id: idOrPrefix }))
+        if (rows.length === 0) return yield* Effect.fail(new NotFound({ what: "提案", id: idOrPrefix }))
         if (rows.length > 1) {
           return yield* Effect.fail(
-            new ProposalConflict({
+            new Conflict({
+              what: "提案",
               id: idOrPrefix,
-              reason: `id の前方一致が ${rows.length} 件ある: ${rows.map((r) => String(r.id).slice(0, 8)).join(", ")}`,
+              reason: `前方一致が ${rows.length} 件ある: ${rows.map((r) => String(r.id).slice(0, 8)).join(", ")}`,
             }),
           )
         }
@@ -185,7 +186,7 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
       DECIDABLE.includes(p.status)
         ? Effect.void
         : Effect.fail(
-            new ProposalConflict({ id: p.id, reason: `裁可できる状態ではない(status=${p.status})` }),
+            new Conflict({ what: "提案", id: p.id, reason: `裁可できる状態ではない(status=${p.status})` }),
           )
 
     /**
