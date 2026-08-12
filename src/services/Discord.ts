@@ -5,8 +5,9 @@
  * 長い下書きを読ませて一言返してもらう相手としては、既に開いている画面のほうが強い。
  *
  * **常駐しない。** ボタン(interaction)は3秒以内に応答が要るので gateway 接続が要るが、
- * 絵文字の印なら後から数えられる。押されたかどうかは心拍が起きたときに読めばよく、
- * それで足りる以上、落ちたら黙って死ぬ常駐を1本増やす理由が無い。
+ * 絵文字の印なら後から数えられる。返事の待ち時間は、常駐ではなく**読みに行く間隔**で決まる
+ * — 30秒ごとに `inbox()` を1回叩くだけならモデルを呼ばず REST 1本で済む(src/poll.ts)。
+ * 落ちたら黙って死ぬ常駐を1本増やさずに、待ち時間だけ 15分 から 30秒 に落ちる。
  *
  * 出す先は DM だけ。サーバのチャンネルに出すと、持ち主以外にも読まれる場所に台帳の中身が出る。
  *
@@ -21,6 +22,16 @@ const api = (): string => process.env.OPEN_ZERO_DISCORD_API ?? "https://discord.
 
 /** 1通の上限。Discord は 2000 字で弾くので、超えるぶんは分けて出す。 */
 const LIMIT = 2000
+
+/**
+ * 1通に入れる行数の上限。**字数だけで切ると縦に長いものが畳まれる。**
+ * Discord のクライアントは高いメッセージを途中で閉じて「続きを表示」にするので、
+ * 2000字に収まっていても読む側の手数が1回増える。
+ */
+const LINES = 17
+
+/** 受け取ったことを返す印。返し終わったら外す。**通知を1回も増やさない返事。** */
+export const ACK = "👀"
 
 /** 押させる印。絵文字1つに意味を1つ割り当てる。 */
 export interface Tap {
@@ -39,6 +50,8 @@ export interface Post {
 export interface Inbound {
   readonly id: string
   readonly text: string
+  /** 元になった Discord のメッセージ id。**印を付け返す先**。 */
+  readonly msgId: string
 }
 
 const token = (): string | undefined => process.env.OPEN_ZERO_DISCORD_TOKEN
@@ -53,13 +66,31 @@ const MAX_PENDING = 20
 /** snowflake は数として単調増加する。文字列比較では桁が変わったときに壊れる。 */
 const newer = (a: string, b: string): boolean => BigInt(a) > BigInt(b)
 
+/** 字数で切る位置。行の途中で切らない — 切れ目が無ければ諦めて長さで切る。 */
+const charCut = (s: string): number => {
+  if (s.length <= LIMIT) return s.length
+  const nl = s.lastIndexOf("\n", LIMIT)
+  return nl > LIMIT / 2 ? nl : LIMIT
+}
+
+/** 行数で切る位置。LINES 行目の末尾。足りなければ切らない。 */
+const lineCut = (s: string): number => {
+  let at = -1
+  for (let n = 0; n < LINES; n++) {
+    const nl = s.indexOf("\n", at + 1)
+    if (nl === -1) return s.length
+    at = nl
+  }
+  return at
+}
+
+/** 字数と行数の**先に来たほう**で切る。どちらか片方だけだと、もう片方で畳まれる。 */
 const chunks = (text: string): string[] => {
   const out: string[] = []
   let rest = text
-  while (rest.length > LIMIT) {
-    // 行の途中で切らない。切れ目が無ければ諦めて長さで切る。
-    const cut = rest.lastIndexOf("\n", LIMIT)
-    const at = cut > LIMIT / 2 ? cut : LIMIT
+  for (;;) {
+    const at = Math.min(charCut(rest), lineCut(rest))
+    if (at <= 0 || at >= rest.length) break
     out.push(rest.slice(0, at))
     rest = rest.slice(at).replace(/^\n/, "")
   }
@@ -125,6 +156,22 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       })
 
     /**
+     * 印を付ける / 外す。**受け取ったことを通知を増やさずに返すための口。**
+     *
+     * 走り始めに付けて、返し終わったら外す。持ち主の側では自分が送った文に印が付くだけで、
+     * 通知は1回も鳴らない。返事そのものが来るまでの間、動いているかどうかがそこで読める。
+     * 途中で落ちれば印は残る — それは「まだ返していない」の正しい表示なので消しに行かない。
+     */
+    const mark = (messageId: string, emoji: string, on: boolean): Effect.Effect<void, DbFailed> =>
+      Effect.gen(function* () {
+        const ch = yield* channel()
+        if (!ch) return
+        yield* call(`/channels/${ch}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`, {
+          method: on ? "PUT" : "DELETE",
+        }).pipe(Effect.ignore)
+      })
+
+    /**
      * 1通出す。**失敗しても例外にしない** — 送れたらメッセージ id、駄目なら undefined。
      * 印は自分で先に付ける。押す側が絵文字を選ぶ手間を消すため。
      */
@@ -144,11 +191,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
           )
         }
         if (!last || !p.taps?.length) return last
-        for (const t of p.taps) {
-          yield* call(`/channels/${ch}/messages/${last}/reactions/${encodeURIComponent(t.emoji)}/@me`, {
-            method: "PUT",
-          }).pipe(Effect.ignore)
-        }
+        for (const t of p.taps) yield* mark(last, t.emoji, true)
         const pending = yield* meta<Pending>("discord:taps", {})
         pending[last] = Object.fromEntries(p.taps.map((t) => [t.emoji, t.reply]))
         const kept = Object.entries(pending).slice(-MAX_PENDING)
@@ -189,7 +232,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         // 古い順に見る。API は新しい順で返すので、そのまま流すと台帳の並びが逆になる。
         for (const m of [...msgs].reverse()) {
           if (cursor && m.author.id === owner && m.content.trim() !== "" && newer(m.id, cursor)) {
-            out.push({ id: m.id, text: m.content })
+            out.push({ id: m.id, text: m.content, msgId: m.id })
           }
           const waiting = pending[m.id]
           if (!waiting) continue
@@ -197,7 +240,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
             const reply = waiting[r.emoji.name]
             // 自分で付けたぶんは数に入っている。それを超えていたら持ち主が押した。
             if (reply && r.count > (r.me ? 1 : 0)) {
-              out.push({ id: `${m.id}:${r.emoji.name}`, text: reply })
+              out.push({ id: `${m.id}:${r.emoji.name}`, text: reply, msgId: m.id })
               delete pending[m.id]
               break
             }
@@ -213,6 +256,6 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
     /** 出せるか。人に「Discord には出ない」と伝えるためだけに使う。 */
     const configured = (): boolean => token() !== undefined && ownerId() !== undefined
 
-    return { post, inbox, configured } as const
+    return { post, inbox, mark, configured } as const
   }),
 }) {}

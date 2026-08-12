@@ -25,14 +25,14 @@ import { DRAFTING } from "./agent/drafting.ts"
 import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
+import { drainInbox } from "./inbox.ts"
 import { claudeMaxProvider } from "./model/provider.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
 import { Attention, type Digest, type ObservedEvent } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
-import { Discord } from "./services/Discord.ts"
+import { ACK, Discord } from "./services/Discord.ts"
 import { buildFencedPrompt, Governance, type UntrustedBlock } from "./services/Governance.ts"
 import { Memory } from "./services/Memory.ts"
-import { Notify } from "./services/Notify.ts"
 
 // **モジュール直下の設定より先に読む。** 下の const は評価時に env を見るので、順番が意味を持つ。
 loadEnv()
@@ -65,13 +65,17 @@ function renderEvent(e: ObservedEvent): string {
  * 起こされた以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を撃つ。
  * 起きた理由と材料だけ渡して、動かす必要が無ければ一行で終えてよいと書く。
  */
-function buildPrompt(d: Digest): string {
+function buildPrompt(d: Digest, spokenTo: boolean): string {
   const sections: string[] = []
 
   sections.push(
     [
-      "これは心拍(定期起動)。持ち主に話しかけられて動いているのではない。",
-      `いま ${d.at}。**持ち主はこの場にいない** — 訊いても今は誰も答えない。`,
+      spokenTo
+        ? "**持ち主がいま話しかけている。**下に載っている owner の入力がそれ。"
+        : "これは心拍(定期起動)。持ち主に話しかけられて動いているのではない。",
+      spokenTo
+        ? `いま ${d.at}。**この回で最後に書いた文が、そのまま Discord の返信として届く。**`
+        : `いま ${d.at}。**持ち主はこの場にいない** — 訊いても今は誰も答えない。`,
       "",
       `## なぜ起きたか`,
       ...d.reasons.map((r) => `- ${r}`),
@@ -141,10 +145,19 @@ function buildPrompt(d: Digest): string {
       "自分の記録(remember / watch / unwatch / ask / answer)は自分の判断で書いてよい。確認は要らない。",
       "外に出る行為(送信・予約・購入・削除)は propose で置く。実行はしない。",
       "",
-      "**書いても届かない。** ここで書いたものは自分の側に残るだけで、持ち主は読みに来ない。",
-      "読んでほしいものがあるなら `tell` で持ち主の手元へ押す。ただし**用があるときだけ**",
-      "— 動いた結果、知らないと選べないこと、期限が迫っているもの。経過や気付きは押さない。",
-      "鳴る回数が増えるほど、次に鳴ったときに読まれなくなる。",
+      ...(spokenTo
+        ? [
+            "**最後に書いた文がそのまま返信になる。** `tell` は要らない — 同じ画面に出る。",
+            "答えるのであって、報告しない。何を調べたか・どの道具を呼んだかは書かない。",
+            "訊かれたことに答え、動いたなら何がどうなったかを書く。**それ以外は書かない。**",
+            "分からないなら分からないと書く。埋めるために推測を足さない。",
+          ]
+        : [
+            "**書いても届かない。** ここで書いたものは自分の側に残るだけで、持ち主は読みに来ない。",
+            "読んでほしいものがあるなら `tell` で持ち主の手元へ押す。ただし**用があるときだけ**",
+            "— 動いた結果、知らないと選べないこと、期限が迫っているもの。経過や気付きは押さない。",
+            "鳴る回数が増えるほど、次に鳴ったときに読まれなくなる。",
+          ]),
       "",
       "**調べ直すより、手元にあるもので終える。** 心拍は数分で切られる。途中で切られると",
       "その回の働きは丸ごと消えて、持ち主には何も残らない。だから:",
@@ -152,9 +165,16 @@ function buildPrompt(d: Digest): string {
       "- 台帳を読むだけなら自分で引く。`task` で子を立てるのは**外(web / search)を見に行くときだけ**。",
       "- 材料が揃ったらそこで打ち切って、`tell` なり `remember` なりで形にして終える。",
       "",
-      "**何もしないのが正解であることが多い。** 動かす必要が無ければ道具を1つも呼ばず、",
-      "「今は動かない。理由は〜」と一行で書いて終えてよい。それは失敗ではない。",
-      "持ち主に確認したいことが出たら、訊くのではなく ask で問いとして置く。",
+      ...(spokenTo
+        ? [
+            "**訊き返してよい。** 相手はいま画面の前にいる。分岐が決められないなら、",
+            "選べる形にして1つだけ訊く(ask で置くのは、その場で答えが要らないものだけ)。",
+          ]
+        : [
+            "**何もしないのが正解であることが多い。** 動かす必要が無ければ道具を1つも呼ばず、",
+            "「今は動かない。理由は〜」と一行で書いて終えてよい。それは失敗ではない。",
+            "持ち主に確認したいことが出たら、訊くのではなく ask で問いとして置く。",
+          ]),
     ].join("\n"),
   )
 
@@ -183,40 +203,6 @@ const blocked = Effect.gen(function* () {
     )
 })
 
-/**
- * 受信箱を台帳に移す。**digest より先に呼ぶ** — 届いていた文がそのまま未読の入力になり、
- * 「持ち主から言われた」ことが起きる理由になる。ここが後だと、返事は次の心拍まで読まれない。
- *
- * 口は2つ。ntfy はロック画面まで届くが返せる幅が狭く、Discord は持ち主が一番長く開いている。
- * どちらから来ても同じ owner イベントにする — 台帳の側で経路を気にする理由が無い。
- *
- * ntfy は位置を持っていない初回だけ**取り込まずに位置を進める**。数十時間ぶん抱えているので、
- * 位置なしで引くと昨日の返事が今日の指示として流れ込む(Discord 側は同じ規則を自分で持つ)。
- *
- * source は owner。ntfy の宛先は tailnet の中にしか出ておらず、Discord は持ち主との DM だけ。
- * 仮に別の端末から投げられても、外に出る行為は予告を経るので実行前に持ち主の目を通る。
- */
-const drainInbox = Effect.gen(function* () {
-  const notify = yield* Notify
-  const discord = yield* Discord
-  const db = yield* Db
-  const mem = yield* Memory
-  const said: string[] = []
-
-  const cursor = yield* db.meta("ntfy:in_cursor")
-  const msgs = yield* notify.inbox(cursor ?? "all")
-  const last = msgs.at(-1)
-  if (last) {
-    yield* db.setMeta("ntfy:in_cursor", last.id)
-    if (cursor) said.push(...msgs.map((m) => m.text))
-  }
-
-  said.push(...(yield* discord.inbox()).map((m) => m.text))
-
-  for (const text of said) yield* mem.remember({ source: "owner", content: text, at: nowIso() })
-  return said.length
-})
-
 /** 心拍の回数だけ数えておく。行を増やさずに「生きているか」が分かる最小の痕跡。 */
 const bumpCount = (key: string) =>
   Effect.gen(function* () {
@@ -229,8 +215,11 @@ const bumpCount = (key: string) =>
 async function tick(): Promise<string> {
   const d = await run(
     Effect.gen(function* () {
+      // **digest より先に読む** — 届いていた文がそのまま未読の入力になり、「持ち主から
+      // 言われた」ことが起きる理由になる。ここが後だと、返事は次の心拍まで読まれない。
+      // 口(poll)が先に取り込んでいれば0件で通り、台帳に残っているぶんが digest に出る。
       const arrived = yield* drainInbox
-      if (arrived > 0) log(`受信箱から ${arrived} 件`)
+      if (arrived.count > 0) log(`受信箱から ${arrived.count} 件`)
       const att = yield* Attention
       return yield* att.digest()
     }),
@@ -242,7 +231,9 @@ async function tick(): Promise<string> {
       Effect.gen(function* () {
         const att = yield* Attention
         const n = yield* bumpCount("tick:idle_count")
-        yield* att.commit()
+        // 見ていないので進めない。idle は入力が無いという判定なので、この起動と入れ違いに
+        // 届いたぶんまで既読にすると、届いた側は何も返らないまま消える。
+        yield* att.commit({ upto: d.cursor })
         return n
       }),
     )
@@ -253,7 +244,10 @@ async function tick(): Promise<string> {
   const stop = await run(blocked)
   if (stop) return `見送った: ${stop}`
 
-  log("起きる:", d.reasons.join(" / "))
+  // **話しかけられて起きたのか、自分の都合で起きたのか。** ここで返信の宛先が決まる。
+  // owner の未読があるなら、この回の最後の文は台帳ではなく持ち主の画面へ出す。
+  const spokenTo = d.newEvents.some((e) => e.source === "owner")
+  log("起きる:", d.reasons.join(" / "), spokenTo ? "(返信)" : "")
 
   // 自走枠であることを **Assistant を読み込む前に** 立てる。
   // provider.ts の lane() は呼び出し時評価なのでこれで足りるが、モデル名は
@@ -274,7 +268,7 @@ async function tick(): Promise<string> {
     // インスタンスは持ち主の1日で切る。数時間前の自分の判断は文脈として効くが、
     // 何週間も同じ会話に積み続けると、起きるたびに古い履歴を運ぶだけになる。
     const agent = init(Assistant, { id: `tick-${dayRange(d.at).key}` })
-    const receipt = await agent.dispatch(buildPrompt(d))
+    const receipt = await agent.dispatch(buildPrompt(d, spokenTo))
     const reply = await agent.read(receipt, { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(async (e) => {
       await agent.abort().catch(() => {})
       throw e
@@ -286,6 +280,17 @@ async function tick(): Promise<string> {
         const mem = yield* Memory
         const att = yield* Attention
         const db = yield* Db
+        const discord = yield* Discord
+        // **返信は台帳より先に出す。** 持ち主は待っている側なので、記録に手間取って
+        // 返事が遅れる順序にしない。出せなくても台帳には残るので、失っては困るものは無い。
+        if (spokenTo && text) yield* discord.post({ text })
+        // 受け取った印を外す。**返し終わったこと自体を、通知を鳴らさずに知らせる。**
+        // 落ちたときは残る — それは「まだ返していない」の正しい表示なので消しに行かない。
+        const acked = yield* db.meta("discord:ack")
+        if (acked) {
+          yield* discord.mark(acked, ACK, false)
+          yield* db.setMeta("discord:ack", "")
+        }
         yield* mem.remember({
           kind: "observe",
           source: "system",
@@ -302,7 +307,13 @@ async function tick(): Promise<string> {
         if (d.draftDue) yield* db.setMeta("daily:draft", dayRange(d.at).key)
         // **active を立てるのはここだけ**。次の心拍はこの時刻から冷却時間を数える。
         // reasonKey を渡すと、同じ顔ぶれで起きるたびに次の冷却が倍になる(焚き続けない)。
-        yield* att.commit({ active: true, reasonKey: d.reasonKey })
+        // **進めるのは digest に載った行までにする。** 走っている間に届いたぶんは未読のまま残り、
+        // 30秒ごとの口(poll.ts)が次の起動で拾い直す。ここを最大 rowid にすると黙って落ちる。
+        yield* att.commit({
+          active: true,
+          reasonKey: d.reasonKey,
+          upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
+        })
       }),
     )
     return text ? `動いた: ${text.slice(0, 400)}` : "動いた(発話なし)"

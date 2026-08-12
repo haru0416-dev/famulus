@@ -287,3 +287,53 @@ test("決めた時刻より前には立たない — その日の走行記録が
     process.env.OPEN_ZERO_DAILY_HOUR = keep
   }
 })
+
+test("走っている最中に届いたぶんは既読にしない — 返さないまま消えるのを塞ぐ", async () => {
+  await withHarness(async (h) => {
+    const seen = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const att = yield* Attention
+        yield* mem.remember({ source: "owner", content: "1本目" })
+        return yield* att.digest(T0)
+      }),
+    )
+    assert.equal(seen.newEvents.length, 1)
+
+    const after = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const att = yield* Attention
+        // 心拍が走り終える前に届いた2本目。この回の digest には載っていない。
+        yield* mem.remember({ source: "owner", content: "2本目" })
+        yield* mem.remember({ source: "system", content: { said: "1本目に答えた" } })
+        yield* att.commit({
+          active: true,
+          at: "2026-08-08T09:00:00Z",
+          upto: seen.newEvents.at(-1)?.rowid ?? seen.cursor,
+        })
+        return yield* att.digest(T0 + hours(0.1))
+      }),
+    )
+    assert.equal(after.newEvents.length, 1, "見ていない入力は残る")
+    assert.equal(after.newEvents[0]?.content, '"2本目"')
+    assert.equal(after.idle, false, "残っている限り次の心拍が起きる")
+  })
+})
+
+test("idle でも位置は進めない — 判定と入れ違いに届いたぶんが消えない", async () => {
+  await withHarness(async (h) => {
+    const d = await h.run(digestAt(T0))
+    const after = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const att = yield* Attention
+        yield* mem.remember({ source: "owner", content: "入れ違い" })
+        yield* att.commit({ upto: d.cursor })
+        return yield* att.digest(T0 + hours(0.1))
+      }),
+    )
+    assert.equal(after.newEvents.length, 1)
+    assert.equal(after.newEvents[0]?.content, '"入れ違い"')
+  })
+})

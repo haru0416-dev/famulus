@@ -361,13 +361,23 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       })
 
     /**
-     * 心拍を見終えた位置を確定する。**心拍自身が書いたものも消費済みにする**
-     * (でないと自分の書き込みで自分が起き続ける)。
+     * 心拍を見終えた位置を確定する。
+     *
+     * `upto` は**その回が実際に見た最後の行**。渡さないと「今の最大 rowid」まで進むので、
+     * 走っている最中に届いたぶん — digest には載っていない行 — まで読んだことになり、
+     * 誰も答えないまま既読になる。心拍からは必ず渡す。
+     *
+     * 渡さない経路(対話セッションの終わり)は、自分が書いた行ごと消費してよい場面に限る。
+     * 心拍自身の書き込みで心拍が起きることは無い — digest が `source='system'` を外している。
      */
-    const commit = (opts?: { active?: boolean; at?: string; reasonKey?: string }) =>
+    const commit = (opts?: { active?: boolean; at?: string; reasonKey?: string; upto?: number }) =>
       Effect.gen(function* () {
-        const max = yield* db.get("SELECT COALESCE(MAX(rowid),0) m FROM events")
-        yield* db.setMeta("tick:cursor", String(Number(max?.m ?? 0)))
+        let upto = opts?.upto
+        if (upto === undefined) {
+          const max = yield* db.get("SELECT COALESCE(MAX(rowid),0) m FROM events")
+          upto = Number(max?.m ?? 0)
+        }
+        yield* db.setMeta("tick:cursor", String(upto))
         const at = opts?.at ?? nowIso()
         yield* db.setMeta("tick:last", at)
         if (!opts?.active) return
