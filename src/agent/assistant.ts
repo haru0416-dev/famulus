@@ -25,6 +25,7 @@ import {
 } from "@flue/runtime"
 import { Effect } from "effect"
 import * as v from "valibot"
+import { remainingLabel, remainingMs } from "../core/deadline.ts"
 import { loadEnv } from "../core/env.ts"
 import { dayRange, localStamp, nowIso } from "../core/time.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "../model/claude-cli.ts"
@@ -63,6 +64,16 @@ const WORK_MODEL = `${CLAUDE_MAX_PROVIDER_ID}/${process.env.OPEN_ZERO_WORK_MODEL
  * 外向きは既定で閉じていて、この役を通る以外に外へ出る道は無い。
  */
 const RESEARCH_MODEL = `${CLAUDE_MAX_PROVIDER_ID}/${process.env.OPEN_ZERO_RESEARCH_MODEL ?? "gpt-5.6-luna-web"}`
+
+/**
+ * `shell` が締切のために空けておく時間。**この回で分かったことを書くための取り分**。
+ *
+ * 走行そのものは1回ごとに台帳へ落ちるが、それは生の出力で、何が分かったかは書かれていない。
+ * 最後の文を書けずに切られると、残るのは読み返す人のいないログだけになる。
+ */
+const RUN_RESERVE_MS = 45_000
+/** これを下回る持ち時間なら走らせない。取得だけで消えて、出力が出る前に切られる。 */
+const MIN_RUN_MS = 15_000
 
 /**
  * 今のターンの入力そのものの event id。**recall から外すために持つ**(Memory.recall の注記)。
@@ -616,7 +627,7 @@ export default function Assistant() {
       "書けるのは作業場だけで、器は毎回捨てられる — 残るのは作業場に置いたファイルだけ。" +
       "既定では外に出られない。clone や install が要るときだけ net を true にする。" +
       "上限は3分 / メモリ 2GB。返るのは出力の末尾 12,000字。" +
-      "**3分で終わる単位に割る** — 心拍ごと落ちると走った記録も消える。" +
+      "**短い単位に割る** — 返り値に載る残り時間を見て、尽きる前に切り上げる。" +
       "同じ作業場の名前を渡せば置いたファイルは残るので、続きは次の心拍でやればよい。",
     input: v.object({
       command: v.pipe(v.string(), v.description("走らせるコマンド。bash -lc に渡す。複数行でよい。")),
@@ -638,10 +649,26 @@ export default function Assistant() {
           const gov = yield* Governance
           const halted = yield* gov.readHalt
           if (halted) return `走らせない: 停止中(halt)— ${halted.reason}`
+          // **締切の手前で自分から降りる。** 走行そのものは記録に残るが、この回で分かったことを
+          // まとめる文は最後に書かれるので、書く時間を残さずに切られると**9回走った意味が消える**。
+          const left = remainingMs()
+          if (left < RUN_RESERVE_MS + MIN_RUN_MS) {
+            return (
+              `走らせない: この心拍の残りが ${Math.max(0, Math.round(left / 1000))} 秒しかない。\n` +
+              `ここで手を止めて、いま分かっていることを書いて終える。` +
+              `続きは次の心拍で、同じ作業場(${workspace})を渡せば置いたファイルから再開できる。`
+            )
+          }
           const mem = yield* Memory
           const dir = runDir(workspace)
           const r = yield* Effect.promise(() =>
-            runInSandbox(command, { workDir: dir, ...(net ? { net } : {}) }),
+            runInSandbox(command, {
+              workDir: dir,
+              ...(net ? { net } : {}),
+              // 器の上限より締切のほうが近いなら、締切に合わせる。器の中で時間切れになれば
+              // 出力は返るが、心拍ごと切られると**走った跡の1行も残らない**。
+              ...(Number.isFinite(left) ? { timeoutMs: left - RUN_RESERVE_MS } : {}),
+            }),
           )
           const head = r.timedOut
             ? `時間切れで打ち切った(${Math.round(r.elapsedMs / 1000)}秒)`
@@ -654,7 +681,7 @@ export default function Assistant() {
             content: { ran: command, workspace, exitCode: r.exitCode, ms: r.elapsedMs, output: r.output },
             text: `${command}\n${r.output}`,
           })
-          return `${head}\n作業場: ${dir}\n\n${r.output || "(出力なし)"}`
+          return `${head} / ${remainingLabel()}\n作業場: ${dir}\n\n${r.output || "(出力なし)"}`
         }),
       ),
   })

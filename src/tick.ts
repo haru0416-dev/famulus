@@ -22,6 +22,7 @@ import { init } from "@flue/runtime"
 import { sqlite, start } from "@flue/runtime/node"
 import { Effect } from "effect"
 import { DRAFTING } from "./agent/drafting.ts"
+import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
@@ -145,6 +146,8 @@ function buildPrompt(d: Digest, spokenTo: boolean): string {
       "自分の記録(remember / watch / unwatch / ask / answer)は自分の判断で書いてよい。確認は要らない。",
       "外に出る行為(送信・予約・購入・削除)は propose で置く。実行はしない。",
       "**手元で動かすのは `shell`** — 隔離された器の中なので裁可は要らない。走った跡は台帳に残る。",
+      `**この回に使える時間は ${Math.round(TIMEOUT_MS / 1000)} 秒**。\`shell\` の返り値に残りが出る。` +
+        "尽きる前に手を止めて、分かったことを書く。続きは同じ作業場の名前を渡せば次の心拍で継げる。",
       "",
       ...(spokenTo
         ? [
@@ -269,10 +272,19 @@ async function tick(): Promise<string> {
     // インスタンスは持ち主の1日で切る。数時間前の自分の判断は文脈として効くが、
     // 何週間も同じ会話に積み続けると、起きるたびに古い履歴を運ぶだけになる。
     const agent = init(Assistant, { id: `tick-${dayRange(d.at).key}` })
+    // 道具に締切を見せる。**プロンプトに書くだけでは足りない** — 起動時の文は、9回目を
+    // 走らせるかどうかを決める時点では過去の話になっている(src/core/deadline.ts)。
+    startDeadline(TIMEOUT_MS)
     const receipt = await agent.dispatch(buildPrompt(d, spokenTo))
+    // **切られてもここで受け止める。** 投げ直すと commit に辿り着かないので冷却の起点が進まず、
+    // 次のタイマーが同じ理由で起きて同じだけ焼いて同じように落ちる。落ちた回も1回動いた回として
+    // 締める — 実際にモデルは走り、道具も動いて、その跡は台帳に残っている。
+    let cutOff = false
     const reply = await agent.read(receipt, { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(async (e) => {
       await agent.abort().catch(() => {})
-      throw e
+      cutOff = true
+      log("切られた:", String(e))
+      return { text: `(${Math.round(TIMEOUT_MS / 1000)}秒で切られた。この回の締めの文は書けていない)` }
     })
 
     const text = (reply.text ?? "").trim()
@@ -284,7 +296,8 @@ async function tick(): Promise<string> {
         const discord = yield* Discord
         // **返信は台帳より先に出す。** 持ち主は待っている側なので、記録に手間取って
         // 返事が遅れる順序にしない。出せなくても台帳には残るので、失っては困るものは無い。
-        if (spokenTo && text) yield* discord.post({ text })
+        // 切られた回の穴埋め文は出さない。**待っている側に届けてよいのは、書かれた返事だけ。**
+        if (spokenTo && text && !cutOff) yield* discord.post({ text })
         yield* mem.remember({
           kind: "observe",
           source: "system",
@@ -298,7 +311,8 @@ async function tick(): Promise<string> {
         yield* bumpCount("tick:active_count")
         // **書けたかどうかに関わらず、その日は1回で打ち切る。** `draft` を呼ばなかった=材料が無かった
         // ということで、同じ材料のまま15分ごとに書かせ直しても出てくるものは変わらない。
-        if (d.draftDue) yield* db.setMeta("daily:draft", dayRange(d.at).key)
+        // ただし切られた回は数えない — 書かないと決めたのではなく、決める前に止められている。
+        if (d.draftDue && !cutOff) yield* db.setMeta("daily:draft", dayRange(d.at).key)
         // **active を立てるのはここだけ**。次の心拍はこの時刻から冷却時間を数える。
         // reasonKey を渡すと、同じ顔ぶれで起きるたびに次の冷却が倍になる(焚き続けない)。
         // **進めるのは digest に載った行までにする。** 走っている間に届いたぶんは未読のまま残り、
@@ -310,8 +324,10 @@ async function tick(): Promise<string> {
         })
       }),
     )
+    if (cutOff) return `切られた(${Math.round(TIMEOUT_MS / 1000)}秒)— 走った跡は台帳に残っている`
     return text ? `動いた: ${text.slice(0, 400)}` : "動いた(発話なし)"
   } finally {
+    clearDeadline()
     await flue.stop()
   }
 }
