@@ -45,10 +45,10 @@ import {
   findLeaks,
   findShape,
   findSmells,
-  keepQuoted,
-  type Problem,
   REVIEW_SCHEMA,
   REVIEW_SYSTEM,
+  type Review,
+  reviewOutcome,
 } from "./drafting.ts"
 import { soulInstruction } from "./soul.ts"
 
@@ -954,16 +954,9 @@ function buildTools(state: TurnState) {
             if (review._tag === "Left") {
               return `出していない。精査役を呼べなかった(${causeReason(review.left)})。本文は捨てずに、次の回でもう一度呼ぶ。`
             }
-            const verdict = (review.right.structured ?? {}) as { verdict?: string; problems?: Problem[] }
-            const problems = keepQuoted(verdict.problems, title, body)
-            if (verdict.verdict === "直す" && problems.length > 0) {
-              return (
-                `出していない。**読み手に止められた。**\n${problems
-                  .map((p) => `- 「${p.quote}」\n  ${p.rule}\n  → ${p.fix}`)
-                  .join("\n")}\n` +
-                "直してから、もう一度呼ぶ。**書き足して答えない** — 指摘された文は落とすか書き換える。"
-              )
-            }
+            // **「出す」と言われたときだけ出す**(docs/adr/0031、判断そのものは drafting.ts)。
+            const outcome = reviewOutcome(review.right.structured as Review | undefined, title, body)
+            if (!outcome.post) return outcome.text
             const id = yield* discord.post({
               text: `**${title}**\n\n${body}\n\n---\n根拠: ${basis}`,
               // 押してもらわないと外に出ない文なので、**ミュートしてある場所でも呼ぶ**。

@@ -211,15 +211,60 @@ export interface Problem {
 const bare = (s: string): string => s.replace(/\s/g, "")
 
 /**
- * 本文に無い引用を付けた指摘を落とす。**指示ではなくコードが弾く。**
+ * 引用が本文にそのまま在る指摘だけを返す。**指示ではなくコードが弾く。**
  *
- * 引用を写せなかった指摘は、当たっている保証が無いだけでなく直しようも無い。
- * 全部落ちて0件になったら通す — 名指せない駄目出しで止めると、書き直しても同じ理由でまた止まり、
- * 下書きが一度も出ないまま日が過ぎる。Intake の `quoted` と同じ扱い。
+ * 写せなかった引用をそのまま書き手に見せると、本文に無い文を「あなたはこう書いた」と示すことになる。
+ *
+ * **前はここで0件になった回を通していた。** 名指せない駄目出しで止めると書き直しても同じ理由で
+ * また止まる、という理由だったが、通す側に倒すと**精査役が黙った回も同じ顔で通る**
+ * (docs/adr/0031)。いまは落とすのを引用だけにして、規律と直し方は `reviewOutcome` が渡す。
  */
 export function keepQuoted(problems: readonly Problem[] | undefined, title: string, body: string): Problem[] {
   const src = bare(`${title}\n${body}`)
   return (problems ?? []).filter((p) => p.quote.trim() !== "" && src.includes(bare(p.quote)))
+}
+
+/** 精査役の返り。**読めない形で返ることがある**ので、全部の欄を任意にしてある。 */
+export interface Review {
+  readonly verdict?: string
+  readonly problems?: readonly Problem[]
+}
+
+/**
+ * 精査の返りを、出すか出さないかに落とす。**「出す」と言われたときだけ出す**(docs/adr/0031)。
+ *
+ * 前は「直す」と言われ、かつ引用が本文に当たった指摘が1件以上あるときだけ止めていた。
+ * 裏を返すと**返りが読めなかった回**と、**「直す」と言いながら引用を写せなかった回**が
+ * どちらも素通りしていた。精査役が黙った回は、指摘が無い回と同じ顔で出ていく。
+ *
+ * 引用が当たらなかった指摘も捨てない。落とすのは引用だけで、規律と直し方は書いた側が使える。
+ */
+export function reviewOutcome(
+  review: Review | undefined,
+  title: string,
+  body: string,
+): { readonly post: true } | { readonly post: false; readonly text: string } {
+  if (review?.verdict === "出す") return { post: true }
+  const shown = keepQuoted(review?.problems, title, body)
+  const rest = (review?.problems ?? []).filter((p) => !shown.includes(p))
+  const lines = [
+    ...shown.map((p) => `- 「${p.quote}」\n  ${p.rule}\n  → ${p.fix}`),
+    ...rest.map((p) => `- (引用が本文と一致しなかった)\n  ${p.rule}\n  → ${p.fix}`),
+  ]
+  if (lines.length === 0) {
+    return {
+      post: false,
+      text:
+        `出していない。**精査役の返りが読めなかった**(判定: ${review?.verdict ?? "返らなかった"})。\n` +
+        "本文は捨てずに、次の回でもう一度呼ぶ。",
+    }
+  }
+  return {
+    post: false,
+    text:
+      `出していない。**読み手に止められた。**\n${lines.join("\n")}\n` +
+      "直してから、もう一度呼ぶ。**書き足して答えない** — 指摘された文は落とすか書き換える。",
+  }
 }
 
 /**

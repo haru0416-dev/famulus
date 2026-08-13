@@ -187,3 +187,24 @@ test("弾かれて手ぶらのときだけ取り直す", () => {
   assert.equal(needsResubmit(true, undefined, 0), false)
   assert.equal(needsResubmit(false, true, 0), false) // そもそも道具を渡していない経路
 })
+
+/**
+ * 精査役は**書いた側と別の系列**に置く(docs/adr/0031)。同じモデルの2回目は同じ死角を持つ。
+ * 枠も分かれていること(RMOD_POOL)まで見る — 同じ pool に積むと、精査1回ぶん対話の枠が減る。
+ */
+test("精査役は対話と別のモデル・別の枠から出る", async () => {
+  await withHarness(
+    async (h) => {
+      const out = await h.run(
+        Effect.gen(function* () {
+          const runner = yield* Runner
+          return { dialogue: runner.plan("dialogue"), reviewer: runner.plan("reviewer") }
+        }),
+      )
+      assert.notEqual(out.reviewer.model, out.dialogue.model)
+      assert.notEqual(out.reviewer.pool, out.dialogue.pool)
+      assert.equal(out.reviewer.pool, poolForModel(ROLE_MODEL.reviewer))
+    },
+    [{ text: "" }],
+  )
+})

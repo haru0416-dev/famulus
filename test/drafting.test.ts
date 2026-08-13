@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { findLeaks, findShape, findSmells, keepQuoted } from "../src/agent/drafting.ts"
+import { findLeaks, findShape, findSmells, keepQuoted, reviewOutcome } from "../src/agent/drafting.ts"
 
 /** 非公開の確定値。DB にはこの形で入っている(JSON 文字列の中身)。 */
 const SECRETS = [
@@ -179,4 +179,54 @@ test("引用が空の指摘は捨てる — 名指せない駄目出しで止め
 
 test("指摘が無い返り値でも落ちない", () => {
   assert.deepEqual(keepQuoted(undefined, "題", BODY), [])
+})
+
+/**
+ * 精査の返りを、出す / 出さない に落とすところ。**素通りの側を見る。**
+ *
+ * 落ちるのが1件も無い回に出してしまうと、精査役が黙ったことと指摘が無かったことが
+ * 呼ぶ側から区別できない。ここは「出す」と書かれた回だけを通す(docs/adr/0031)。
+ */
+test("「出す」と返ったときだけ外に出す", () => {
+  const r = reviewOutcome({ verdict: "出す", problems: [] }, "題", BODY)
+  assert.equal(r.post, true)
+})
+
+test("返りが読めなかった回は出さない — 黙った回と指摘が無い回を分ける", () => {
+  const r = reviewOutcome(undefined, "題", BODY)
+  assert.equal(r.post, false)
+  assert.match(r.post === false ? r.text : "", /読めなかった/)
+})
+
+test("「直す」で指摘が空の回も出さない", () => {
+  const r = reviewOutcome({ verdict: "直す", problems: [] }, "題", BODY)
+  assert.equal(r.post, false)
+})
+
+test("引用が本文と合わなかった指摘も、規律と直し方は書き手に渡す", () => {
+  const r = reviewOutcome(
+    {
+      verdict: "直す",
+      problems: [{ quote: "本文のどこにも無い一節", rule: "評価で締めている", fix: "落とす" }],
+    },
+    "題",
+    BODY,
+  )
+  assert.equal(r.post, false)
+  const text = r.post === false ? r.text : ""
+  // 本文に無い文を「あなたはこう書いた」と示さない。引用の位置だけを伏せる。
+  assert.equal(text.includes("本文のどこにも無い一節"), false)
+  assert.match(text, /引用が本文と一致しなかった/)
+  assert.match(text, /評価で締めている/)
+  assert.match(text, /落とす/)
+})
+
+test("写せた指摘は引用ごと返す", () => {
+  const r = reviewOutcome(
+    { verdict: "直す", problems: [{ quote: "18回は別の枠へ出ていた", rule: "n が無い", fix: "条件を足す" }] },
+    "題",
+    BODY,
+  )
+  assert.equal(r.post, false)
+  assert.match(r.post === false ? r.text : "", /「18回は別の枠へ出ていた」/)
 })
