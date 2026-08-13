@@ -33,14 +33,21 @@ export const repoRoot = (): string => fileURLToPath(new URL("../..", import.meta
 /**
  * 次の tick がこれを読んで「ここで何ができるか」を決める。**通し方を本文に書く。**
  * 一覧に出るのは名前とこの一行だけなので、ここに無い手順は次の回には存在しない。
+ *
+ * 中身は package.json の `gate` に置いてある。**定義を2か所に持たない** —
+ * ここに並べ直すと、ホストで通しているものとコンテナで通しているものが黙って食い違う。
+ * `corepack` を頭に付けるのは、コンテナの image に pnpm が入っていないから(corepack は入っている)。
  */
-export const GATE = `cd ${CLONE} && npx tsc --noEmit && npx biome check . && node --test --experimental-strip-types test/*.test.ts`
+export const GATE = `cd ${CLONE} && corepack pnpm run gate`
 
 export const SELFDEV_PURPOSE =
   `open-zero 自身のソース(${repoRoot()} の clone)。自分の欠陥はここで直す。` +
   `ゲートは \`${GATE}\`。**net を true にする** — 検査のうち数件が名前解決を要る。` +
   `直したものは \`git -C ${CLONE} diff\` で取り出してユーザーに渡す — ` +
   `**ここでの変更は動いている本体には入らない。**`
+
+/** 依存の取得。`--frozen-lockfile` は lockfile と package.json のずれをその場で落とす。 */
+const INSTALL = "corepack pnpm install --frozen-lockfile"
 
 /** 依存の取得は分単位。tick の中では走らせないので、コンテナの既定(3分)より長く取る。 */
 const INSTALL_MS = 10 * 60_000
@@ -92,12 +99,12 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
     // libc が違う。tsc も biome も esbuild もプラットフォーム別のバイナリを持つ)。中で取る。
     if (!existsSync(join(clone, "node_modules"))) {
       const r = yield* Effect.promise(() =>
-        runInSandbox(`cd ${CLONE} && npm ci`, { workDir: ws, net: true, timeoutMs: INSTALL_MS }),
+        runInSandbox(`cd ${CLONE} && ${INSTALL}`, { workDir: ws, net: true, timeoutMs: INSTALL_MS }),
       )
-      lines.push(`npm ci: 終了コード ${r.exitCode}(${Math.round(r.elapsedMs / 1000)}秒)`)
+      lines.push(`依存の取得: 終了コード ${r.exitCode}(${Math.round(r.elapsedMs / 1000)}秒)`)
       if (r.exitCode !== 0) return [...lines, "", r.output].join("\n")
     } else {
-      lines.push("node_modules は在るので npm ci は飛ばした")
+      lines.push("node_modules は在るので依存の取得は飛ばした")
     }
 
     if (opts?.skipGate === true) return lines.join("\n")

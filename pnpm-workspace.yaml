@@ -1,0 +1,12 @@
+# 依存の install script を走らせてよいものの明示。
+# pnpm は既定で全部止める(取ってきたパッケージが任意のコードを install 時に走らせるため)。
+# package.json の `pnpm` フィールドは pnpm 11 から読まれない — 設定はここだけに置く。
+#
+# `esbuild` だけ true。`flue run` が @flue/cli → vite 経由で実体を要る。
+# 残り3つは推論側(pi-ai)の下に付いてくるもので、走らせなくても動く。
+# **書かないと install が対話待ちになる** — コンテナの中では止まったまま返ってこない。
+allowBuilds:
+  esbuild: true
+  '@google/genai': false
+  core-js-pure: false
+  protobufjs: false

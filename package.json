@@ -7,19 +7,22 @@
   "engines": {
     "node": ">=22.19"
   },
+  "packageManager": "pnpm@11.9.0",
   "scripts": {
+    "gate": "tsc --noEmit && biome check . && node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "test": "node --test test/*.test.ts",
     "lint": "biome check .",
     "fmt": "biome check --write .",
     "agent": "flue run src/agent/assistant.ts",
-    "oz": "node --experimental-strip-types src/cli.ts",
-    "tick": "node --experimental-strip-types src/tick.ts"
+    "oz": "node src/cli.ts",
+    "tick": "node src/tick.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.83.0",
     "@flue/runtime": "^2.0.3",
-    "effect": "^3.22.1"
+    "effect": "^3.22.1",
+    "valibot": "^1.4.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
