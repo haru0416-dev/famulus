@@ -169,6 +169,23 @@ const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed
     }
   })
 
+/**
+ * `shell shell ran shell` → `shell×2 · ran`。**並びを捨てて数だけにする。**
+ *
+ * Discord に出す側で使う。**幅が狭い場所では並びを持たせられない** — 15手ぶんの並びは
+ * 92桁になり、スマホの幅で3行に折れて、折り返した先は何の行だったか読めなくなる。
+ * 「10回呼んで0本残っていない」というずれは数だけでも見えるので、そちらを取った。
+ * 順番は `runs()` が持っていて、`oz journal` から読める。
+ */
+export const tally = (tools: readonly string[]): string => {
+  const seen = new Map<string, number>()
+  for (const t of tools) seen.set(t, (seen.get(t) ?? 0) + 1)
+  return [...seen]
+    .sort((a, b) => b[1] - a[1]) // 同数なら先に呼んだ順(Map が挿入順を持っている)
+    .map(([name, n]) => (n > 1 ? `${name}×${n}` : name))
+    .join(" · ")
+}
+
 /** `shell shell ran shell` → `shell×2 → ran → shell`。**並びは崩さない** — 何の後に何を呼んだかが読める。 */
 export const runs = (tools: readonly string[]): string =>
   tools
@@ -188,7 +205,7 @@ export const runs = (tools: readonly string[]): string =>
  * 「この回は何も残らなかった」という一番読ませたい状態が、0 が6つ並んだ形でしか出なかった。
  * ここでは**その状態だけを文にする** — 残ったものがあるときは、あるものだけを書く。
  */
-const leftLine = (l: Left): string => {
+const leftLine = (l: Left, none = "何も残らなかった"): string => {
   const parts = [
     [l.proposals, "提案", "件"],
     [l.drafts, "下書き", "本"],
@@ -198,7 +215,13 @@ const leftLine = (l: Left): string => {
     [l.watchRuns, "watch を回した", "本"],
   ] as const
   const got = parts.filter(([n]) => n > 0).map(([n, name, unit]) => `${name} ${n}${unit}`)
-  return got.length === 0 ? "何も残らなかった" : got.join(" / ")
+  return got.length === 0 ? none : got.join(" / ")
+}
+
+/** 時刻だけ取り出す。**読めない値は切らずに返す** — `localStamp` は解釈できない文字列をそのまま返す。 */
+const clock = (atIso: string): string => {
+  const s = localStamp(atIso)
+  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s) ? s.slice(11) : s
 }
 
 /** 桁が見えれば足りるので k で丸める。 */
@@ -232,17 +255,28 @@ const saidLine = (said: string, max = 140): string => {
 }
 
 /**
- * 1回ぶんを畳む。Discord に出すのはこの形(docs/adr/0030)。
+ * 1回ぶんを Discord に出す形(docs/adr/0030)。**幅の狭い画面を先に見て決めた。**
  *
- * **見出しに置くのは時刻と起きた理由だけ。** 数字を見出しに混ぜると、
- * 一番よく読む「いつ・なぜ動いたか」がその中に埋もれる。
+ * 読むのはたいてい携帯で、本文に使える幅はおよそ 40 桁(全角20文字)しかない。
+ * 前は全角空白で桁を揃えて4行に並べていたが、**揃えた桁は1行が折り返した時点で消える**
+ * — 折り返した2行目は左端から始まるので、ラベルと中身の対応が読めなくなる。
+ *
+ * いまは `- ` のリスト項目にしている。リストは折り返しても中身の側にぶら下がるので、
+ * 長い行が入っても項目の切れ目が残る。それでも道具の並びは 92 桁あって3行に折れるため、
+ * ここだけは並びを捨てて数にした(`tally`)。
+ *
+ * 見出しに置くのは時刻だけ。日付は Discord 自身が持っている。
  */
-export const oneLine = (e: Entry): string =>
+export const logPost = (e: Entry): string =>
   [
-    `**${localStamp(e.at)}**  ${e.reasons.join(" / ") || "理由の記録なし"}`,
-    `　実働　${workLine(e)}`,
-    `　道具　${e.tools?.length ? runs(e.tools) : "記録なし"}`,
-    `　残った　${leftLine(e.left)}`,
+    `### ${clock(e.at)} に起きた`,
+    // 止まった回はここに出す。**下に置くと、上だけ読んで終わった回と見分けが付かない。**
+    ...(e.cutOff ? [`- **止まった** ${e.cutOff}`] : []),
+    `- 理由 ${e.reasons.join(" / ") || "記録なし"}`,
+    `- 実働 ${e.steps === undefined ? "手数の記録なし" : `${e.steps}手`}${e.ms === undefined ? "" : ` / ${took(e.ms)}`}`,
+    `- 焼き ${e.runs}run / 出力${tok(e.outTok)}${e.usd > 0 ? ` / $${e.usd.toFixed(3)}` : ""}`,
+    `- 道具 ${e.tools?.length ? tally(e.tools) : "記録なし"}`,
+    `- 残った ${leftLine(e.left, "なし")}`,
   ].join("\n")
 
 /**

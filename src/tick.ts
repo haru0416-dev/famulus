@@ -29,7 +29,7 @@ import { causeReason, describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
-import { oneLine, readJournal } from "./journal.ts"
+import { logPost, readJournal } from "./journal.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
 import { Attention, type Digest, type ObservedEvent } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
@@ -469,7 +469,7 @@ async function tick(): Promise<string> {
         // `oz journal` の値が別々に育って、食い違ったときにどちらが本当か決められなくなる。
         // 最後に置いてあるのは、外へ出すのに失敗しても commit まで済んでいるようにするため。
         const [entry] = yield* readJournal(1)
-        if (entry) yield* discord.post({ text: oneLine(entry), to: "log" })
+        if (entry) yield* discord.post({ text: logPost(entry), to: "log" })
       }),
     )
     if (cutOff) return `止まった(${cutOff})— 走った跡は DB に残っている`

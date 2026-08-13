@@ -8,7 +8,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { Effect } from "effect"
-import { oneLine, readJournal, renderJournal, runs } from "../src/journal.ts"
+import { logPost, readJournal, renderJournal, runs, tally } from "../src/journal.ts"
 import { Db } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
 import { withHarness } from "./helpers.ts"
@@ -48,7 +48,9 @@ test("呼んだ道具の並びは、締めの文と別に残る", async () => {
     assert.equal(e.ms, 305_000)
     // 報告文はそのまま持つが、**道具の並びはそこから作っていない。**
     assert.match(e.said, /watch を1本回した/)
-    assert.match(oneLine(e), /道具　shell×2 → ran → workspaces/)
+    // Discord は幅が無いので数だけ、`oz journal` は並びごと。**どちらも報告文からは作っていない。**
+    assert.match(logPost(e), /- 道具 shell×2 · ran · workspaces/)
+    assert.match(renderJournal([e]), /道具 {4}shell×2 → ran → workspaces/)
   })
 })
 
@@ -78,7 +80,8 @@ test("道具を呼んでも何も残らなかった回は、残った行が全�
       beliefs: 0,
       watchRuns: 0,
     })
-    assert.match(oneLine(e), /残った　何も残らなかった/)
+    assert.match(logPost(e), /- 残った なし/)
+    assert.match(renderJournal([e]), /残った {2}何も残らなかった/)
   })
 })
 
@@ -155,7 +158,7 @@ test("実費は窓の中の ledger だけを足す", async () => {
     assert.equal(e.runs, 2)
     assert.equal(e.outTok, 1200)
     assert.equal(Number(e.usd.toFixed(3)), 0.25)
-    assert.match(oneLine(e), /2run 出力1\.2k \/ \$0\.250/)
+    assert.match(logPost(e), /- 焼き 2run \/ 出力1\.2k \/ \$0\.250/)
   })
 })
 
@@ -175,8 +178,8 @@ test("実費が 0 の回に $0.000 とは書かない — 出したトークン�
     )
     const [e] = await h.run(readJournal(5))
     assert.ok(e)
-    const one = oneLine(e)
-    assert.match(one, /1run 出力830/)
+    const one = logPost(e)
+    assert.match(one, /- 焼き 1run \/ 出力830/)
     assert.doesNotMatch(one, /\$/)
   })
 })
@@ -194,8 +197,8 @@ test("道具の記録を持たない古い回は「—」で出る(0手とは書
     assert.ok(e)
     assert.equal(e.tools, undefined)
     assert.equal(e.steps, undefined)
-    const one = oneLine(e)
-    assert.match(one, /道具　記録なし/)
+    const one = logPost(e)
+    assert.match(one, /- 道具 記録なし/)
     // **「呼ばなかった」と書かない。** 0手と出すと、走ったのに何もしなかった回に見える。
     assert.match(one, /手数の記録なし/)
     assert.doesNotMatch(one, /\d手/)
@@ -221,7 +224,9 @@ test("止まった回は、そのことが記録に残る — 締めの文に書
     const [e] = await h.run(readJournal(5))
     assert.ok(e)
     assert.equal(e.cutOff, "420秒で時間切れ")
-    assert.match(oneLine(e), /止まった: 420秒で時間切れ/)
+    // **止まったことは上に出す。** 下に置くと、上だけ読んで最後まで走った回と見分けが付かない。
+    const lines = logPost(e).split("\n")
+    assert.match(lines[1] ?? "", /^- \*\*止まった\*\* 420秒で時間切れ$/)
   })
 })
 
@@ -259,4 +264,47 @@ test("tick 以外の system イベントは回として並ばない", async () =
 test("同じ道具が続いたら回数に畳む — 並びは崩さない", () => {
   assert.equal(runs(["shell", "shell", "ran", "shell"]), "shell×2 → ran → shell")
   assert.equal(runs([]), "")
+})
+
+test("数だけに畳むほうは、離れて呼んだぶんも足す — 多い順、同数なら先に呼んだ順", () => {
+  assert.equal(
+    tally(["recall", "draft", "remember", "draft", "recall", "draft", "ask"]),
+    "draft×3 · recall×2 · remember · ask",
+  )
+  assert.equal(tally([]), "")
+})
+
+/**
+ * **狭い画面の幅を検査に入れる。**
+ *
+ * Discord を携帯で読むときに本文へ使える幅はおよそ 40 桁(全角20文字)。
+ * 折り返した2行目は左端に戻るので、**幅を超えた行はラベルと中身の対応が消える。**
+ * 揃えた桁で読ませる形に戻したら、ここが落ちる。
+ *
+ * 見ているのはこちらが組む行だけ。`理由` は digest が書いた文がそのまま入るので、
+ * 長さを決められない(超える回はある)。
+ */
+test("Discord に出す行は、携帯の幅に収まる", () => {
+  const wide = (c: string): number =>
+    /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹯＀-｠￠-￦]/.test(c) ? 2 : 1
+  const cols = (s: string): number =>
+    [...s.replace(/\*\*/g, "").replace(/^### |^- /, "")].reduce((n, c) => n + wide(c), 0)
+
+  const e = {
+    at: "2026-08-13T05:28:00Z",
+    reasons: ["下書きの時間"],
+    tools: ["recall", "recall", "draft", "remember", "draft", "ask"],
+    steps: 15,
+    ms: 554_000,
+    said: "",
+    left: { proposals: 1, drafts: 0, tells: 1, shells: 0, beliefs: 0, watchRuns: 0 },
+    runs: 17,
+    outTok: 33_700,
+    usd: 0,
+  }
+  const over = logPost(e)
+    .split("\n")
+    .filter((l) => !l.startsWith("- 理由 "))
+    .filter((l) => cols(l) > 40)
+  assert.deepEqual(over, [], `40桁を超えた行がある(携帯で折り返す):\n${over.join("\n")}`)
 })
