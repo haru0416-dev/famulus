@@ -25,12 +25,28 @@ const rt = runtime()
 const assistant = createAssistant()
 const rl = createInterface({ input: process.stdin, output: process.stdout })
 
+/**
+ * **入力の終わり(Ctrl-D / パイプの尽き)を2通りとも受ける。**
+ *
+ * 待っている最中に閉じると `question` の約束は解決も棄却もされず、そのまま止まる。
+ * 閉じた後に呼ぶと**同期で**投げる(`ERR_USE_AFTER_CLOSE`)ので `.catch()` では捕まらない。
+ * 前者を signal で棄却に変え、後者を try で受ける。どちらも「終わる」1本に落とす。
+ */
+const closed = new AbortController()
+rl.on("close", () => closed.abort())
+
 console.log(`open-zero(${assistant.modelId})— /reset で会話を捨てる、/q で終わる`)
 
 try {
   while (true) {
-    const line = (await rl.question("> ").catch(() => null))?.trim()
-    if (line === undefined || line === null || line === "/q" || line === "/quit") break
+    let asked: string
+    try {
+      asked = await rl.question("> ", { signal: closed.signal })
+    } catch {
+      break
+    }
+    const line = asked.trim()
+    if (line === "/q" || line === "/quit") break
     if (line === "") continue
     if (line === "/reset") {
       assistant.reset()
