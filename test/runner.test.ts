@@ -12,7 +12,7 @@ import {
   poolForModel,
   stripCitationMarkers,
 } from "../src/model/claude-cli.ts"
-import { needsResubmit } from "../src/model/provider.ts"
+import { needsResubmit } from "../src/model/language-model.ts"
 import { ROLE_MODEL, Runner } from "../src/model/Runner.ts"
 import { Db } from "../src/services/Db.ts"
 import { Governance } from "../src/services/Governance.ts"

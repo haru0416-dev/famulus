@@ -1,8 +1,5 @@
 /** 端から端まで。外を見る役が実際に開いた URL を、global fetch を包んで数える。 */
-import { tmpdir } from "node:os"
-import { init } from "@flue/runtime"
-import { sqlite, start } from "@flue/runtime/node"
-import { claudeMaxProvider } from "./src/model/provider.ts"
+import { createAssistant } from "./src/agent/assistant.ts"
 import { runtime } from "./src/runtime.ts"
 
 const hits: string[] = []
@@ -25,23 +22,19 @@ globalThis.fetch = async (input: RequestInfo | URL, init2?: RequestInit) => {
   }
 }
 
-const { default: Assistant } = await import("./src/agent/assistant.ts")
 const rt = runtime()
-const flue = await start({
-  agents: [Assistant],
-  db: sqlite(process.env.PROBE_FLUE_DB ?? `${tmpdir()}/oz-probe-flue.db`),
-  providers: [claudeMaxProvider()],
-})
 const t0 = Date.now()
 try {
-  const agent = init(Assistant, { id: `probe-${process.pid}` })
-  const receipt = await agent.dispatch(process.argv[2] ?? "")
-  const reply = await agent.read(receipt, { signal: AbortSignal.timeout(900_000) })
-  console.log(`\n=== ${Math.round((Date.now() - t0) / 1000)}s ===\n${reply.text ?? "(発話なし)"}`)
+  const assistant = createAssistant()
+  const turn = await assistant.respond(process.argv[2] ?? "", {
+    signal: AbortSignal.timeout(900_000),
+  })
+  console.log(`\n=== ${Math.round((Date.now() - t0) / 1000)}s / ${turn.steps} 手 ===`)
+  console.log(turn.text || "(発話なし)")
+  if (turn.cutOff) console.log(`止まった: ${turn.cutOff}`)
 } finally {
   const uniq = new Set(hits.map((h) => h.replace(/^\S+ \S+ /, "")))
   console.log(`\n=== 外へ出た ${hits.length} 回 / 相異なる URL ${uniq.size} ===`)
   for (const h of hits) console.log(h)
-  await flue.stop()
   await rt.dispose()
 }

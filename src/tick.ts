@@ -8,7 +8,7 @@
  *
  *   1. Attention.digest() …SQL だけで「起きる理由があるか」を決める。**ここでモデルは呼ばない**。
  *   2. 理由が無ければ何もせず終わる(枠を1回も食わない)。定期実行の大半はこの経路を通る。
- *   3. 理由があるときだけ Flue を起動し、Assistant に1回だけ投げる。
+ *   3. 理由があるときだけエージェントを組み立て、1回だけ投げる。
  *   4. 返ってきたものを system イベントとして DB に残し、既読位置を進める。
  *
  * **2 が本体**。tick を作るときに一番やってはいけないのが「15分ごとに推論を1回回す」で、
@@ -18,8 +18,6 @@
  * 枠は `OPEN_ZERO_LANE=autonomous` で自走側に付け替える。日次 run 数の内訳が対話と分かれ、
  * tick が暴れても対話の取り分は残る(Governance.BUDGET.autonomousRuns)。
  */
-import { init } from "@flue/runtime"
-import { sqlite, start } from "@flue/runtime/node"
 import { Effect } from "effect"
 import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
@@ -31,7 +29,6 @@ import { causeReason, describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
-import { claudeMaxProvider } from "./model/provider.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
 import { Attention, type Digest, type ObservedEvent } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
@@ -42,11 +39,8 @@ import { Memory } from "./services/Memory.ts"
 // **モジュール直下の設定より先に読む。** 下の const は評価時に env を見るので、順番が意味を持つ。
 loadEnv()
 
-/** Flue の会話永続化。対話(`flue run`)とは別にしておく — 履歴が混ざると起点が読めない。 */
-const FLUE_DB = process.env.OPEN_ZERO_FLUE_DB ?? ".data/flue-tick.db"
-
 /**
- * 1回の tick に許す時間。`read()` は既定で無限に待つので、タイマー実行では必ず上限を付ける。
+ * 1回の tick に許す時間。**上限を付けないと無限に待つ。**
  *
  * 300 秒では下書きの日が入り切らない(docs/adr/0012)。書いて精査に出して直してもう一度出す形になり、
  * 実測した回は 270 秒の時点でまだ3稿目を書いていた。unit の `TimeoutStartSec` は 600 秒なので、
@@ -203,7 +197,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
       "**調べ直すより、手元にあるもので終える。** tick は数分で切られる。途中で切られると",
       "その回の働きは丸ごと消えて、ユーザーには何も残らない。だから:",
       "- `recall` は当たった時点で止める。**同じ語をもう一度引かない**。「該当なし」が2回続いたら DB に無い。",
-      "- DB を読むだけなら自分で引く。`task` で子(`digger` / `researcher`)を立てるのは",
+      "- DB を読むだけなら `recall` を自分で引く。子(`digger` / `researcher`)を呼ぶのは",
       "  **1回では足りないとき**と、**外(web)を見に行くとき**だけ。",
       "- **探すときは割って投げる。** 同じ問いを1つの文脈で順に調べると、2件目は1件目の語彙を",
       "  引き継いで同じ側しか見なくなる。**別の切り口を別の子に渡し、互いの結果は見せない。**",
@@ -329,44 +323,38 @@ async function tick(): Promise<string> {
   const spokenTo = d.newEvents.some((e) => e.source === "owner")
   log("起きる:", d.reasons.join(" / "), spokenTo ? "(返信)" : "")
 
-  // 自走枠であることを **Assistant を読み込む前に** 立てる。
-  // provider.ts の lane() は呼び出し時評価なのでこれで足りるが、モデル名は
-  // assistant.ts の評価時に固まるので、差し替えるならこの順序でなければ効かない。
+  // 自走枠であることを **エージェントを組み立てる前に** 立てる。
+  // lane() は呼び出し時評価なのでこれだけで足りるが、モデル id は createAssistant() の
+  // 時点で確定するので、差し替えるならこの順序でなければ効かない。
   process.env.OPEN_ZERO_LANE = "autonomous"
-  if (process.env.OPEN_ZERO_TICK_MODEL) process.env.OPEN_ZERO_MODEL = process.env.OPEN_ZERO_TICK_MODEL
-  const { default: Assistant } = await import("./agent/assistant.ts")
-
-  // providers は明示で渡す。`start()` は既定のプロバイダ集合を**置き換える**ので、
-  // assistant.ts の setProvider() だけに任せると定額枠の経路が消える可能性がある。
-  const flue = await start({
-    agents: [Assistant],
-    db: sqlite(FLUE_DB),
-    providers: [claudeMaxProvider()],
-  })
+  // 道具一式を読み込むのは、起きると決まってから。idle の回(定期実行の大半)は
+  // ここを通らないので、その回の起動は DB を1回引くだけで終わる。
+  const { createAssistant } = await import("./agent/assistant.ts")
 
   try {
-    // インスタンスはユーザーの1日で切る。数時間前の自分の判断は文脈として効くが、
-    // 何週間も同じ会話に積み続けると、起きるたびに古い履歴を運ぶだけになる。
-    const agent = init(Assistant, { id: `tick-${dayRange(d.at).key}` })
+    const assistant = createAssistant({ model: tickModel() })
     // 道具に締切を見せる。**プロンプトに書くだけでは足りない** — 起動時の文は、9回目を
     // 走らせるかどうかを決める時点では過去の話になっている(src/core/deadline.ts)。
     startDeadline(TIMEOUT_MS)
-    const receipt = await agent.dispatch(buildPrompt(d, spokenTo, await run(listWorkspaces)))
-    // **切られてもここで受け止める。** 投げ直すと commit に辿り着かないので冷却の起点が進まず、
+    // **切られてもここで受け止める。** 投げ返すと commit に辿り着かないので冷却の起点が進まず、
     // 次のタイマーが同じ理由で起きて同じだけ焼いて同じように落ちる。落ちた回も1回動いた回として
     // 締める — 実際にモデルは走り、道具も動いて、その跡は DB に残っている。
     const deadline = AbortSignal.timeout(TIMEOUT_MS)
-    let cutOff: string | undefined
-    const reply = await agent.read(receipt, { signal: deadline }).catch(async (e) => {
-      await agent.abort().catch(() => {})
-      // **時間切れと、それ以外の止まり方を混ぜない。** 混ぜると「300秒で切られた」だけが DB に残り、
-      // 自走枠の使い切りも provider の落ちも同じ顔になる。次の回で何を直せばいいか読めなくなる。
-      cutOff = deadline.aborted ? `${Math.round(TIMEOUT_MS / 1000)}秒で時間切れ` : causeReason(e)
-      log("止まった:", cutOff)
-      return { text: `(${cutOff}。この回の締めの文は書けていない)` }
+    const turn = await assistant.respond(buildPrompt(d, spokenTo, await run(listWorkspaces)), {
+      signal: deadline,
     })
+    // **時間切れと、それ以外の止まり方を混ぜない。** 混ぜると「420秒で切られた」だけが DB に残り、
+    // 自走枠の使い切りもモデル側の落ちも同じ顔になる。次の回で何を直せばいいか読めなくなる。
+    const cutOff = turn.cutOff
+      ? deadline.aborted
+        ? `${Math.round(TIMEOUT_MS / 1000)}秒で時間切れ`
+        : turn.cutOff
+      : undefined
+    if (cutOff) log("止まった:", cutOff, `/ ${turn.steps} 手まで`)
 
-    const text = (reply.text ?? "").trim()
+    // 切られた回でも、そこまでに書けた文は捨てない。**道具ループの途中の文が残っている**
+    // ことがあり、それが「9回走らせて何が分かったか」の唯一の記録になる。
+    const text = (turn.text || (cutOff ? `(${cutOff}。この回の締めの文は書けていない)` : "")).trim()
 
     // ── 締めの keeper。**ユーザーが話した回にだけ通る**(docs/adr/0014)。
     // 材料はユーザーの発言そのもので、外から来たものは渡さない。切られた回は通さない —
@@ -424,7 +412,6 @@ async function tick(): Promise<string> {
     return text ? `動いた: ${text.slice(0, 400)}` : "動いた(発話なし)"
   } finally {
     clearDeadline()
-    await flue.stop()
   }
 }
 

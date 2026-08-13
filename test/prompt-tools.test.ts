@@ -2,16 +2,16 @@
  * プロンプトが名指す道具が**実際に登録されているか**を機械で見る。
  *
  * 見方は素朴に、プロンプトの中の \`バッククォート\` で囲んだ小文字の語を全部拾い、
- * 道具の名前か、下の2つの表に載っているかのどれかであることを要求する。
- * **表は「これは道具ではない」「これは枠の側の道具だ」と人が言い切った語だけ**を置く場所で、
+ * 道具の名前か、下の表に載っているかのどれかであることを要求する。
+ * **表は「これは道具ではない」と人が言い切った語だけ**を置く場所で、
  * 増えるときは1件ずつ判断が要る。拾いすぎるより、通す条件を人手で書かせるほうを取っている。
  *
- * **`assistant.ts` の \`name:\` だけを見ると足りない。** 道具には2つの出所がある —
- * こちらが `useTool` / `useSubagent` で登録するものと、Flue が最初から載せるもの。
- * 後者を数え落とすと、**実在する道具を幻だと判定する**(それを一度やったのが docs/adr/0010)。
+ * **道具の出所は1つになった。** 前は枠(フレームワーク)が最初から載せるものがあり、
+ * それを数え落として実在する道具を幻だと判定したことがある(docs/adr/0010)。
+ * いまは `buildTools()` が返す表と、子に渡す表がすべてなので、両方を同じ正規表現で拾う。
  */
 import assert from "node:assert/strict"
-import { readdirSync, readFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 
@@ -30,36 +30,23 @@ const NOT_TOOLS = new Set([
   "at", // 道具の引数名(`ran` に渡す、実際に回した時刻)
   "since", // keeper の引数名(この回の起点)。モデルには見えない
   "purpose", // 道具の引数名(`shell` に渡す、その作業場は何のための場所か)
+  "signal", // respond() の引数名(呼ぶ側が締切で切るための AbortSignal)。モデルには見えない
 ])
 
 /**
- * Flue が最初から載せる道具。**こちらの登録には出てこないが、モデルの一覧には出ている。**
- * 下の `framework()` が dist の中に実在を確かめに行くので、この表は「名前を知っている」だけの役。
+ * 登録されている道具の名前。
+ *
+ * 拾う形は2つ: 表に直接置いたもの(`remember: tool({`)と、変数に切り出したものを
+ * 表に差したもの(`recall: recallTool(state)` / `search: searchTool`)。
+ * **子に渡す表も同じ書き方**なので、1つの正規表現で両方が採れる。
  */
-const FRAMEWORK = ["task", "activate_skill"]
-
-/** 枠の側の道具が本当に載っているかを、Flue の実体で確かめる。名前だけ信じない。 */
-function framework(): Set<string> {
-  const dist = fileURLToPath(new URL("../node_modules/@flue/runtime/dist", import.meta.url))
-  const blob = readdirSync(dist)
-    .filter((f) => f.endsWith(".mjs"))
-    .map((f) => readFileSync(`${dist}/${f}`, "utf8"))
-    .join("")
-  const found = FRAMEWORK.filter((n) => blob.includes(`name: "${n}"`))
-  assert.deepEqual(
-    found,
-    FRAMEWORK,
-    `Flue が載せているはずの道具が実体に無い。版を上げて名前が変わった可能性: ${FRAMEWORK.filter((n) => !found.includes(n)).join(", ")}`,
-  )
-  return new Set(FRAMEWORK)
-}
-
-/** 登録されている道具の名前。`useTool`/`useSubagent` の `name` と、枠が載せるものを足す。 */
 function registered(): Set<string> {
   const src = read("src/agent/assistant.ts")
-  const names = [...src.matchAll(/name:\s*"([a-z_]+)"/g)].map((m) => m[1] as string)
+  const names = [...src.matchAll(/\b([a-z][a-z0-9_]*):\s*(?:tool\(\{|[a-zA-Z_]*[Tt]ool\b)/g)].map(
+    (m) => m[1] as string,
+  )
   assert.ok(names.length > 5, `道具が採れていない(${names.length}件)— 登録の書き方が変わった可能性`)
-  return new Set([...names, ...framework()])
+  return new Set(names)
 }
 
 test("プロンプトが名指す道具は全部登録されている", () => {

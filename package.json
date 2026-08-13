@@ -1,7 +1,7 @@
 {
   "name": "open-zero",
   "version": "0.0.0",
-  "description": "famulus の governance/memory を Effect で持ち上げ、ハーネスを Flue に載せる層。推論はサブスク枠(claude -p)のまま。",
+  "description": "famulus の governance/memory を Effect で持ち上げ、道具ループを AI SDK に載せる層。推論はサブスク枠(claude -p)のまま。",
   "type": "module",
   "private": true,
   "engines": {
@@ -14,19 +14,19 @@
     "test": "node --test test/*.test.ts",
     "lint": "biome check .",
     "fmt": "biome check --write .",
-    "agent": "flue run src/agent/assistant.ts",
+    "agent": "node src/chat.ts",
     "oz": "node src/cli.ts",
     "tick": "node src/tick.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.83.0",
-    "@flue/runtime": "^2.0.3",
+    "@ai-sdk/provider": "^4.0.7",
+    "@valibot/to-json-schema": "^1.7.1",
+    "ai": "^7.0.62",
     "effect": "^3.22.1",
     "valibot": "^1.4.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
-    "@flue/cli": "^2.0.3",
     "@types/node": "^24.0.0",
     "typescript": "^7.0.2"
   }
