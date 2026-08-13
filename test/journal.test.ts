@@ -155,7 +155,7 @@ test("実費は窓の中の ledger だけを足す", async () => {
     assert.equal(e.runs, 2)
     assert.equal(e.outTok, 1200)
     assert.equal(Number(e.usd.toFixed(3)), 0.25)
-    assert.match(logPost(e), /- 焼き 2run \/ 出力1\.2k \/ \$0\.250/)
+    assert.match(logPost(e), /- 推論 2run \/ 出力1\.2k \/ \$0\.250/)
   })
 })
 
@@ -176,7 +176,7 @@ test("実費が 0 の回に $0.000 とは書かない — 出したトークン�
     const [e] = await h.run(readJournal(5))
     assert.ok(e)
     const one = logPost(e)
-    assert.match(one, /- 焼き 1run \/ 出力830/)
+    assert.match(one, /- 推論 1run \/ 出力830/)
     assert.doesNotMatch(one, /\$/)
   })
 })

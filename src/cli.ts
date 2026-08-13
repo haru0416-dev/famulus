@@ -7,7 +7,7 @@
  *   oz halt <理由>         … 全停止。自動では明けない
  *   oz resume              … 停止解除
  *   oz attention           …tick が今なにを見ているか(watch・問い・次に起きる条件)
- *   oz journal [n]         …tick が実際に何をしたか(呼んだ道具・残った行・焼いた量)
+ *   oz journal [n]         …tick が実際に何をしたか(呼んだ道具・残った行・モデル使用量)
  *   oz answer <id> <答え>  … 問いに答えて閉じる
  *   oz drop <id> <理由>    … 追わないと決めた問いを畳む(答えずに閉じる)
  *   oz watch <やること>    …watch に置く(既定は famulus = tick の起床理由になる)

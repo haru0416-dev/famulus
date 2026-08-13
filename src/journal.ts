@@ -7,7 +7,7 @@
  *
  *   1. 呼ばれた道具の並び(`content.tools`)…AI SDK の `onStepFinish` が数えた実際の呼び出し
  *   2. その回の窓に残ったもの…提案・下書き・通知・コンテナ実行・確定した事実の行数
- *   3. 焼いた量(`ledger`)…run 数と実費
+ *   3. モデル使用量(`ledger`)…run 数、出力トークン数、実費
  *
  * 窓は `[content.tick, event.at]`。前者は digest を取った時刻、後者は記録を書いた時刻で、
  * その間がこの回の実働。窓の外で起きたことは数えない — 数えると、15分前の poll が入れた
@@ -37,7 +37,7 @@ export interface Entry {
   readonly said: string
   /** この回の窓に残ったもの。数えたのは行数で、報告文とは関係が無い。 */
   readonly left: Left
-  /** 焼いた量。 */
+  /** モデルを呼んだ回数。 */
   readonly runs: number
   /**
    * 出したトークン。実費より先に出す。
@@ -274,7 +274,7 @@ export const logPost = (e: Entry): string =>
     ...(e.cutOff ? [`- **止まった** ${e.cutOff}`] : []),
     `- 理由 ${e.reasons.join(" / ") || "記録なし"}`,
     `- 実働 ${e.steps === undefined ? "手数の記録なし" : `${e.steps}手`}${e.ms === undefined ? "" : ` / ${took(e.ms)}`}`,
-    `- 焼き ${e.runs}run / 出力${tok(e.outTok)}${e.usd > 0 ? ` / $${e.usd.toFixed(3)}` : ""}`,
+    `- 推論 ${e.runs}run / 出力${tok(e.outTok)}${e.usd > 0 ? ` / $${e.usd.toFixed(3)}` : ""}`,
     `- 道具 ${e.tools?.length ? tally(e.tools) : "記録なし"}`,
     `- 残った ${leftLine(e.left, "なし")}`,
   ].join("\n")
