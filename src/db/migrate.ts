@@ -6,8 +6,8 @@
  * 先に旧い形を新しい形へ寄せておけば、あとは `IF NOT EXISTS` が素通りするだけで済む。
  *
  * どれも冪等。掛かっていなければ掛け、掛かっていれば何もしない。
- * 正本(`events`)には触らない。ここで作り直すのは projection だけで、
- * 万一壊しても events から引き直せる、という前提を崩さない。
+ * `events` には触らない。それ以外の既存テーブルは、必要に応じて行を保持したまま
+ * 作り直す。参照を持つ表の再構築後は `foreign_key_check` で欠損を検出する。
  */
 import type { Sqlite } from "./sqlite.ts"
 
@@ -36,7 +36,6 @@ const ddl = (d: Sqlite, table: string): string => {
   }
 }
 
-/** その値を持つ行の数。表が無ければ 0。 */
 const countWhere = (d: Sqlite, sql: string): number => {
   try {
     return ((d.prepare(sql).get() as { n?: number } | undefined)?.n ?? 0) as number
@@ -132,7 +131,7 @@ function watchlistShown(d: Sqlite): boolean {
  * proposals に「tick 側の結論」を足す(docs/adr/0028)。
  *
  * 承認はユーザーしか出せないので、期限が近い提案で起きた tick は毎回「あなた待ちです」で終わる。
- * 実測(2026-08-13 / 直近40回の実働)では、期限が近い承認待ちで起きた回が4回あり、
+ * 直近40回を調べると、期限が近い承認待ちで起きた回が4回あり、
  * 4回とも道具呼び出し4回以下で終わっていた。中身は全部 `.example` 宛の試験データで、
  * 決着のしようが最初から無い。結論を1回書ける場所が無いので、同じ結論を書き直し続けていた。
  *

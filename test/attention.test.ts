@@ -28,7 +28,6 @@ const hours = (n: number) => n * 3_600_000
 // — 混ざると「入力で起きた」のか「20時を過ぎた」のかが assert から区別できない。
 process.env.OPEN_ZERO_DAILY_HOUR = "99"
 
-/** 「もう一度起きた」を作る。時刻を進めた digest を引くだけ。 */
 const digestAt = (ms: number) =>
   Effect.gen(function* () {
     const att = yield* Attention
@@ -40,7 +39,6 @@ test("何も無ければ起きない — 前回の棚卸しから24時間経つ�
     await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
-        // 初回は last_active が無く「起点なし」なので必ず起きる。そこを消費して基準を作る。
         yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
       }),
     )
@@ -69,7 +67,6 @@ test("自分が書いたもの(source=system)では起きない — 外から来
     assert.equal(d.idle, true)
     assert.equal(d.newEvents.length, 0)
 
-    // ユーザーの入力なら、冷却の途中でも起きる。
     await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
@@ -152,7 +149,6 @@ test("一周回した watch は、冷却が明けるまでプロンプトに載�
       }),
     )
 
-    // 一度も回していないものは今すぐ上がる(NULL を「大昔に回した」とは読まない)。
     const first = await h.run(digestAt(T0 + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
     assert.equal(first.stalled.length, 1)
     assert.equal(first.stalled[0]?.run_count, 0)
@@ -213,7 +209,6 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
       }),
     )
     assert.equal(w?.dueNow, false)
-    // 8/8 09:30 に回して 168 時間 → 8/15 09:30。いま 8/10 09:00 なので残り 120.5 時間。
     assert.equal(w?.dueInHours, 120.5)
 
     const after = await h.run(digestAt(T0 + hours(169)))
@@ -237,7 +232,6 @@ test("回した時刻を渡して後から記録できる。先の時刻は取�
         return w
       }),
     )
-    // 実際に回したのは 8/8 09:00。記録はそのあと。
     const rec = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
@@ -272,7 +266,6 @@ test("回した時刻を渡して後から記録できる。先の時刻は取�
 const sixWatches = Effect.gen(function* () {
   const att = yield* Attention
   const ids: string[] = []
-  // 1件も回していない = 全部いま明けている。順番を決めるのは last_shown_at だけ。
   for (let i = 0; i < 6; i++)
     ids.push(yield* att.watch(`件 ${i}`, "famulus", { at: `2026-08-0${i + 1}T09:00:00Z` }))
   yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
@@ -289,7 +282,6 @@ test("冷却が同時に明けても、1回に載せるのは上限まで。残�
     // 起こす理由は明けた全部の数。載せた数で書くと、6件待っている回と3件しかない回が
     // 同じ文になり、後ろに何件溜まっているかがどこにも出なくなる。
     assert.match(d.reasons.join(), /watch が 6 件/)
-    // 一度も載せていないものどうしは、最後に動いたのが古い順。
     assert.deepEqual(
       d.stalled.map((w) => w.id),
       ids.slice(0, STALLED_SHOW_MAX),
@@ -393,7 +385,6 @@ test("答えないまま取り下げられる。理由は残る", async () => {
       }),
     )
     assert.equal(dropped.status, "dropped")
-    // SQLite の行は prototype 無しで返る。中身だけを比べたいので両方を素の object に均す。
     assert.deepEqual({ ...stored }, { ...dropped }, "返した行が DB に入っている行と一致する")
     assert.equal(stored.answer, "副業探し自体を中断した", "なぜ追わないかは残す")
     assert.deepEqual(left, [], "取り下げた問いは tick の材料から外れる")
@@ -530,7 +521,6 @@ test("期限が近い承認待ちは起こす理由になる", async () => {
   })
 })
 
-/** 断られたぶんを入れる。理由まで揃っていないとプロンプトには載らない。 */
 const denied = (n: number, at: string, reason: string | null) =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -595,14 +585,12 @@ test("断られたぶんは新しい順に決めた数だけ — 古いものか
  */
 test("下書きは決めた時刻から1日1回だけ立つ", async () => {
   const keep = process.env.OPEN_ZERO_DAILY_HOUR
-  // T0 は 18:00(ユーザーの時計)。17時を境にすると T0 の時点で既に過ぎている。
   process.env.OPEN_ZERO_DAILY_HOUR = "17"
   try {
     await withHarness(async (h) => {
       await h.run(
         Effect.gen(function* () {
           const att = yield* Attention
-          // 直前に動いたことにする。冷却中でも下書きは立つ、が見たいこと。
           yield* att.commit({ active: true, at: new Date(T0).toISOString() })
         }),
       )
@@ -620,7 +608,6 @@ test("下書きは決めた時刻から1日1回だけ立つ", async () => {
       assert.equal(done.draftDue, false, "その日ぶんが済んでいれば二度は立たない")
       assert.equal(done.idle, true)
 
-      // 日が変わればまた立つ。T0+9h = 翌 03:00 なので、さらに 14 時間進めて 17 時を跨ぐ。
       const nextDay = await h.run(digestAt(T0 + hours(23)))
       assert.equal(nextDay.draftDue, true, "日が変われば立ち直る")
     })

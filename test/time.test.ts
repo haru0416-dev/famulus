@@ -16,17 +16,17 @@ test("UTC の日ではなくローカルの日で切る", () => {
   // 2026-08-07T16:55Z は JST では 08-08 の 01:55。UTC 切りだと 08-07 になる。
   const r = dayRange("2026-08-07T16:55:00Z")
   assert.equal(r.key, "2026-08-08")
-  assert.equal(r.startIso, "2026-08-07T15:00:00Z") // JST 08-08 00:00
-  assert.equal(r.endIso, "2026-08-08T15:00:00Z") // JST 08-09 00:00
+  assert.equal(r.startIso, "2026-08-07T15:00:00Z")
+  assert.equal(r.endIso, "2026-08-08T15:00:00Z")
 })
 
 test("日跨ぎの直前・直後が別の日に落ちる", () => {
-  assert.equal(dayRange("2026-08-07T14:59:59Z").key, "2026-08-07") // JST 23:59:59
-  assert.equal(dayRange("2026-08-07T15:00:00Z").key, "2026-08-08") // JST 00:00:00
+  assert.equal(dayRange("2026-08-07T14:59:59Z").key, "2026-08-07")
+  assert.equal(dayRange("2026-08-07T15:00:00Z").key, "2026-08-08")
 })
 
 test("月末の繰り上がり", () => {
-  const r = monthRange("2026-12-31T16:00:00Z") // JST 2027-01-01 01:00
+  const r = monthRange("2026-12-31T16:00:00Z")
   assert.equal(r.key, "2027-01")
   assert.equal(r.startIso, "2026-12-31T15:00:00Z")
   assert.equal(r.endIso, "2027-01-31T15:00:00Z")
@@ -38,7 +38,6 @@ test("記録の時刻はユーザーの時計で見せる(夜中の記録を前�
   // 51分前の出来事を昨日の午後として読む。
   assert.equal(localStamp("2026-08-10T15:52:00Z"), "2026-08-11 00:52")
   assert.equal(localStamp("2026-08-10T15:52:00Z", false), "2026-08-11")
-  // 日付が変わらない時間帯はそのまま(ずれるのは時刻だけ)。
   assert.equal(localStamp("2026-08-11T03:00:00Z"), "2026-08-11 12:00")
   // 読めない値は握り潰さずそのまま返す。DB の古い行を落とさないため。
   assert.equal(localStamp("いつか"), "いつか")

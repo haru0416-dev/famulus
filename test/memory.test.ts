@@ -55,7 +55,7 @@ test("events の UPDATE は content := NULL(抹消)だけ通る", async () => {
     )
     assert.equal((e as { _tag: string })._tag, "DbFailed")
 
-    // メタデータの差し替えも拒否。
+    // provenance を変えると監査の根拠が失われるため、メタデータも変更できない。
     const e2 = await h.fail(
       Effect.gen(function* () {
         const db = yield* Db
@@ -64,7 +64,7 @@ test("events の UPDATE は content := NULL(抹消)だけ通る", async () => {
     )
     assert.equal((e2 as { _tag: string })._tag, "DbFailed")
 
-    // 抹消だけ通り、監査用に redact イベントが1件増える。
+    // 内容は見えなくできても、監査履歴は残る。
     const after = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
@@ -158,7 +158,6 @@ test("recall は FTS のクエリ構文をユーザー入力として解釈し�
       Effect.gen(function* () {
         const mem = yield* Memory
         yield* mem.remember({ content: "予定表" })
-        // 構文文字を含んでいても例外にならず、素の語として扱われる。
         return yield* mem.recall('予定" OR "*')
       }),
     )
@@ -193,7 +192,6 @@ test("recall は関連度と層で並ぶ — 新しいだけの独り言が確�
       Effect.gen(function* () {
         const mem = yield* Memory
         yield* mem.believe("dentist.next_appt", "歯医者の次回予約は8月12日18:00")
-        // tick が後から書く記録。新しくて語も多く含むが、探しものとしては役に立たない。
         yield* mem.remember({
           source: "system",
           content: { tick: "起動した。次回予約の件は動かない。次回予約について今は判断しない。" },
@@ -213,13 +211,12 @@ test("索引に入れなかった行は検索に出ない — DB には残る", 
       Effect.gen(function* () {
         const mem = yield* Memory
         yield* mem.remember({ content: "面談は9時から" })
-        // tick が自分に出したプロンプト。監査には要るが、検索では邪魔にしかならない。
         yield* mem.remember({ source: "system", content: { tickPrompt: "面談 面談 面談" }, text: "" })
         return { hits: yield* mem.recall("面談"), all: yield* mem.count }
       }),
     )
     assert.equal(out.all, 2, "DB(正本)からは消さない")
-    // 2文字クエリは LIKE 経路。両経路とも索引を持つ行だけを返すのでないと意味が揃わない。
+    // 除外した行が短いクエリの LIKE フォールバック経由で再び現れてはならない。
     assert.equal(out.hits.length, 1, "検索に出るのは索引を持つ1件だけ")
     assert.match(String(out.hits[0]?.text), /9時/)
   })
@@ -267,7 +264,6 @@ test("recall の描画は JSON の殻を出さず、どの層の1行かを示す
         return renderRecall(yield* mem.recall("歯医者"))
       }),
     )
-    // 殻は保存の都合であって中身ではない。読む相手(モデル・ユーザー)に見せない。
     assert.doesNotMatch(out, /\{"said"/)
     assert.match(out, /owner\]/)
     assert.match(out, /歯医者は8月12日/)
@@ -290,7 +286,6 @@ test("belief は必ず belief イベントを根拠に持つ(resolved_from の F
     assert.equal(out.slot?.value, "2026-08-12T18:00:00Z")
     assert.equal(out.slot?.resolvedFrom, out.eventId)
 
-    // 根拠のないスロットは立てられない(FK が拒否する)。
     const e = await h.fail(
       Effect.gen(function* () {
         const db = yield* Db
@@ -317,7 +312,7 @@ test("belief は上書きされるが、履歴は events に残る", async () =>
       }),
     )
     assert.equal(out.slot?.value, "東京")
-    assert.equal(out.beliefs, 2) // 上書きしても根拠は2件残る
+    assert.equal(out.beliefs, 2)
   })
 })
 

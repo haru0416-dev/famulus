@@ -1,9 +1,8 @@
 /**
  * 日付境界。ユーザーの1日で数える。
  *
- * 記録そのものは UTC で持つのが正しいが、上限が切り替わる瞬間を UTC にすると
- * 日本時間の朝9時に日次枠がリセットされる。「今日はあと何回使えるか」を人が判断する量なので、
- * 境界は人の1日に合わせる。
+ * 記録そのものは UTC で持つが、上限の境界まで UTC にするとユーザーの暦日とずれる。
+ * 例えば Asia/Tokyo では日次枠が朝9時に切り替わるため、境界は `OPEN_ZERO_TZ` の1日に合わせる。
  *
  * 保存形式は変えない(`at` は ISO UTC のまま)。範囲を JS 側で instant に直して
  * `at >= ?AND at < ?` で引く。文字列 substr より DST にも強く、索引も効く。
@@ -53,7 +52,7 @@ function offsetMs(ms: number): number {
   return asUtc - (ms - (ms % 1000))
 }
 
-/** ローカルの (y, m, d)00:00 が指す instant。DST の切り替え日でもずれないよう2回で収束させる。 */
+/** ローカルの (y, m, d) 00:00 が指す instant。前後で offset が異なる場合に備えて2回補正する。 */
 function startOfLocalDate(year: number, month: number, day: number): number {
   const wall = Date.UTC(year, month - 1, day)
   let t = wall - offsetMs(wall)
@@ -97,8 +96,8 @@ export function dayRange(atIso: string): Range {
 /**
  * 記録の時刻をユーザーの時計で見せる。保存は UTC のまま、見せ方だけ変える。
  *
- * これが無いと、夜中の記録が前日として読まれる。DB は UTC で持つので、日本時間の 0〜9時に
- * 起きたことは前日の日付で入る。モデルには別経路で今日の日付が渡るため、
+ * これが無いと、夜中の記録が前日として読まれる。DB は UTC で持つので、日本時間の0時から8時台に
+ * 起きたことは UTC 表記では前日になる。モデルには別経路で今日の日付が渡るため、
  * 帯を付けずに時刻だけ見せると数十分前の出来事が昨日の午後になる。
  *
  * @param withTime false なら 'YYYY-MM-DD' まで。

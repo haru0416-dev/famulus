@@ -1,7 +1,7 @@
 node_modules/
 
-# 台帳の実体と、取り込んだ会話の書き出し。**個人のデータなので入れない。**
-# .data/claude-export には conversations.json・login_history.json が入っている。
+# 台帳・取り込んだ会話・作業場・共有キャッシュなどの実データ。個人情報や生成物を含むため追跡しない。
+# `.data/claude-export` には conversations.json・login_history.json が入る。
 .data/
 
 # 秘密は環境変数か 600 の .env で持つ。どちらも追跡しない。

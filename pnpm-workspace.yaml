@@ -1,9 +1,7 @@
-# 依存の install script を走らせてよいものの明示。
-# pnpm は既定で全部止める(取ってきたパッケージが任意のコードを install 時に走らせるため)。
-# package.json の `pnpm` フィールドは pnpm 11 から読まれない — 設定はここだけに置く。
+# 依存パッケージの install/build script 許可。`allowBuilds` に無いものは既定で拒否される。
+# 設定先は `pnpm-workspace.yaml`。`package.json` の `pnpm` フィールドには置かない。
 #
-# `bun` だけ true。**走らせる側の実体**なので、script が走らないと
-# `Bun's postinstall script was not run` で起動もできない。
-# **書かないと install が対話待ちになる** — コンテナの中では止まったまま返ってこない。
+# `bun` は実行環境の実体で、postinstall が走らないと
+# `Bun's postinstall script was not run` となり起動できないため許可する。
 allowBuilds:
   bun: true

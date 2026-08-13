@@ -253,9 +253,8 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
 }
 
 /**
- * 起こす前に通れない状態を見る。モデル呼び出しを守っているのと同じ precheck を呼ぶ。
- * ここで独自の条件を書くと、Flue を起こしてから provider のゲートに弾かれる二度手間になり、
- * かつ「見送った理由」が二種類の文言で出てくる。停止・枠クールダウン・日次 run 数・自走枠が全部ここで出る。
+ * エージェントを組み立てる前の予備判定。
+ * 現在 pool は claude-max 固定なので、GPT を tickModel に指定した場合は実行時ゲートと一致しない。
  */
 const blocked = Effect.gen(function* () {
   const gov = yield* Governance

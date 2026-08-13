@@ -10,8 +10,8 @@
  *      │ deny→ denied
  *      └ 期限切れ→ expired
  *
- * approved の先は無い。実行の仕組みもコネクタも1つも書かれていないので、`executing` /
- * `executed` / `failed` にはどの経路からも到達しない(CHECK には残っているだけ)。
+ * 実行状態は ADR 0033 で型と CHECK から削除した。`deferred` は旧状態として残るが、
+ * 現在そこへ遷移させる API は無い。
  * approved は「承認済み・未実行」で止まり、実際に動かすのはユーザー。
  * ここで実行したことにする方が嘘としては大きいので、止めたままにしてある。
  *
@@ -93,7 +93,7 @@ const plusDays = (at: string, days: number) =>
 /** 承認した時点の payload の指紋。照合する側を作るまでは、ただの記録。 */
 export const payloadHash = (payload: string): string => createHash("sha256").update(payload).digest("hex")
 
-/** 承認を受け付ける状態。executing 以降は人の承認の対象ではない。 */
+/** 承認・却下を受け付ける状態。`deferred` は旧状態の行を決着させるために含める。 */
 const DECIDABLE: readonly ProposalStatus[] = ["proposed", "deferred"]
 
 export class Proposals extends Effect.Service<Proposals>()("Proposals", {
@@ -176,7 +176,7 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
         return rows as unknown as ProposalRow[]
       })
 
-    /** 承認の生ログ。approve 率の飽和検知と deny の還流に使う(まだ読む側は無い)。 */
+    /** 判断の生ログ。deny 行は Attention が決定時刻に使う。approve 率の集計側はまだ無い。 */
     const noteDecision = (p: ProposalRow, verb: string, at: string) =>
       db.run(
         "INSERT INTO decisions (id, proposal_id, at, verb, kind, latency_ms)VALUES (?, ?, ?, ?, ?, ?)",
@@ -248,7 +248,8 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
      * 毎回同じ結論を書き直す(実測で4回、いずれも道具呼び出し4回以下)。
      *
      * 書いた後は `digest` が起こす理由に数えない。一覧からは消さない — 承認はまだ要る。
-     * `ranWatch` と同じ形(docs/adr/0013 / 0017)。上書きしてよい: 状況が動けば結論も変わる。
+     * `ranWatch` の記録分離と同じ考え方で、settle 自体の決定は docs/adr/0028。
+     * 上書きしてよい: 状況が動けば結論も変わる。
      */
     const settle = (idOrPrefix: string, note: string, opts?: { at?: string }) =>
       Effect.gen(function* () {

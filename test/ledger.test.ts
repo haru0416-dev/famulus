@@ -49,7 +49,7 @@ test("today は role のある行だけを run として数える", async () => 
         const ledger = yield* Ledger
         yield* ledger.record({ kind: "run", role: "dialogue", meter: "quota", at: AT })
         yield* ledger.record({ kind: "run", role: "dialogue", meter: "quota", at: AT })
-        yield* ledger.record({ kind: "note", meter: "quota", at: AT }) // role なし = 推論していない
+        yield* ledger.record({ kind: "note", meter: "quota", at: AT })
         yield* ledger.record({ kind: "run", role: "dialogue", meter: "quota", at: "2026-08-07T09:00:00Z" })
         return yield* ledger.today(AT)
       }),

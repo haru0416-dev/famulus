@@ -14,7 +14,6 @@ import { DbLive } from "../src/services/Db.ts"
 export interface Harness {
   readonly calls: ReturnType<typeof RunnerStub>["calls"]
   readonly run: <A, E>(e: Effect.Effect<A, E, AppServices>) => Promise<A>
-  /** 失敗することを期待して、失敗値のほうを取り出す。 */
   readonly fail: <A, E>(e: Effect.Effect<A, E, AppServices>) => Promise<E>
   readonly dispose: () => Promise<void>
 }
@@ -30,7 +29,6 @@ export const harness = (script: readonly StubReply[] = [{ text: "ok" }]): Harnes
   }
 }
 
-/** 1テスト1接続。使い終わったら必ず閉じる(scoped Layer の release がここで走る)。 */
 export const withHarness = async (
   fn: (h: Harness) => Promise<void>,
   script?: readonly StubReply[],

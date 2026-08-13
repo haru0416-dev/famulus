@@ -30,8 +30,8 @@ test("内側のアドレスは数値で弾く(前方一致では取り違える)
     "172.16.0.1",
     "172.31.255.255",
     "192.168.1.1",
-    "169.254.169.254", // クラウドのメタデータ端点
-    "100.72.193.4", // この VPS の Tailscale アドレス
+    "169.254.169.254", // クラウドの instance metadata で使われる link-local
+    "100.72.193.4", // このホストの Tailscale アドレス
     "0.0.0.0",
     "::1",
     "fe80::1",
@@ -77,7 +77,6 @@ test("HTML は本文だけにする(script の中身を資料として渡さな�
   assert.ok(text.includes("3.22.1"))
   assert.ok(text.includes("4.0.0-beta.107"))
 
-  // JSON は触らない。レジストリの応答をそのまま読ませるため。
   const json = '{"version":"3.22.1"}'
   assert.equal(toText(json, "application/json"), json)
 })
@@ -93,11 +92,9 @@ test("日本語のページは utf-8 とは限らない(Shift_JIS / EUC-JP を�
   assert.ok(decoded.includes("書いてある"), decoded)
   assert.ok(!decoded.includes("�"))
 
-  // ヘッダの charset が meta より優先される。
   const eucBody = Buffer.from([0xc6, 0xfc, 0xcb, 0xdc]) // 日本
   assert.ok(decodeBody(new Uint8Array(eucBody), "text/html; charset=EUC-JP").includes("日本"))
 
-  // 知らない charset 名で落ちない(utf-8 に倒す)。
   assert.equal(decodeBody(new Uint8Array(Buffer.from("abc")), "text/html; charset=x-nonsense"), "abc")
 })
 
@@ -167,7 +164,6 @@ test("本文だけ切り出しても、どのページかは残す", () => {
   const text = toText(html, "text/html")
   assert.match(text, /^日本語 - Wikipedia\n\n本文である。/)
 
-  // 既に頭に出ているなら足さない(同じ見出しが2度並ぶのを避ける)。
   const dup = `<html><head><title>こころ</title></head><body><main>${"こころ を読む。".repeat(60)}</main></body></html>`
   const t2 = toText(dup, "text/html")
   assert.ok(t2.startsWith("こころ を読む。"), `頭に重ねていない: ${t2.slice(0, 30)}`)
@@ -198,7 +194,6 @@ test("詰まる先には回り道を返す(実測した先だけ)", () => {
   const pdf = detour("https://arxiv.org/pdf/1706.03762") ?? ""
   assert.match(pdf, /arxiv\.org\/abs\/1706\.03762/)
   assert.match(pdf, /arxiv\.org\/html\/1706\.03762/)
-  // 拡張子付きでも同じ id に落ちる。
   assert.match(detour("https://arxiv.org/pdf/2401.00368v2.pdf") ?? "", /abs\/2401\.00368v2/)
 
   // 2026-08-10 の広い巡回(75件)で足した6件。どれも 200 で返るのに本文が 10〜50字しか無く、
@@ -256,13 +251,10 @@ test("詰まる先には回り道を返す(実測した先だけ)", () => {
 
   // 知らない先に憶測の回り道を書かない。
   assert.equal(detour("https://example.com/a"), undefined)
-  // Issue 一覧(番号無し)は別物なので出さない。
   assert.equal(detour("https://github.com/Effect-TS/effect/issues"), undefined)
   assert.equal(detour("https://www.youtube.com/results?search_query=a"), undefined)
-  // 記事そのものは JS ページではない。一覧だけを振り替える。
   assert.equal(detour("https://zenn.dev/someone/articles/abc123"), undefined)
   assert.equal(detour("https://qiita.com/someone/items/abc123"), undefined)
-  // 質問1件は 403 ではない(一覧だけが弾かれる)。
   assert.equal(detour("https://stackoverflow.com/questions/12345/how-to"), undefined)
 })
 
@@ -344,7 +336,6 @@ test("属性の中の `>` をタグの終わりと取り違えない", () => {
   assert.ok(!text.includes("Anders Hejlsberg"), "属性の中身が本文に漏れていない")
   assert.ok(!text.includes('"designer"'), "生の JSON が漏れていない")
 
-  // 二重引用符でも同じ。
   assert.ok(!toText(`<html><body><i title="a>b">x</i></body></html>`, "text/html").includes('b">'))
   // 引用符が閉じていない壊れたタグでも、本文を巻き込んで消さない。
   assert.ok(

@@ -256,9 +256,8 @@ const EMPTY_USAGE: TokenUsage = { inTok: 0, outTok: 0, cacheRead: 0, cacheWrite:
 const NO_SUCH_TOOL = "No such tool available"
 
 /**
- * `claude -p` を1回呼ぶ。プロジェクトのファイルを見せないため、空の一時ディレクトリで走らせ、
- * `--setting-sources ""` で `~/.claude/settings.json` も CLAUDE.md も MCP 設定も読ませない
- * (open-zero の入力は prompt だけ、という不変条件)。
+ * `claude -p` を1回呼ぶ。空の一時ディレクトリと `--setting-sources ""` を使い、
+ * プロジェクトのファイル、CLAUDE.md、ユーザー設定、MCP 設定をこの呼び出しへ持ち込まない。
  */
 export async function callClaude(opts: ClaudeCallOptions): Promise<ClaudeCallResult> {
   const bin = binForModel(opts.model, opts.bin)

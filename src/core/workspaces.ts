@@ -64,9 +64,9 @@ const entriesOf = (dir: string) => {
  * - hard link は木の中で同じ inode が複数のパスに現れる。パスごとに足すと、
  *   消しても空かない分を数えることになる。
  *
- * 自分で降りて `lstat` で見る。`isDirectory()` は symlink に対して偽なので、辿らずに大きさだけ採る。
- * `nlink > 1` のものは `dev:ino` で1回に落とす。`du -sb` と同じ数え方なので、
- * 出た数字は手元で突き合わせられる(docs/adr/0026)。
+ * 自分で降りて `lstat` で見る。symlink は辿らず、容量にも含めない。
+ * regular file の hard link は `dev:ino` で1回だけ数え、同じ実体の重複加算を避ける。
+ * この方針は pnpm のリンク構造で走査量と容量が膨らむのを防ぐためのもの(docs/adr/0026)。
  */
 export const scanTree = (dir: string): TreeStat => {
   let bytes = 0
@@ -85,7 +85,7 @@ export const scanTree = (dir: string): TreeStat => {
       try {
         s = lstatSync(p)
       } catch {
-        continue // 走査中に消えたもの。消える方向なので、古いと誤判定する側には倒れない。
+        continue // 走査との競合で消えた項目。1件の競合で一覧全体を失敗させない。
       }
       if (s.mtimeMs > newestMs) newestMs = s.mtimeMs
       if (e.isDirectory()) {
@@ -153,7 +153,6 @@ export const renderWorkspaces = (list: readonly Workspace[], nowMs: number): str
     .join("\n")
 }
 
-/** その作業場の説明。無ければ undefined。 */
 export const purposeOf = (name: string) =>
   Effect.gen(function* () {
     const db = yield* Db

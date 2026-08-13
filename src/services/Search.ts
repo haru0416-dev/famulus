@@ -3,8 +3,8 @@
  *
  * 叩く先は「相手がプログラム向けに出している API を使う」で選ぶ。
  * robots の `Disallow`・CAPTCHA・`access denied` で断られている入口は使わない。
- * 一般の web を引く API は買うと鍵が要る(Bing Search API は 2025-08-11 に終了、
- * Google Custom Search JSON API は 2027-01-01 終了)ので、`~/Project/searxng` に SearXNG を立てて
+ * 一般 web 検索のホスト型 API は通常 API key を要する。Bing Search API は終了済みで、
+ * Google Custom Search JSON API も新規受付を終えているため、`~/Project/searxng` に SearXNG を立てて
  * 127.0.0.1:8888 に縛ってある。エンジンの選定理由は `~/Project/searxng/config/settings.yml`。
  *
  * X はこの線引きで本文の取れる API が全部落ちたので、`x` の先だけは取りに行かず、
@@ -15,7 +15,7 @@
  * 同意が先なので今は入れていない。
  *
  * 先を指定しなければ `wide` の先へ同時に出る。`where` で名指しもできる。
- * 返すのは題・URL・書き手・日付・数字だけ。本文は持ってこない。
+ * 返すのは題・URL・書き手・日付と、各 API の数値や検索結果の要約。ページ本文は取得しない。
  */
 import { localStamp } from "../core/time.ts"
 import { fetchRaw } from "./Web.ts"
@@ -86,7 +86,6 @@ interface Source {
 export function plainQuery(q: string): string {
   const stripped = q.replace(/\b(?:site|inurl|intitle|filetype|ext):\S+/gi, " ")
   const left = stripped.replace(/\s+/g, " ").trim()
-  // 絞り込みしか書かれていなかったときは、値のほうを語として残す(問いを空にしない)。
   return (
     left ||
     q
@@ -263,8 +262,7 @@ const searxngHits = (b: string, content?: (c: string) => string | undefined): re
     const url = str(r.url)
     const title = str(r.title)
     if (!url || !title) return []
-    // いくつの索引が同じページを拾ったかを出す。SearXNG が並べ替えに使っている値で、
-    // 1つの索引だけが出したページと、9 中 5 つが揃って出したページを読む側が見分けられる。
+    // 複数の索引が同じページを拾ったことを出し、1つだけが返した結果と区別できるようにする。
     const n = strs(r.engines).length
     const raw = str(r.content)
     const c = raw === undefined ? undefined : (content?.(raw) ?? (content ? undefined : raw))

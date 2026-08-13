@@ -24,7 +24,6 @@ let EMPTY = ""
 const prev = process.env.OPEN_ZERO_TRANSCRIPT_ROOT
 const prevExport = process.env.OPEN_ZERO_EXPORT_ROOT
 
-/** Claude Code が実際に書く行の形。判定に効くフィールドだけ本物と揃える。 */
 const typed = (sessionId: string, cwd: string, at: string, text: string) =>
   JSON.stringify({
     type: "user",
@@ -39,7 +38,6 @@ const typed = (sessionId: string, cwd: string, at: string, text: string) =>
 const said = (text: string) =>
   JSON.stringify({ type: "assistant", isSidechain: false, message: { content: [{ type: "text", text }] } })
 
-/** 道具の呼び出し。108MB の正体はこれ。地の文が1文字も無い行。 */
 const usedTool = (bytes: number) =>
   JSON.stringify({
     type: "assistant",
@@ -47,7 +45,6 @@ const usedTool = (bytes: number) =>
     message: { content: [{ type: "tool_use", name: "Read", input: { file: "x".repeat(bytes) } }] },
   })
 
-/** サブエージェント側の往復。人が打った目印は立つが、打ったのは人ではない。 */
 const sidechain = (sessionId: string, text: string) =>
   JSON.stringify({
     type: "user",
@@ -57,7 +54,6 @@ const sidechain = (sessionId: string, text: string) =>
     message: { role: "user", content: [{ type: "text", text }] },
   })
 
-/** 補完・スラッシュコマンド由来の入力。`promptSource` が typed でない。 */
 const injected = (sessionId: string, text: string) =>
   JSON.stringify({
     type: "user",
@@ -67,7 +63,6 @@ const injected = (sessionId: string, text: string) =>
     message: { role: "user", content: [{ type: "text", text }] },
   })
 
-/** 候補の先頭を取り出す。無ければそこで落とす(`!` で握り潰さない)。 */
 function only<T>(xs: readonly T[]): T {
   assert.ok(xs.length > 0, "候補が1件も無い")
   return xs[0] as T
@@ -107,12 +102,10 @@ before(() => {
     ].join("\n"),
   )
 
-  // 人が一度も打っていないログ。入口に来てはいけない。
   const dir2 = join(ROOT, "-tmp-scratch")
   mkdirSync(dir2, { recursive: true })
   writeFileSync(join(dir2, "s2.jsonl"), [said("誰にも頼まれていない独り言"), usedTool(1000)].join("\n"))
 
-  // ── Claude.ai の書き出し。作業ログ側の検査に混ざらないよう、既定では空のほうを指す。
   EMPTY = join(ROOT, "no-export")
   mkdirSync(EMPTY, { recursive: true })
   mkdirSync(join(ROOT, "no-logs"), { recursive: true })
@@ -244,7 +237,6 @@ test("Claude.ai の書き出しからも候補が上がる — 本文の落ち�
           return yield* (yield* Intake).scan(10)
         }),
       )
-      // 会話1件 + design_chats 1件。殻の会話は候補にならない。
       assert.equal(refs.length, 2)
       assert.ok(
         refs.every((r) => r.kind === "claude-web"),
@@ -305,7 +297,6 @@ test("記憶ファイルはモデルを呼ばずに DB へ入る — 二度目�
           return { first, second, hit }
         }),
       )
-      // 記憶ファイル1本 + 散文の節1つ。
       assert.equal(out.first.added, 2)
       assert.equal(out.second.added, 0, "二度目は入らない")
       assert.equal(out.second.skipped, 2)
@@ -335,11 +326,8 @@ test("英語だけの覚え書きには日本語の見出しが付く — 本文
           }),
         )
         assert.equal(out.added.added, 1)
-        // 見出しを作るためだけに1回。本文の要約には呼ばない。
         assert.equal(h.calls.length, 1)
-        // 日本語で引けるようになったのがこの手当ての目的。
         assert.equal(out.jp.length, 1, "日本語のクエリで当たる")
-        // そして原文は消えていない。見出しは足しただけ。
         assert.equal(out.en.length, 1, "原文でも当たる")
         assert.match(out.en[0]?.text ?? "", /Considering a move to a smaller team/)
       },
@@ -359,7 +347,7 @@ test("選別は道具の入出力を捨て、ユーザーの発話は1文字も�
       }),
     )
     assert.ok(m)
-    // 100KB の道具入出力が丸ごと消えている。
+    // 道具の payload が素材の予算を消費すると、後続の owner 発話が落ちうる。
     assert.ok(m.rawBytes > 100_000, `生ログは 100KB 超のはず: ${m.rawBytes}`)
     assert.ok(m.keptBytes < 2_000, `残すのは 2KB 未満のはず: ${m.keptBytes}`)
     assert.doesNotMatch(m.text, /xxxx/, "道具の入力は素材に入らない")
@@ -492,7 +480,6 @@ test("同じセッションは二度取り込まない — DB の provenance が
           const intake = yield* Intake
           const first = yield* intake.scan(10)
           yield* intake.ingest(only(first))
-          // 2回目の走査。もう候補に出てこない。
           const second = yield* intake.scan(10)
           return { first: first.length, second: second.length, n: yield* (yield* Memory).count }
         }),

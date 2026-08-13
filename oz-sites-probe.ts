@@ -1,6 +1,6 @@
 /**
  * 普段遣いで当たる先を一通り開いて、返り値の質を並べる。**通ったかどうかではなく、読めるかどうかを見る。**
- * 使い方: node oz-sites-probe.ts [絞り込み語]
+ * 使い方: bun oz-sites-probe.ts [絞り込み語]
  *   絞り込み語は分類名・サイト名・URL の一部に当たる(例: 買い物 / Amazon / kakaku)。
  *
  * `want` はその頁を開いた目的の語。**入っていなければ、200 で返っていても読めていない。**
@@ -30,7 +30,6 @@ const SITES: readonly Site[] = [
   ["天気", "気象庁 地震(JSON)", "https://www.jma.go.jp/bosai/quake/data/list.json"],
 
   // ── 買い物 ──
-  // `/dp/...` は curl では 200 だが undici からは 404 が返る(実測 2026-08-10)。検索頁は素で返る。
   ["買い物", "Amazon.co.jp", "https://www.amazon.co.jp/s?k=keyboard", "キーボード"],
   ["買い物", "楽天市場", "https://search.rakuten.co.jp/search/mall/ノートパソコン/"],
   ["買い物", "Yahoo ショッピング", "https://shopping.yahoo.co.jp/search?p=ノートパソコン"],
@@ -156,8 +155,7 @@ for (const [cat, name, url, want] of targets) {
     const body = p.text.trim()
     const lines = body.split("\n")
     const blank = lines.filter((l) => l.trim() === "").length
-    // **空行を重複に数えない。** 段落で区切った本文は空行だらけで、それだけで重複率が 50% を超える。
-    // 実測 2026-08-10: 価格.com は重 96% と出たが、中身は本物の商品一覧だった。
+    // 空行は重複に数えない。旧計算では空行だけで価格.comを重複96%と誤判定したため。
     const solid = lines.filter((l) => l.trim() !== "")
     const dup = solid.length - new Set(solid).size
     const bad = (body.match(/�/g) ?? []).length

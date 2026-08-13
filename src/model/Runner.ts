@@ -1,8 +1,6 @@
 /**
- * 統治された推論の唯一の入口。precheck → 実行 → 枠の計上 → 会計 を1本にまとめる。
- *
- * governance・runner・ledger を別々に呼ぶ形にすると「ゲートを通さずに走らせる経路」が
- * 型の上で常に可能になる。ここでは Runner を通す以外にモデルへ届く道を作らない。
+ * 構造化処理用の推論入口。precheck → 実行 → 枠の計上 → 会計をまとめる。
+ * AI SDK Agent 経路は src/model/governed.ts が同じ順序を middleware で実装する。
  * Layer が差し替え点なので、テストは `RunnerStub` を積むだけで API キーも `claude` バイナリも要らない。
  *
  * 役割→モデルは静的表。LLM にモデル選択と課金経路を開かない。
@@ -27,10 +25,9 @@ export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
  * 量を使う役をそちらから外すと、対話に使える枠が残る。ChatGPT 側も OAuth の定額枠で、
  * `poolForModel` が別の pool に数えるため、片方を回してももう片方は止まらない。
  *
- * この表で今このプロセスから実際に呼ばれるのは `scout` / `reviewer` / `structurer` だけ
- * (src/services/Intake.ts の取り込み、src/agent/assistant.ts の `draft`、src/agent/keeper.ts の締め)。
- * `briefing` と `dialogue` は Flue 経路(src/model/provider.ts)を通るので、モデルは
- * `OPEN_ZERO_MODEL` / `OPEN_ZERO_TICK_MODEL` が決める。`classify` は呼び手がまだ無い。
+ * 現在 ROLE_MODEL を参照して呼ばれるのは `scout` / `reviewer` / `structurer`。
+ * `briefing` / `dialogue` / `classify` の ROLE_MODEL エントリには呼び手がない。
+ * 対話と tick 本体のモデルは createAssistant() に渡す model id で決まる。
  * ここを取り違えると「structurer を守った」つもりで、引用を写す仕事のほうを動かすことになる。
  *
  * `reviewer` は書いた側と別のモデルに置く(docs/adr/0031)。前は opus が書いて opus が読んでいた。
@@ -93,9 +90,7 @@ export interface RunnerResult {
 }
 
 /**
- * run が失敗しうる理由の全部。呼び出し側はこれを網羅しないとコンパイルが通らない。
- * `{ ok:false, reason:string }` に潰すと「枠クールダウン(待てば戻る)」と
- * 「halt(人間の解除が要る)」の区別が呼び出し側から消える。
+ * run の型付き失敗チャネル。クールダウン、halt、日次上限などを文字列へ潰さず呼び出し側へ渡す。
  */
 export type RunError = RunnerFailed | Halt | QuotaCooldown | DailyRunLimit | UnpricedModel | DbFailed
 

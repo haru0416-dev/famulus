@@ -135,7 +135,7 @@ test("stackoverflow — unix 秒を ISO に直し、解決済みかを出す", (
       { title: "答えの付いていない質問", link: "https://stackoverflow.com/questions/2", is_answered: false },
     ],
   })
-  assert.equal(hits[0]?.title, 'Why does "strict" fail?') // 実体参照を戻す
+  assert.equal(hits[0]?.title, 'Why does "strict" fail?')
   assert.equal(hits[0]?.at, new Date(1_786_000_000 * 1000).toISOString())
   assert.equal(hits[0]?.note, "12点 / 解決済み / typescript node.js effect esm")
   assert.match(hits[1]?.note ?? "", /未解決/)
@@ -197,14 +197,14 @@ test("arxiv — Atom を欄ごとに読む。著者は3人まで", () => {
   )
   assert.equal(hits.length, 1)
   assert.equal(hits[0]?.url, "http://arxiv.org/abs/2608.00001v1")
-  assert.equal(hits[0]?.title, "Memory architectures for agents") // 折り返しを1行に畳む
+  assert.equal(hits[0]?.title, "Memory architectures for agents")
   assert.equal(hits[0]?.by, "A One, B Two, C Three")
   assert.equal(hits[0]?.note, "長い要約が 折り返して入る。")
 })
 
 test("知らない先は undefined。名前を間違えたまま読み取りに入らない", () => {
   assert.equal(parseFrom("google", "{}"), undefined)
-  assert.ok(parseFrom("GitHub", '{"items":[]}')) // 大文字小文字は問わない
+  assert.ok(parseFrom("GitHub", '{"items":[]}'))
 })
 
 test("使えない先は既定から外れる", () => {
@@ -273,7 +273,7 @@ test("空の問いと知らない先は、外へ出る前に返る", async () =>
   assert.equal(r.length, 1)
   assert.equal(r[0]?.hits.length, 0)
   assert.match(r[0]?.failed ?? "", /そういう先は無い/)
-  assert.match(r[0]?.failed ?? "", /zenn/) // 使える名前を並べて返す
+  assert.match(r[0]?.failed ?? "", /zenn/)
 })
 
 test("検索エンジンの構文は落として渡す", () => {
@@ -309,7 +309,6 @@ test("いつまで待てばいいかを見出しから拾う", () => {
  * ここから下の2つは順番に依存する。回数制限に当たった記録は過程に残るので、
  * 絞り込みを外す側を先に置く(逆にすると qiita が休んでいて引けない)。
  */
-/** qiita を1回叩き、投げた URL を全部返す。 */
 async function qiitaCalls(term: string, body: (url: string) => string): Promise<readonly string[]> {
   const original = globalThis.fetch
   const called: string[] = []
@@ -428,7 +427,6 @@ test("見せる形 — 先ごとに分け、同じ URL は最初の1つだけ残
   assert.match(text, /## web — 引けなかった\(BRAVE_API_KEY が無いので引けない\)/)
 })
 
-/** 先を1つ名指しで叩き、投げた URL を全部返す。応答は同じ本文を返す。 */
 async function urlsFor(source: string, term: string, body: string): Promise<readonly string[]> {
   const original = globalThis.fetch
   const called: string[] = []

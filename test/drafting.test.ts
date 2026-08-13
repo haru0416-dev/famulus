@@ -9,7 +9,6 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { findLeaks, findShape, findSmells, keepQuoted, reviewOutcome } from "../src/agent/drafting.ts"
 
-/** 非公開の確定値。DB にはこの形で入っている(JSON 文字列の中身)。 */
 const SECRETS = [
   "歯医者(さくら歯科)の次回予約は2026年8月19日(水)18:00に変更。",
   "歯科医院はさくら歯科、連絡先メールは info@sakura-dental.example。",
@@ -84,7 +83,6 @@ test("横棒は題では通し、本文では落とす", () => {
   assert.deepEqual(findSmells("題", "2件が実行不能になった — 理由は別々だった。"), ["—"])
 })
 
-/** 密度の検査に足りる長さの地の文。中身は問わないので、当たる語を含まないものを繰り返す。 */
 const filler = (chars: number) => "実行不能になった提案は5件中2件だった。".repeat(Math.ceil(chars / 20))
 
 test("太字が段落ごとに付いていたら出さない — 合図が多いと合図でなくなる", () => {

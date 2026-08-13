@@ -10,7 +10,7 @@
  * 2段階に分けてある。
  *   1. 選別(モデルを使わない) … 道具の入出力を捨て、人の発話をそのまま残し、応答を畳む。
  *      枠を1回も使わずにここまで落とせるので、要約に渡る前に効果を確かめられる。
- *   2. 要約(scout = haiku) …1会話 → 1イベント。ユーザーの判断だけを、引用付きで抜く。
+ *   2. 要約(scout モデル) …1会話 → 1イベント。ユーザーの判断だけを、引用付きで抜く。
  *
  * `memories.json` だけは2段目を通さない。既に要約済みのものを要約し直すと、二度均されて
  * 本人の言い回しが完全に消える。トピック別に切って、そのまま置く。
@@ -64,7 +64,7 @@ function readTypedRaw(path: string): string | undefined {
 const REPLY_HEAD = 400
 const REPLY_MIN = 100
 const LAST_REPLY = 1500
-/** 素材全体の目安。haiku に一度で読ませる量。 */
+/** 素材全体の目安。1回の scout 呼び出しに収める量。 */
 const MATERIAL_MAX = 40_000
 
 /** 取り込み元。同じ DB に入るが、素材の性質が違うので渡す指示を変える。 */
@@ -95,7 +95,7 @@ interface Turn {
   readonly text: string
 }
 
-/** 書き出し側は秒以下の桁も時差表記もまちまち。DB の中で並べ替えるので形を揃える。 */
+/** 日時を ISO UTC に揃える。解釈不能・欠落時は取り込み時刻に落とす。 */
 const iso = (s: unknown): string => {
   const d = new Date(String(s ?? ""))
   return Number.isNaN(d.getTime()) ? nowIso() : d.toISOString().replace(/\.\d{3}Z$/, "Z")
@@ -120,7 +120,7 @@ const readJson = (path: string): unknown =>
 
 /**
  * content から地の文だけを取り出す。`tool_use` `tool_result` `thinking` は読まない。
- * 生ログの大半がこれだが、「何を決めたか」はここには一度も書かれていない。
+ * assistant の地の文は文脈には使うが、ユーザーが決めたことの根拠にはしない。
  */
 function plainText(content: unknown): string {
   if (typeof content === "string") return content
@@ -221,7 +221,6 @@ function readSessionRef(path: string): SessionRef | undefined {
   }
 }
 
-/** Turn[] を持つところまで揃えた、取り込み元によらない形。 */
 interface Read {
   readonly ref: SessionRef
   readonly turns: Turn[]

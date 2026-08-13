@@ -26,7 +26,6 @@ after(() => {
   if (ROOT) rmSync(ROOT, { recursive: true, force: true })
 })
 
-/** v1 の形(slot が PRIMARY KEY、区間を持たない)を、行ごと手で作る。 */
 function makeV1(path: string): void {
   const d = openDb(path)
   d.exec("PRAGMA foreign_keys = ON;")

@@ -14,7 +14,6 @@ import { test } from "node:test"
 import { TZ } from "../src/core/time.ts"
 import { cacheRoot, dockerArgs, orphanNames, runDir, runsRoot } from "../src/services/Sandbox.ts"
 
-/** 置き場を一時ディレクトリに向ける。`.data/runs` を検査で汚さない。 */
 const withRoot = (fn: () => void): void => {
   const prev = process.env.OPEN_ZERO_RUNS
   process.env.OPEN_ZERO_RUNS = mkdtempSync(join(tmpdir(), "oz-runs-"))

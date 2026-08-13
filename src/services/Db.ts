@@ -1,5 +1,6 @@
 /**
- * DB サービス。`src/db/schema.sql` が正本で、アプリ側は書き換えない。
+ * DB サービス。新規 DB の目標形は `src/db/schema.sql`、既存 DB との差分は
+ * `src/db/migrate.ts` が schema.sql 適用前に吸収する。
  *
  * events の append-only は SQL トリガで強制する(DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)。
  * どのドライバから触っても同じように掛かる。

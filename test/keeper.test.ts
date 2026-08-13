@@ -18,7 +18,6 @@ test("材料からそのまま写した引用のものだけ残る", () => {
   const kept = keepGrounded(
     [
       { slot: "dentist.next_appt", value: "8/12(水)18:00", quote: "来週の水曜18時に変更した" },
-      // 言い換えた引用。当たっていそうに見えるが材料には無い。
       { slot: "dentist.clinic", value: "さくら歯科", quote: "歯医者はさくら歯科です" },
     ],
     MATERIAL,
@@ -117,7 +116,6 @@ test("この回で本体が確定させた slot は、keeper が書き直さな�
         Effect.gen(function* () {
           const mem = yield* Memory
           const since = "2026-08-08T09:00:00Z"
-          // 本体が道具で先に確定させた(keeper より詳しい)。
           yield* mem.believe("dentist.next_appt", "さくら歯科の次回予約は8/12(水)18:00。担当は鈴木さん")
           const line = yield* keep({ material: MATERIAL, since })
           return {

@@ -63,7 +63,7 @@ test("halt が立っていると run はモデルに到達しない", async () =
           return yield* (yield* Ledger).today()
         }),
       )
-      assert.equal(t.runs, 0) // 走っていないので記録もされない
+      assert.equal(t.runs, 0)
     },
     [{ text: "走ってはいけない" }],
   )
@@ -181,11 +181,11 @@ test("検索結果の引用マーカーを DB に持ち込まない", () => {
  * 呼ぶ必要が無くてそう書いた回までやり直すことになる。見るのは CLI の tool_use_error だけ。
  */
 test("弾かれて手ぶらのときだけ取り直す", () => {
-  assert.equal(needsResubmit(true, true, 0), true) // 弾かれた + 提出0 = 呼び方を間違えた
-  assert.equal(needsResubmit(true, true, 1), false) // 弾かれたが提出はできている
-  assert.equal(needsResubmit(true, false, 0), false) // 呼びに行っていない = 正しく諦めた回
+  assert.equal(needsResubmit(true, true, 0), true)
+  assert.equal(needsResubmit(true, true, 1), false)
+  assert.equal(needsResubmit(true, false, 0), false)
   assert.equal(needsResubmit(true, undefined, 0), false)
-  assert.equal(needsResubmit(false, true, 0), false) // そもそも道具を渡していない経路
+  assert.equal(needsResubmit(false, true, 0), false)
 })
 
 /**

@@ -19,10 +19,9 @@ const { keepWorkspace, noteWorkspace, purposeOf } = await import("../src/core/wo
 const { withHarness } = await import("./helpers.ts")
 type Harness = Awaited<ReturnType<typeof import("./helpers.ts").harness>>
 
-const AT = "2026-08-13T00:00:00Z" // JST 9:00
-const DAYS = 3 // 切り口は 2026-08-10
+const AT = "2026-08-13T00:00:00Z"
+const DAYS = 3
 
-/** その木の中身を全部、指定の時刻に見せかける。親の刻は子を触っても変わらないので、両方に当てる。 */
 const age = (path: string, daysAgo: number): void => {
   const t = new Date(Date.parse(AT) - daysAgo * 86_400_000)
   utimesSync(path, t, t)
@@ -49,7 +48,6 @@ const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): P
   }
 }
 
-/** 作業場を1つ作る。`deep` を渡すと、下の階のファイルだけ新しくする。 */
 const workspace = (dir: string, name: string, daysAgo: number, deepDaysAgo?: number): string => {
   const ws = join(dir, "runs", name)
   mkdirSync(join(ws, "src"), { recursive: true })
@@ -111,19 +109,17 @@ test("共有キャッシュは上限を超えたときだけ落ちる", async ()
     mkdirSync(cache, { recursive: true })
     const blob = join(cache, "big")
     writeFileSync(blob, "x".repeat(64 * 1024))
-    age(blob, 90) // 90 日前。作業場ならとうに落ちている年
+    age(blob, 90)
     const kept = await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans }))
     assert.match(kept, /落とすものは無かった/)
     assert.equal(existsSync(blob), true, "上限内のキャッシュが古さで落ちた")
 
-    // 上限を跨いだときだけ落ちる。古さでは動かないことを、同じ木で続けて見る。
     const line = await h.run(cleanup({ at: AT, days: DAYS, cacheMaxMb: 0, orphans: noOrphans }))
     assert.match(line, /共有キャッシュ/)
     assert.equal(existsSync(blob), false)
   })
 })
 
-/** 1日1回。印を付けるのは呼び出し側(src/tick.ts)なので、ここは判定だけを見る。 */
 test("その日ぶんが済んでいれば回さない", async () => {
   await withHarness(async (h) => {
     const out = await h.run(

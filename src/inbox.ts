@@ -13,7 +13,7 @@ import { nowIso } from "./core/time.ts"
 import { Discord } from "./services/Discord.ts"
 import { Memory } from "./services/Memory.ts"
 
-/** DB へ移した件数。0 なら tick を起こさない。 */
+/** この呼び出しで DB へ移した件数。 */
 export const drainInbox: Effect.Effect<number, DbFailed, Discord | Memory> = Effect.gen(function* () {
   const discord = yield* Discord
   const mem = yield* Memory

@@ -1,14 +1,14 @@
 /**
- * 外を読むための1本道。読むのは公開の web だけで、内側には向けさせない。
+ * 公開 web を読み、このホストの内側へ向く URL を拒否する経路。
  *
  * コネクタ側の egress は allowlist(Governance の EGRESS_ALLOW)で足りる。宛先が数えられるから。
- * 調査の読み取りは宛先を列挙できないので、形で拒否する。止めるのはこのホストの内側:
- * loopback・私設アドレス・link-local・CGNAT(Tailscale の 100.64/10 を含む)。
+ * 調査の読み取りは宛先を列挙できないので、形で拒否する。IPv4 の loopback・私設・link-local・
+ * CGNAT と、IPv6 の ::/::1・fc00::/7・fe80 で始まるアドレスを拒否する。
  * ufw は受信だけを見ていて送信は素通しなので、ここを塞がないとモデルの書いた URL 一本で
  * `http://127.0.0.1:8080` も `http://100.72.193.4` も読める。
  *
- * 名前解決してから判定するが、実際に繋ぐときに再解決される(DNS rebinding は塞げていない)。
- * 公開ホストに見せかけて内側へ向ける攻撃までは防げない。
+ * 名前解決後にも判定するが、接続時には再解決されるため DNS rebinding は防げない。
+ * IPv6 link-local 全体と、16進表記の IPv4 射影アドレスも現在の判定では網羅していない。
  */
 import { lookup } from "node:dns/promises"
 import { isIP } from "node:net"
@@ -43,7 +43,7 @@ export function isPrivateAddress(ip: string): boolean {
     const s = ip.toLowerCase()
     if (s === "::" || s === "::1") return true
     if (s.startsWith("fe80") || s.startsWith("fc") || s.startsWith("fd")) return true
-    // IPv4 射影(::ffff:127.0.0.1)は v4 として見る。
+    // ドット区切りで書かれた IPv4 射影アドレスは v4 として見る。
     const m = s.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/)
     if (m?.[1]) return isPrivateAddress(m[1])
     return false
@@ -466,8 +466,7 @@ export function detour(url: string): string | undefined {
     return `HTML も .json も 403 で弾かれる。https://www.reddit.com/r/${seg[1]}/.rss を開く`
   }
   if (isHost(u, "youtube.com") && u.pathname === "/watch" && u.searchParams.get("v")) {
-    // 視聴ページは題も説明も 68万バイト目にあり、読むだけで 1.3MB 以上転送する。
-    // 題と投稿者だけが要るなら oEmbed が 200 バイトで同じことを答える。
+    // 視聴ページは題や説明までの転送量が大きい。題と投稿者だけなら oEmbed の応答で足りる。
     const id = u.searchParams.get("v") ?? ""
     return `題と説明は 68万バイト目にあり、読むのに 1.3MB 要る。https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3D${id}&format=json を開く(題と投稿者が 200 バイトで返る)`
   }
@@ -544,9 +543,9 @@ async function pace(host: string): Promise<void> {
 }
 
 /**
- * 一度開いたページを全文のまま覚えておく。速さのためではなく、同じものを取りに行かないため。
+ * 一度開いたページについて、取得上限まで組み立てた本文を覚えておく。
  * `MAX_CHARS` に収まらない資料は続きを読むたびに頭から取り直すことになる。
- * 全文を持てば、続きを読むのは切り出すだけで済む。
+ * 保持した本文から切り出せば、続きを読むたびに頭から取り直さずに済む。
  *
  * 同じ `offset` をもう一度求められたときだけ「さっき開いた」と書いて返す。続き読みには付けない —
  * 付ける相手は同じところを回っている呼び出しで、順に読み進めている呼び出しではない。
@@ -776,8 +775,8 @@ export async function fetchPage(raw: string, opts: FetchOptions = {}): Promise<F
 }
 
 /**
- * 実際に取りに行く。転送は自分で追う — follow に任せると、公開ホストから内側への転送を検査できない。
- * 切らずに全文を返す。どこを読むかを決めるのは呼び出し側(`slice`)。
+ * 実際に取りに行く。転送は自分で追い、各転送先を内側判定に通す。
+ * 取得上限まで組み立てた本文を返し、12,000字の窓へ切るのは呼び出し側(`slice`)。
  */
 async function fetchFresh(raw: string): Promise<CachedDoc> {
   // 断られていると分かっている先へは、確かめに行かない。`detour` は普通は取ってから

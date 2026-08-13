@@ -90,13 +90,11 @@ test("窓の中に増えた行だけ数える — 前後の回のぶんは混ざ
     await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        // 窓より前(前の回の跡)。
         yield* mem.remember({
           source: "system",
           content: { ran: "ls", exitCode: 0 },
           at: "2026-08-13T05:00:00Z",
         })
-        // 窓の中。
         yield* mem.remember({
           source: "system",
           content: { ran: "grep", exitCode: 0 },
@@ -107,7 +105,6 @@ test("窓の中に増えた行だけ数える — 前後の回のぶんは混ざ
           content: { told: "下書きが1本できた", body: "…", sent: true },
           at: "2026-08-13T06:00:20Z",
         })
-        // 窓より後(次の回の跡)。
         yield* mem.remember({
           source: "system",
           content: { drafted: "題", body: "…", basis: "…", sent: true },

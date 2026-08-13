@@ -22,7 +22,7 @@ test("halt は precheck を止め、明示解除するまで自動で明けな�
     await h.run(
       Effect.gen(function* () {
         const gov = yield* Governance
-        yield* gov.precheck({ ...base, at: AT, nowMs: NOW }) // 素の状態では通る
+        yield* gov.precheck({ ...base, at: AT, nowMs: NOW })
         yield* gov.writeHalt("手動停止", AT)
       }),
     )
@@ -124,7 +124,6 @@ test("日次 run 数の上限は効くが、halt は立てない(翌日には自
       Effect.gen(function* () {
         const gov = yield* Governance
         const db = yield* Db
-        // role が入っている行だけが数えられる(= モデルを呼んだ run)。
         for (const i of [1, 2]) {
           yield* db.run(
             "INSERT INTO ledger (id, at, kind, role)VALUES (?, ?, 'run', 'dialogue')",
@@ -132,7 +131,6 @@ test("日次 run 数の上限は効くが、halt は立てない(翌日には自
             AT,
           )
         }
-        // role NULL の行は数えない。
         yield* db.run("INSERT INTO ledger (id, at, kind)VALUES ('x', ?, 'note')", AT)
         yield* gov.precheck({ ...base, at: AT, nowMs: NOW }, SMALL)
       }),
@@ -155,7 +153,6 @@ test("日次 run 数の上限は効くが、halt は立てない(翌日には自
 
 test("自走が枠を使い切っても対話は止まらない(仕切りであって停止ではない)", async () => {
   await withHarness(async (h) => {
-    // 自走枠 2 / 全体 10。自走だけを 2 回使った状態を作る。
     const split: BudgetConfig = { dailyRuns: 10, autonomousRuns: 2, dailyUsd: 20, monthlyUsd: 200 }
     await h.run(
       Effect.gen(function* () {
@@ -196,7 +193,6 @@ test("定額枠(quota)の run は USD 上限を飛ばす — 従量(usd)は同�
     await h.run(
       Effect.gen(function* () {
         const db = yield* Db
-        // 今日の USD が既に日次上限(20)を超えている状態を作る。
         yield* db.run(
           "INSERT INTO ledger (id, at, kind, role, usd)VALUES ('big', ?, 'run', 'dialogue', 99.0)",
           AT,

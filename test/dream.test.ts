@@ -18,7 +18,6 @@ const { withHarness } = await import("./helpers.ts")
 
 const AT = "2026-08-12T00:00:00Z"
 
-/** 材料に出る/出ないを分けるだけの最小の材料。時刻は AT から遡って入れる。 */
 const seed = Effect.gen(function* () {
   const mem = yield* Memory
   yield* mem.remember({ kind: "observe", source: "owner", content: "月曜の発言", at: "2026-08-10T01:00:00Z" })
@@ -149,7 +148,6 @@ test("上げるものは keeper と同じ照合を通る(写せない引用は�
           looked: "日をまたいで同じ話が出ている",
           values: [
             { slot: "week.topic", value: "月曜と火曜に同じ話をしている", quote: "月曜の発言" },
-            // 言い換えた引用。材料に無いのでコード側が落とす。
             { slot: "week.other", value: "別の話", quote: "水曜にも言っていた" },
           ],
         },
@@ -158,7 +156,6 @@ test("上げるものは keeper と同じ照合を通る(写せない引用は�
   )
 })
 
-/** 1日1回。印を付けるのは呼び出し側(src/tick.ts)なので、ここは判定だけを見る。 */
 test("その日ぶんが済んでいれば回さない", async () => {
   await withHarness(async (h) => {
     const out = await h.run(

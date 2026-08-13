@@ -80,7 +80,6 @@ test("二重承認はできない(承認済みは承認の対象ではない)", 
     )
     assert.equal((e as { _tag: string })._tag, "Conflict")
 
-    // 承認記録は1件のまま(二重に積まれていない)。
     const n = await h.run(
       Effect.gen(function* () {
         const db = yield* Db
@@ -165,7 +164,6 @@ test("期限切れは list の前に expired へ落ちる(承認待ちが実態�
     const out = await h.run(
       Effect.gen(function* () {
         const p = yield* Proposals
-        // 8日前に作った提案は既定の 7 日を過ぎている。
         const old = new Date(Date.now() - 8 * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z")
         const id = yield* p.create(draft({ at: old }))
         const pending = yield* p.list("proposed")

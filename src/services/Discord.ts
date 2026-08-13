@@ -1,9 +1,9 @@
 /**
  * Discord。ユーザーとの入出力はここだけ(docs/adr/0029)。
  *
- * gateway に接続しない。ボタン(interaction)は3秒以内の応答が要るので使えないが、
- * 絵文字のリアクションなら後から数えられる。REST を30秒ごとに1回叩く(src/poll.ts)。
- * オンライン表示は gateway でしか出ないので別プロセス(src/presence.ts / docs/adr/0027)。
+ * gateway でメッセージを受信しない。ボタン(interaction)は3秒以内の応答が要るため使わず、
+ * リアクションと自由文を `src/poll.ts` から30秒ごとに REST で取得する。
+ * オンライン表示だけは別プロセスの gateway 接続が担う(src/presence.ts / docs/adr/0027)。
  *
  * 出す先は用途で分ける(`Desk`)。ミュートの単位が用途と一致する。チャンネルは id を env で
  * 指す。名前で引くと改名した日に出なくなる(docs/adr/0015)。
@@ -24,8 +24,8 @@ const api = (): string => process.env.OPEN_ZERO_DISCORD_API ?? "https://discord.
 const LIMIT = 2000
 
 /**
- * 1通に入れる行数の上限。Discord のクライアントは縦に長いメッセージを途中で閉じて
- * 「続きを表示」にするので、2000字に収まっていても行数で切る。
+ * 携帯クライアントで縦長の投稿が畳まれにくいように設けた、ローカルな1通あたりの行数上限。
+ * Discord API 自体の制限ではない。
  */
 const LINES = 17
 
@@ -109,8 +109,9 @@ const MAX_PENDING = 20
 const MAX_THREADS = 3
 
 /**
- * `inbox()` で同時に出す GET の数。読む先は最大 7(talk / draft / log / DM / thread × `MAX_THREADS`)。
- * Discord のレート制限は `/channels/{id}/messages` がチャンネル別なので、7 本同時でも当たらない。
+ * `inbox()` が同時に出す GET の上限。
+ * 読む先は talk / draft / log / DM の最大4件と、スレッド最大3件で合計7件。
+ * rate-limit bucket の分離は保証ではないため、ここでは並列数だけを8に制限する。
  */
 const FETCH_AT_ONCE = 8
 
@@ -122,7 +123,7 @@ interface RawMessage {
   readonly reactions?: { emoji: { name: string }; count: number; me: boolean }[]
 }
 
-/** snowflake は数として単調増加する。文字列比較では桁が変わったときに壊れる。 */
+/** snowflake は上位ビットに生成時刻を持つ。文字列比較を避け、同時刻内は数値順で扱う。 */
 const newer = (a: string, b: string): boolean => BigInt(a) > BigInt(b)
 
 /** 字数で切る位置。改行で切る。後半に改行が無ければ LIMIT で切る。 */
@@ -242,7 +243,8 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       }).pipe(Effect.ignore)
 
     /**
-     * スレッドを1本立てる。スレッド内の発言は `channel_id` が元の1通を指すので、宛先が確定する。
+     * スレッドを1本立てる。作成されたスレッドの id は起点メッセージ id と同じなので、
+     * スレッド内メッセージの channel_id から返事の宛先を特定できる。
      *
      * 立てた直後に cursor を起点へ置く。置かないと「cursor を持たないチャンネル」の扱いになり、
      * 最初の1通が取り込まれないまま cursor だけ進む(docs/adr/0015)。
@@ -378,7 +380,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
             if (!waiting) continue
             for (const r of m.reactions ?? []) {
               const reply = waiting[r.emoji.name]
-              // 自分で付けたぶんは数に入っている。それを超えていたらユーザーが押した。
+              // 自分で付けたぶんを超えていれば、bot 以外の誰かが押している。
               if (reply && r.count > (r.me ? 1 : 0)) {
                 out.push({ id: `${m.id}:${r.emoji.name}`, text: reply })
                 delete pending[m.id]
@@ -391,7 +393,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         }
 
         return {
-          // チャンネルをまたいでも届いた順に並べる。snowflake は時刻で単調増加する。
+          // チャンネルをまたいで snowflake の時刻順に並べる。同一ミリ秒内は id の数値順。
           items: out.sort((a, b) => (newer(a.id.split(":")[0] ?? "0", b.id.split(":")[0] ?? "0") ? 1 : -1)),
           marks,
           taps: pending,

@@ -1,4 +1,4 @@
-/** 端から端まで。外を見る役が実際に開いた URL を、global fetch を包んで数える。 */
+/** 実ランタイムで1ターン走らせ、プロセス内の global fetch 呼び出しを記録する。 */
 import { createAssistant } from "./src/agent/assistant.ts"
 import { runtime } from "./src/runtime.ts"
 

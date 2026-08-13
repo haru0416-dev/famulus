@@ -122,7 +122,7 @@ async function noteFailure(e: unknown): Promise<void> {
   )
 }
 
-/** ゲート → 実行 → 枠 → 会計。この順以外でモデルへ届く道を作らない。 */
+/** AI SDK Agent 経路で、モデル呼び出しごとにゲート → 実行 → 枠計上 → 会計を行う。 */
 export function governance(): LanguageModelV4Middleware {
   return {
     specificationVersion: "v4",

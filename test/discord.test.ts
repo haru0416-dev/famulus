@@ -45,7 +45,6 @@ const fakeDiscord = async (
 }> => {
   const hits: Hit[] = []
   let next = 100
-  // 場所ごとの中身。DM 以外は触られたときに作る(テスト側は id を決め打ちで渡す)。
   const rooms = new Map<string, Msg[]>([[CH, seed]])
   const at = (ch: string): Msg[] => {
     const got = rooms.get(ch) ?? []
@@ -109,7 +108,6 @@ const post = (p: Post) =>
     return yield* d.post(p)
   })
 
-/** 読んで、読んだことを記録するところまで。呼ぶ側と同じ順(src/inbox.ts)。 */
 const inbox = Effect.gen(function* () {
   const d = yield* Discord
   const batch = yield* d.inbox()
@@ -117,7 +115,6 @@ const inbox = Effect.gen(function* () {
   return batch.items
 })
 
-/** 読むだけ。位置を進めない — `seen` を呼ばなかった回を作るために使う。 */
 const peek = Effect.gen(function* () {
   const d = yield* Discord
   return yield* d.inbox()
@@ -128,7 +125,7 @@ const configured = Effect.gen(function* () {
   return d.configured()
 })
 
-/** 設定を立てる。値を消しっぱなしにすると、後続のテストが本物の Discord を叩きに行く。 */
+/** 値を残すと後続テストが実 Discord を叩き得るため、解除もこの helper に集約する。 */
 const wire = (url: string | undefined, ch?: { talk?: string; draft?: string; log?: string }) => {
   delete process.env.OPEN_ZERO_DISCORD_CH_TALK
   delete process.env.OPEN_ZERO_DISCORD_CH_DRAFT
@@ -262,7 +259,6 @@ test("記録し終える前に落ちた回のぶんは、次の回にもう一�
       assert.deepEqual([...first.items], [{ id: "71", text: "歯医者を来週にずらして" }])
       // 二度覚えるのは直せるが、位置の向こう側に取り残されたものは取りに行けない。
       assert.deepEqual(await h.run(inbox), [{ id: "71", text: "歯医者を来週にずらして" }])
-      // 記録し終えた後は返らない。
       assert.deepEqual(await h.run(inbox), [])
     })
   } finally {
@@ -339,7 +335,6 @@ test("下書きは下書きの場所へ、会話は会話の場所へ出る", as
         sent.map((x) => x.path),
         [`/channels/${TALK}/messages`, `/channels/${DRAFT}/messages`],
       )
-      // DM は開きにも行かない。分けた先が指してあるなら DM は関係ない。
       assert.equal(
         dc.hits.some((x) => x.path === "/users/@me/channels"),
         false,
@@ -363,7 +358,6 @@ test("リアクションは出した場所に付く — 会話の場所に出し
         dc.hits.find((x) => x.method === "PUT")?.path.startsWith(`/channels/${DRAFT}/messages/${id}/`),
         true,
       )
-      // 押されたら、その場所を読んで拾える。
       const r = dc.at(DRAFT).find((x) => x.id === id)?.reactions?.[0]
       if (r) r.count = 2
       assert.deepEqual(await h.run(inbox), [{ id: `${id}:✅`, text: "出す" }])
@@ -380,7 +374,6 @@ test("返事は最後に話しかけられた場所に返る — DM に書かれ
   wire(dc.url, { talk: TALK, draft: DRAFT })
   try {
     await withHarness(async (h) => {
-      // 位置合わせ(初回は取り込まない)。
       dc.at(TALK).unshift({ id: "200", content: "位置合わせ", author: { id: OWNER } })
       dc.msgs.unshift({ id: "201", content: "位置合わせ", author: { id: OWNER } })
       await h.run(inbox)
@@ -390,7 +383,6 @@ test("返事は最後に話しかけられた場所に返る — DM に書かれ
       await h.run(post({ text: "DM への返事" }))
       assert.equal(dc.msgs[0]?.content, "DM への返事")
 
-      // チャンネルに書き直したら、返事もそちらへ戻る。
       dc.at(TALK).unshift({ id: "301", content: "やっぱりこっち", author: { id: OWNER } })
       assert.deepEqual(await h.run(inbox), [{ id: "301", text: "やっぱりこっち" }])
       await h.run(post({ text: "チャンネルへの返事" }))
@@ -415,7 +407,6 @@ test("返事は、複数のチャンネルに未読があっても新しいほ�
       dc.msgs.unshift({ id: "201", content: "位置合わせ", author: { id: OWNER } })
       await h.run(inbox)
 
-      // DM のほうが古い。返事は新しい talk へ。
       dc.msgs.unshift({ id: "300", content: "先に DM", author: { id: OWNER } })
       dc.at(TALK).unshift({ id: "301", content: "後から talk", author: { id: OWNER } })
       assert.deepEqual(await h.run(inbox), [
@@ -425,7 +416,6 @@ test("返事は、複数のチャンネルに未読があっても新しいほ�
       await h.run(post({ text: "新しいほうへ" }))
       assert.equal(dc.at(TALK)[0]?.content, "新しいほうへ")
 
-      // 逆順。talk のほうが古ければ DM へ。
       dc.at(TALK).unshift({ id: "400", content: "先に talk", author: { id: OWNER } })
       dc.msgs.unshift({ id: "401", content: "後から DM", author: { id: OWNER } })
       await h.run(inbox)
@@ -594,7 +584,6 @@ test("進み具合の場所を指すとそこへ出る — 呼びかけは付け
     await withHarness(async (h) => {
       await h.run(post({ text: "3手 41秒", to: "log" }))
       assert.equal(dc.at(LOG)[0]?.content, "3手 41秒")
-      // 会話には出ない。混ざった瞬間に、返事の要るものが流れる。
       assert.deepEqual(dc.at(TALK), [])
     })
   } finally {
@@ -625,11 +614,9 @@ test("行数でも分ける — 2000 字に収まっていても縦に長いと�
   wire(dc.url)
   try {
     await withHarness(async (h) => {
-      // 40 行 / 320 字。字数だけで見れば 1 通に収まる。
       await h.run(post({ text: Array.from({ length: 40 }, (_, i) => `行${i}`).join("\n") }))
       const sent = dc.hits.filter((x) => x.method === "POST" && x.path.endsWith("/messages"))
       assert.equal(sent.length, 3)
-      // 分けた先で行が消えていない。切れ目の改行だけが落ちる。
       const joined = sent.map((x) => String(x.body?.content ?? "")).join("\n")
       assert.equal(joined.split("\n").length, 40)
       assert.equal(joined.split("\n").at(-1), "行39")

@@ -1,7 +1,7 @@
 -- open-zero の DB スキーマ。ストア: bun:sqlite(`Database`、src/db/sqlite.ts 経由)。
 -- 設計原則:
 --   1. 正本は events。belief_slots / events_fts は projection(silent overwrite 禁止)。
---   2. 時刻は ISO-8601 UTC 'Z'(src/core/brand.ts の IsoUtc)。TEXT で保持。
+--   2. 時刻は ISO-8601 UTC 'Z'。現在時刻とローカル日付境界は src/core/time.ts を使う。
 --   3. bool は INTEGER 0/1。直列化値は JSON を TEXT で保持し json_valid で守る。
 --   4. **ここに在るのは、読み書きする側が実際に書かれているテーブルだけ。**
 --      先取りで置いたテーブルは「その仕組みが在る」と読まれてしまうので置かない(docs/adr/0007)。
@@ -84,9 +84,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_belief_current
 CREATE INDEX IF NOT EXISTS idx_belief_history
   ON belief_slots (slot, valid_from, valid_until);
 
--- 全文検索の projection。日本語は **trigram tokenizer**。unicode61 は日本語を分かち書きできず
--- 「会議」で「明日の会議資料」が引けない。trigram は3文字窓で部分一致する(2文字クエリは未対応=
--- vector 併用のハイブリッドは**まだ無い**)。projection なので消して再導出できる。
+-- 全文検索の projection。日本語は trigram tokenizer。unicode61 は日本語を分かち書きできず
+-- 「会議」で「明日の会議資料」が引けない。3文字以上は FTS、2文字以下は Memory.recall が
+-- text への LIKE 走査にフォールバックする。vector 検索はまだ無い。
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
   event_id UNINDEXED,
   text,
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS proposals (
   -- **実行の3状態は落とした。** 承認しても動かす仕組みが無い(docs/adr/0033)。付ける日に足す。
   status         TEXT NOT NULL CHECK (status IN
                    ('proposed','approved','deferred','denied','expired')),
-  deferred_until TEXT,                                -- later 時のみ(IsoUtc)
+  deferred_until TEXT,                                -- deferred 用の旧列。現在の書き手は無い
   expires_at     TEXT NOT NULL,                       -- created_at + MAX_PENDING_DAYS
   deny_reason    TEXT,                                -- deny 時。次の生成へ還流(学習信号)
   -- **決着ではなく、決着待ちについての結論。** 承認はユーザーしか出せないので、tick 側は
@@ -150,18 +150,18 @@ CREATE TABLE IF NOT EXISTS ledger (
   id           TEXT PRIMARY KEY,
   at           TEXT NOT NULL,                         -- IsoUtc
   kind         TEXT NOT NULL,                         -- 'turn' | 'run' | 'briefing' | 'scout' ...
-  role         TEXT,                                  -- src/config/models.ts の Role(任意)
+  role         TEXT,                                  -- src/model/Runner.ts の Role、または autonomous
   model        TEXT,                                  -- 使用モデル id
   -- 入力は3つに割れて返る。**in_tok だけ見ると嘘になる**(docs/adr/0005)。
   -- 総入力 = in_tok + cache_read + cache_write。どれか1つを「入力」と呼ばない。
   in_tok       INTEGER NOT NULL DEFAULT 0,            -- キャッシュに載らなかった分だけ
   out_tok      INTEGER NOT NULL DEFAULT 0,
-  cache_read   INTEGER NOT NULL DEFAULT 0,            -- cache_read=0 監視(対話経路のみ)
+  cache_read   INTEGER NOT NULL DEFAULT 0,            -- キャッシュから再利用された入力
   cache_write  INTEGER NOT NULL DEFAULT 0,            -- 初回に書いた分(定義文・system はここに入る)
   usd          REAL NOT NULL DEFAULT 0,
   unpriced     INTEGER NOT NULL DEFAULT 0 CHECK (unpriced IN (0,1)),  -- 単価不明を黙って0円にしない
-  proposal_id  TEXT REFERENCES proposals(id),         -- 実行記録のとき
-  summary      TEXT,                                  -- 秘密リダクション済みの要約
+  proposal_id  TEXT REFERENCES proposals(id),         -- 提案に紐づく記録用。現在の書き手は無い
+  summary      TEXT,                                  -- traceOf() で短縮したモデル応答
   provenance   TEXT CHECK (provenance IS NULL OR json_valid(provenance))
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_at   ON ledger(at);
@@ -207,8 +207,8 @@ CREATE TABLE IF NOT EXISTS questions (
 CREATE INDEX IF NOT EXISTS idx_questions_open ON questions(status)WHERE status = 'open';
 
 -- ============================================================================
--- 7. decisions(承認の生ログ。deny 還流・提示から親指までの所要)
---     集計した重みのテーブルは持たない。要るときに events から数える(docs/adr/0007)。
+-- 7. decisions(承認・却下の生ログ。deny 還流・提示から判断までの所要)
+--     集計済みの重みは持たず、必要なら decisions を直接集計する。
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS decisions (
   id          TEXT PRIMARY KEY,

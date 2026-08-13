@@ -317,17 +317,16 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
         )
         .pipe(Effect.map((r) => view(slot, r)))
 
-    /** 値の変遷。古い順。 */
     const beliefHistory = (slot: string) =>
       db
         .all(`SELECT ${SLOT_COLS} FROM belief_slots WHERE slot = ?ORDER BY valid_from ASC`, slot)
         .pipe(Effect.map((rows) => rows.map((r) => view(slot, r)).filter((v) => v !== undefined)))
 
     /**
-     * 確かめてから時間が経った事実。転職が終わったのに DB が知らない、を見つける唯一の手段。
+     * 現在区間の `valid_from` が指定時刻より古い事実。
      *
-     * 陳腐化は検索では絶対に見つからない。古い値も新しい値と同じくらい自然に検索に当たるから。
-     * 「最後に真だと確かめたのがいつか」を持っている側から引くしかない。
+     * これは確認鮮度(`updated_at`)ではなく、事実がいつ真になったかという valid time で切る。
+     * 後から知った古い事実も対象になるため、「最後に確認してからの経過」とは解釈しない。
      */
     const staleBeliefs = (before: string, limit = 20) =>
       db

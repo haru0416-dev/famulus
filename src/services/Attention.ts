@@ -65,7 +65,7 @@ export interface PendingProposal {
 }
 
 /**
- * 断られた提案と理由。同じ用件をもう一度出さないためにプロンプトへ渡す(docs/adr/0013)。
+ * 断られた提案と理由。同じ用件をもう一度出さないためにプロンプトへ渡す(docs/adr/0017)。
  * 渡していなかったときは、同じ用件が3回出されて3回とも断られた。
  */
 export interface RefusedProposal {
@@ -108,14 +108,14 @@ export interface Digest {
   readonly idle: boolean
 }
 
-/** 真だと確かめてから時間が経った belief。「まだ合っているか」を聞くための材料。 */
+/** 現在区間の `valid_from` が古い belief。確認からの経過時間ではない。 */
 export interface StaleBelief {
   readonly slot: string
   readonly value: string
   readonly valid_from: string
 }
 
-/** これ以上動きが無い watch は滞留として起こす材料にする。 */
+/** human-owned watch を滞留とみなす日数。famulus-owned はこの日数を待たず、個別冷却だけを見る。 */
 export const STALLED_DAYS = 3
 
 /**
@@ -131,7 +131,7 @@ export const WATCH_COOLDOWN_HOURS = 24
  * 1回の tick で載せる watch の上限(docs/adr/0028)。
  *
  * 同じ日に登録した watch は同じ日に冷却が明けるので、明けたぶんが全部そろって上がる。
- * 実測(2026-08-13 / 直近40回の実働)では6件が同時に載る状態が続き、watch で起きた9回のうち
+ * 直近40回を調べると6件が同時に載る状態が続き、watch で起きた9回のうち
  * 7回が道具呼び出し4回以下で終わっていた。載せなかったぶんは `last_shown_at` の古い順で
  * 次の回に上がる。3 は 420 秒の持ち時間から採った。
  *
@@ -147,10 +147,10 @@ export const IDLE_WAKE_HOURS = 24
 /** tick のプロンプトに載せる「断られたぶん」の数。起こす理由には数えない。 */
 export const REFUSED_LIMIT = 5
 /**
- * 確かめてからこの日数が経った belief は、棚卸しで「まだ合っているか」を疑う材料にする。
+ * 現在区間の `valid_from` がこの日数より古い belief を、棚卸しの材料にする。
  *
- * 古くなったことは検索では出ない。転職が終わっても「転職活動中」は同じ強さで当たり、
- * 当たった側は最新の1行に見える。判定できるのは `valid_from` を持っている側だけ。
+ * これは確認鮮度ではなく、事実が真になった時点からの経過を見る。古いだけで誤りとは限らないため、
+ * 起こす理由には数えず、別の理由で起きた回に確認候補として渡す。
  *
  * 起こす理由には数えない。理由にすると、答えが返るまで毎回同じ slot で起き続ける。
  */
@@ -420,7 +420,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         const stalled = queued.slice(0, STALLED_SHOW_MAX)
         const stalledHeld = queued.length - stalled.length
         const questions = yield* openQuestions()
-        // 確かめてから時間が経った事実。古いだけで間違いとは限らないので、消さずに聞く材料にする。
+        // 現在区間の valid_from が古い事実。確認鮮度ではないので、消さずに棚卸し材料として渡す。
         const staleBefore = new Date(nowMs - STALE_BELIEF_DAYS * 86_400_000)
           .toISOString()
           .replace(/\.\d{3}Z$/, "Z")

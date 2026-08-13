@@ -75,7 +75,7 @@ export function isRefusal(e: unknown): e is Refusal {
   return typeof e === "object" && e !== null && "_tag" in e && REFUSAL_TAGS.has(String(e._tag))
 }
 
-/** 拒否は `RefusedError` にして投げる。呼び出し側は例外として受ける。 */
+/** 既定ランタイムが提供するサービスの集合。 */
 export type AppServices =
   | Db
   | Governance

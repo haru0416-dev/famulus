@@ -3,7 +3,7 @@
  *
  * コンテナに見えるのは作業場だけで、`/home/haru` は映らない(src/services/Sandbox.ts)。
  * この境界のせいで、自走している側は自分のソースを読むことも直すこともできなかった。
- * 実測で 2026-08-12 の tick が到達したのは「拾ってきた他人のリポジトリを動かす」ところまでで、
+ * 実測した tick が到達したのは「拾ってきた他人のリポジトリを動かす」ところまでで、
  * 自分の欠陥を見つけても書き換える手が無い。境界は緩めない — 代わりに複製をこちら側から置く。
  *
  * 置くのは clone。作業ツリーのコピーではなく履歴ごと渡すのは、直した結果を `git diff` で
@@ -99,8 +99,8 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
     yield* keepWorkspace(SELFDEV, SELFDEV_PURPOSE)
     lines.push(`作業場 ${SELFDEV} を登録した(cleanup の対象外)`)
 
-    // ── 依存。ホスト側の node_modules は使えない(コンテナは bookworm、ホストは Ubuntu 26.04 で
-    // libc が違う。tsc も biome も esbuild もプラットフォーム別のバイナリを持つ)。中で取る。
+    // 依存はコンテナ内で取得する。ホストとコンテナでは libc が異なり、
+    // Biome や Bun などプラットフォーム別実体を含む node_modules を共有できない。
     if (!existsSync(join(clone, "node_modules"))) {
       const r = yield* Effect.promise(() =>
         runInSandbox(`cd ${CLONE} && ${INSTALL}`, { workDir: ws, net: true, timeoutMs: INSTALL_MS }),

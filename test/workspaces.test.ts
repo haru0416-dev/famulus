@@ -36,7 +36,6 @@ const withRuns = async (fn: (root: string, h: Harness) => Promise<void>) => {
   }
 }
 
-/** 作業場を1つ置く。`bytes` ぶんのファイルを1枚、`hoursAgo` の刻で。 */
 const put = (root: string, name: string, bytes: number, hoursAgo = 0): void => {
   const dir = join(root, name, "sub")
   mkdirSync(dir, { recursive: true })
@@ -55,7 +54,6 @@ test("一覧は実体のあるものだけ、最後に触った順に返る", as
     const list = await h.run(
       Effect.gen(function* () {
         yield* noteWorkspace("hn", "Show HN の追跡")
-        // 実体の無い登録。一覧には出さない — 選んだ先が空になる。
         yield* noteWorkspace("消えた", "掃除で落ちたはず")
         return yield* listWorkspaces
       }),

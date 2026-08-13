@@ -1,5 +1,5 @@
 /**
- * 拒否の型付きチャネル(Effect の error channel に載せる)。
+ * Effect の error channel に載せる、拒否と運用上の失敗の型。
  *
  * `{ ok: false, reason: string }` で返すと型としては全部同じ形になり、
  * 呼び出し側が「どの拒否を握り潰したか」をコンパイラに問われない。
@@ -9,6 +9,7 @@
  *   - `Halt`          … 人間が明示解除するまで自動で明けない。全停止。
  *   - `QuotaCooldown` … 窓が明ければ自動で戻る。その枠だけ避ける。朝会を止めないため halt にしない。
  * この2つを同じ `Error` にすると、フォールバック実装がうっかり halt をリトライしてしまう。
+ * `NotFound` / `Conflict` / `DbFailed` / `RunnerFailed` は拒否ではなく、操作・基盤側の失敗。
  */
 import * as Data from "effect/Data"
 
@@ -36,7 +37,7 @@ export class UnpricedModel extends Data.TaggedError("UnpricedModel")<{
   readonly model: string
 }> {}
 
-/** egress allowlist 違反。外向き接続を1点で数える不変条件の実装点。 */
+/** Governance 管理下のコネクタに対する egress allowlist 違反。 */
 export class EgressDenied extends Data.TaggedError("EgressDenied")<{
   readonly url: string
   readonly reason: string

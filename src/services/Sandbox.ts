@@ -34,7 +34,7 @@ const BASE_IMAGE = "node:24-bookworm"
 /**
  * 1回の走行の上限。依存の取得は分単位で掛かるので、web の 20 秒とは桁が違う。
  *
- * 上限は tick の持ち時間(`OPEN_ZERO_TICK_TIMEOUT_MS`、既定 300 秒)より短く取ってある。
+ * 上限は tick の持ち時間(`OPEN_ZERO_TICK_TIMEOUT_MS`、既定 420 秒)より短く取ってある。
  * 走行が tick を食い切ると、その回は丸ごと落ちて走った記録が1行も残らない —
  * コンテナの中で起きたことはコンテナを捨てた時点で消えるので、書き残せなかった走行は無かったのと同じになる。
  * 長い作業は1回で終わらせず、同じ作業場に置いて次の tick で続ける。
@@ -58,7 +58,7 @@ export interface RunOptions {
 
 export interface RunResult {
   readonly exitCode: number
-  /** stdout と stderr を出た順のまま混ぜたもの。上限で切る。 */
+  /** stdout と stderr を親プロセスが受け取った順に混ぜたもの。別ストリーム間の発生順は保証しない。 */
   readonly output: string
   readonly truncated: boolean
   readonly timedOut: boolean
@@ -72,7 +72,7 @@ export const runsRoot = (): string => resolve(process.env.OPEN_ZERO_RUNS ?? ".da
  * 落としたパッケージの共有置き場。作業場の外に置く。
  *
  * `HOME=/work` なので、既定のままだと npm も pip も uv も作業場ごとにキャッシュを作る。
- * 実測(2026-08-13、このホスト): `uv` で requests を入れる走行は、作業場を変えると
+ * このホストで測ると、`uv` で requests を入れる走行は作業場を変えた場合に
  * 2041ms → 3274ms に伸びて、両方の作業場が 57MB ずつ同じものを持っていた。
  *
  * `runsRoot()` の下に置いてはいけない。`sweepRuns` は `.data/runs` の直下を全部
@@ -184,7 +184,7 @@ let imagePromise: Promise<string> | undefined
 /**
  * 走行用のイメージを、無ければ組む。返すのは実際に使えるイメージ名。
  *
- * 組むのは初回だけで、実測 15.6 秒 / 素のイメージ +110MB(2026-08-13、このホスト)。
+ * 組むのは初回だけで、このホストでは 15.6 秒 / 素のイメージ +110MB だった。
  * 走行の持ち時間から引かれるので、`ensureImage` は tick の締切より前に呼ぶ側で吸収する
  * — いまは `runInSandbox` の中で待つ。1回きりなので、二度目からは 0 秒。
  *
@@ -257,7 +257,7 @@ export async function sweepOrphans(dry = false): Promise<{ removed: string[]; ke
 export async function runInSandbox(command: string, opts: RunOptions): Promise<RunResult> {
   if (!isAbsolute(opts.workDir)) throw new Error(`作業場は絶対パスで渡す: ${opts.workDir}`)
   mkdirSync(cacheRoot(), { recursive: true })
-  // 名前を明に渡された回(検査・実験)は組みに行かない。
+  // image が明示されている場合は、自動ビルドせず指定されたイメージを使う。
   const image = opts.image ?? process.env.OPEN_ZERO_RUN_IMAGE ?? (await ensureImage())
   const fellBack = image === BASE_IMAGE && opts.image === undefined && !process.env.OPEN_ZERO_RUN_IMAGE
   const startedAt = Date.now()

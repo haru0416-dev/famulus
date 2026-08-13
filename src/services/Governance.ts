@@ -77,7 +77,7 @@ export const AUTONOMOUS_ROLE = "autonomous"
 /** 使用率がこれ以上なら枯渇の手前として扱い、窓が明けるまで避ける(残りは朝会のために取っておく)。 */
 export const QUOTA_WARN_PERCENT = 97
 
-/** egress allowlist。コネクタ(我々の HTTP クライアント)が接続してよい先。 */
+/** `checkEgress` の既定 allowlist。現在、本番コネクタからの呼び出しは未接続。 */
 export const EGRESS_ALLOW: readonly string[] = [
   "discord.com",
   "discordapp.com",
@@ -151,7 +151,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         try {
           state = JSON.parse(value) as QuotaState
         } catch {
-          return undefined // 破損は「状態なし」= 走らせる(枠は runtime が最終的に拒否する)
+          return undefined // 破損した状態は無視する。実際に枠切れなら runner の signal で記録し直す。
         }
         if (state.untilMs <= nowMs) {
           yield* db.run("DELETE FROM schema_meta WHERE key = ?", `quota:${pool}`)
@@ -201,7 +201,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         }
 
         // 3. 日次 run 数 — 繰り返しの歯止め。境界はユーザーの1日(core/time.ts)。
-        // UTC で切ると日本時間の朝9時に枠が戻る。
+        // UTC で切るとユーザーの暦日とずれる。Asia/Tokyo なら朝9時に枠が戻る。
         //
         // halt は立てない。1回ごとに課金される前提なら上限に当たること自体が
         // 「金が漏れている」の合図になるが、定額枠ではそうではない。
