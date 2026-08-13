@@ -78,9 +78,9 @@ test("上げたものは確定値になり、既存の slot は区間が継が�
       assert.equal(out.hist.length, 2)
       assert.equal(out.hist[0]?.value, "8/5(水)18:00")
       assert.equal(out.hist[0]?.validUntil, "2026-08-08T00:00:00Z")
-      // 引用が写せずに落ちた件数は、上げるものが無かったのとは別に残す。
-      assert.match(out.line, /1 件を確定へ/)
-      assert.match(out.line, /引用が材料に無く 1 件を落とした/)
+      // 引用が写せずに除外した件数は、保存対象が無かったのとは別に残す。
+      assert.match(out.line, /1 件を確定値として保存/)
+      assert.match(out.line, /引用が材料に無く 1 件を除外した/)
     },
     [
       {
@@ -141,18 +141,18 @@ test("この回で本体が確定させた slot は、keeper が書き直さな�
   )
 })
 
-test("何も上げない回でも、何を見たかは残る", async () => {
+test("保存対象が無い回でも、何を見たかは残る", async () => {
   await withHarness(
     async (h) => {
       const line = await h.run(keep({ material: MATERIAL }))
-      assert.match(line, /上げるものは無かった/)
+      assert.match(line, /保存対象は無かった/)
       assert.match(line, /確言していない/)
     },
     [{ text: "", structured: { looked: "予定の話だけで、確言していない", values: [] } }],
   )
 })
 
-test("keeper が呼べなくても回は落ちない", async () => {
+test("keeper が呼べなくても回全体は失敗しない", async () => {
   await withHarness(
     async (h) => {
       const line = await h.run(keep({ material: MATERIAL }))

@@ -31,7 +31,7 @@ export interface Workspace {
   readonly purpose: string | undefined
   readonly keep: boolean
   readonly bytes: number
-  /** 木の中で最後に触られた時刻(ミリ秒)。 */
+  /** ディレクトリ配下で最も新しい更新時刻(ミリ秒)。 */
   readonly touchedMs: number
 }
 
@@ -50,21 +50,21 @@ const entriesOf = (dir: string) => {
 }
 
 /**
- * 木を1回だけ歩いて、大きさと最後に触られた時刻を同時に取る。
+ * ディレクトリを1回だけ再帰走査し、合計サイズと最新更新時刻を同時に取得する。
  *
- * 時刻を上の階だけで見ると、中のファイルを書き換えても親ディレクトリの刻が動かないので、
- * まだ使っている作業場が「古い」と出る。深いところまで見て一番新しい刻を採る。
+ * ルートディレクトリの時刻だけを見ると、配下のファイルを書き換えても親ディレクトリの時刻が変わらないため、
+ * 使用中の作業場が「古い」と表示される。配下を走査して最も新しい更新時刻を採る。
  *
  * ## 同じ実体を2回数えない
- * 作業場の中身はほとんどが `node_modules` で、pnpm はそこを symlink と hard link で組む。
+ * 作業場の内容はほとんどが `node_modules` で、pnpm はそこを symlink と hard link で構成する。
  *
- * - `readdirSync(recursive: true)` は symlink の先へ降りる(Bun / Node どちらも)。
- *   pnpm の形では同じ木を何度も歩き直すことになり、歩数も大きさも数倍に出る。
- *   symlink の輪があれば `ELOOP` で投げる — 一覧を出す側が丸ごと落ちる。
- * - hard link は木の中で同じ inode が複数のパスに現れる。パスごとに足すと、
+ * - `readdirSync(recursive: true)` は symlink の参照先を走査する(Bun / Node どちらも)。
+ *   pnpm の構造では同じディレクトリを繰り返し走査し、走査件数もサイズも数倍になる。
+ *   symlink の循環があれば `ELOOP` を投げ、一覧取得全体が失敗する。
+ * - hard link では同じ inode が複数のパスに現れる。パスごとに加算すると、
  *   消しても空かない分を数えることになる。
  *
- * 自分で降りて `lstat` で見る。symlink は辿らず、容量にも含めない。
+ * 明示的に再帰走査して `lstat` で確認する。symlink は辿らず、容量にも含めない。
  * regular file の hard link は `dev:ino` で1回だけ数え、同じ実体の重複加算を避ける。
  * この方針は pnpm のリンク構造で走査量と容量が膨らむのを防ぐためのもの(docs/adr/0026)。
  */
@@ -162,7 +162,7 @@ export const purposeOf = (name: string) =>
 
 /**
  * 説明を書く/上書きする。`keep` はここからは動かせない —
- * 消えないようにする指定は取り消しの効かない側(残り続ける)なので、ホスト側の口だけに置く。
+ * 消えないようにする指定は取り消しの効かない側(残り続ける)なので、ホスト側の管理経路からだけ変更する。
  */
 export const noteWorkspace = (name: string, purpose: string) =>
   Effect.gen(function* () {
@@ -176,7 +176,7 @@ export const noteWorkspace = (name: string, purpose: string) =>
     )
   })
 
-/** 触られなくても消さない場所として登録する。`oz selfdev` のようなホスト側の口から呼ぶ。 */
+/** 触られなくても消さない場所として登録する。`oz selfdev` のようなホスト側の管理経路から呼ぶ。 */
 export const keepWorkspace = (name: string, purpose: string) =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -196,7 +196,7 @@ export const keptNames = Effect.gen(function* () {
   return new Set(rows.map((r) => r.name as string))
 })
 
-/** 実体を消したあとに登録も落とす。残すと、実体の無い説明が一覧に出ない代わりに溜まる。 */
+/** 実体を消したあとに登録も削除する。残すと、実体の無い説明が一覧に出ない代わりに溜まる。 */
 export const forgetWorkspaces = (names: readonly string[]) =>
   Effect.gen(function* () {
     if (names.length === 0) return

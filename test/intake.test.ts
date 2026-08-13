@@ -131,7 +131,7 @@ before(() => {
           { sender: "assistant", text: "", content: [{ type: "thinking", thinking: "内部の独り言" }] },
         ],
       },
-      // 本文の落ちた殻。uuid と日時だけ残って text も content も空(書き出し側の都合)。
+      // 本文フィールドが空の会話レコード。uuid と日時だけ残る(書き出し側の都合)。
       {
         uuid: "w2",
         name: "",
@@ -213,8 +213,8 @@ after(() => {
 })
 
 /**
- * 書き出し側だけを生かして走らせる。
- * 取り込み元が2つあるので、両方生きたままだと「候補に出た1件がどちらの入口から来たか」が言えない。
+ * transcript 入力を無効化し、書き出し側だけを有効にする。
+ * 取り込み元が2つあるので、両方を有効にすると「候補に出た1件がどちらの入口から来たか」が言えない。
  */
 async function onlyExport<T>(dir: string, fn: () => Promise<T>): Promise<T> {
   process.env.OPEN_ZERO_TRANSCRIPT_ROOT = join(ROOT, "no-logs")
@@ -229,7 +229,7 @@ async function onlyExport<T>(dir: string, fn: () => Promise<T>): Promise<T> {
 
 const onlyWeb = <T>(fn: () => Promise<T>): Promise<T> => onlyExport(EXPORT, fn)
 
-test("Claude.ai の書き出しからも候補が上がる — 本文の落ちた殻は数えない", async () => {
+test("Claude.ai の書き出しからも候補が上がる — 本文フィールドが空の会話は数えない", async () => {
   await onlyWeb(async () => {
     await withHarness(async (h) => {
       const refs = await h.run(
@@ -247,7 +247,7 @@ test("Claude.ai の書き出しからも候補が上がる — 本文の落ち�
   })
 })
 
-test("殻でない会話の本文はそのまま素材になる — 応答は畳むがユーザーの発話は削らない", async () => {
+test("本文のある会話はそのまま素材になる — 中間応答は除外するがユーザーの発話は削らない", async () => {
   await onlyWeb(async () => {
     await withHarness(async (h) => {
       const m = await h.run(
@@ -348,7 +348,7 @@ test("選別は道具の入出力を捨て、ユーザーの発話は1文字も�
     )
     assert.ok(m)
     // 道具の payload が素材の予算を消費すると、後続の owner 発話が落ちうる。
-    assert.ok(m.rawBytes > 100_000, `生ログは 100KB 超のはず: ${m.rawBytes}`)
+    assert.ok(m.rawBytes > 100_000, `元の JSONL ログは 100KB 超のはず: ${m.rawBytes}`)
     assert.ok(m.keptBytes < 2_000, `残すのは 2KB 未満のはず: ${m.keptBytes}`)
     assert.doesNotMatch(m.text, /xxxx/, "道具の入力は素材に入らない")
     // ユーザーの言葉だけは全文。要約させる前に削ると、原文はもうどこにも無い。

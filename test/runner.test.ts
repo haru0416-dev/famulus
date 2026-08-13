@@ -69,7 +69,7 @@ test("halt が立っていると run はモデルに到達しない", async () =
   )
 })
 
-test("枠切れで失敗したら枠を冷やし、次の run は QuotaCooldown で止まる", async () => {
+test("クォータ枯渇後はリセット時刻まで再実行を抑止する", async () => {
   await withHarness(
     async (h) => {
       const first = await h.fail(
@@ -86,7 +86,7 @@ test("枠切れで失敗したら枠を冷やし、次の run は QuotaCooldown 
           yield* runner.run({ role: "dialogue", prompt: "2回目" })
         }),
       )
-      // 閉じた窓を毎 run 叩き続けない。
+      // リセット前のクォータへ毎 run 再試行しない。
       assert.equal((second as { _tag: string })._tag, "QuotaCooldown")
       assert.equal(h.calls.length, 1)
     },
@@ -94,7 +94,7 @@ test("枠切れで失敗したら枠を冷やし、次の run は QuotaCooldown 
   )
 })
 
-test("健全な枠シグナルは冷却を残さない", async () => {
+test("利用可能なクォータシグナルは再実行抑止を残さない", async () => {
   await withHarness(
     async (h) => {
       const left = await h.run(
@@ -125,11 +125,11 @@ test("役割→モデルは静的表。未知の role は生のモデル id と�
     assert.equal(plans.dialogue.model, "claude-opus-5")
     assert.equal(plans.scout.model, "gpt-5.6-luna")
     assert.equal(plans.raw.model, "claude-haiku-4-5")
-    // 全経路が定額枠。ここが "usd" に化けたら従量課金に戻っている。
+    // 全経路が定額利用。ここが "usd" に変わったら従量課金に戻っている。
     assert.equal(plans.dialogue.meter, "quota")
     assert.equal(plans.scout.meter, "quota")
     assert.equal(plans.raw.meter, "quota")
-    // 枠は別々に数える。同じ pool になっていると、作業を GPT に逃がしたのに対話が止まる。
+    // クォータは別々に数える。同じ pool になっていると、作業を GPT に振り分けても対話が止まる。
     assert.equal(plans.dialogue.pool, "claude-max")
     assert.equal(plans.scout.pool, "chatgpt-rmod")
     assert.notEqual(plans.dialogue.pool, plans.scout.pool)
@@ -137,10 +137,10 @@ test("役割→モデルは静的表。未知の role は生のモデル id と�
 })
 
 /**
- * 混在 routing の要。実行ファイルと枠はモデルで決まる。
+ * 混在 routing の要点。実行ファイルとクォータはモデルで決まる。
  * 環境変数1本で決めていた頃は、GPT に切り替えると対話まで rmod に乗った。
  */
-test("モデルごとに実行ファイルと枠が分かれる", () => {
+test("モデルごとに実行ファイルとクォータが分かれる", () => {
   const env = { OPEN_ZERO_CLAUDE_BIN: "/x/claude", OPEN_ZERO_RMOD_BIN: "/x/rmod", PATH: "" }
 
   assert.equal(binForModel("gpt-5.6-luna", undefined, env), "/x/rmod")
@@ -161,7 +161,7 @@ test("`-web` は外に出られる目印で、上流には接尾辞を外して�
   assert.equal(isWebModel("gpt-5.6-luna"), false)
   assert.equal(baseModel("gpt-5.6-luna-web"), "gpt-5.6-luna")
   assert.equal(baseModel("gpt-5.6-luna"), "gpt-5.6-luna")
-  // 枠は本体と同じ。外を見たかどうかで会計単位は変わらない。
+  // クォータは本体と同じ。外を見たかどうかで会計単位は変わらない。
   assert.equal(poolForModel("gpt-5.6-luna-web"), "chatgpt-rmod")
 })
 
@@ -180,7 +180,7 @@ test("検索結果の引用マーカーを DB に持ち込まない", () => {
  * 文面では判定しない — 「ツールが使えない」と書いてあるかどうかで決めると、
  * 呼ぶ必要が無くてそう書いた回までやり直すことになる。見るのは CLI の tool_use_error だけ。
  */
-test("弾かれて手ぶらのときだけ取り直す", () => {
+test("ネイティブツール呼び出しが拒否され、提出が0件のときだけ再提出する", () => {
   assert.equal(needsResubmit(true, true, 0), true)
   assert.equal(needsResubmit(true, true, 1), false)
   assert.equal(needsResubmit(true, false, 0), false)
@@ -190,7 +190,7 @@ test("弾かれて手ぶらのときだけ取り直す", () => {
 
 /**
  * 精査役は書いた側と別の系列に置く(docs/adr/0031)。同じモデルの2回目は同じ死角を持つ。
- * 枠も分かれていること(RMOD_POOL)まで見る — 同じ pool に積むと、精査1回ぶん対話の枠が減る。
+ * クォータも分かれていること(RMOD_POOL)まで見る — 同じ pool に積むと、精査1回ぶん対話用クォータが減る。
  */
 test("精査役は対話と別のモデル・別の枠から出る", async () => {
   await withHarness(

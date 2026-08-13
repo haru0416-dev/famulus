@@ -247,7 +247,7 @@ test("初回は自由文を取り込まない — DM に残っている過去の
   }
 })
 
-test("記録し終える前に落ちた回のぶんは、次の回にもう一度来る", async () => {
+test("記録完了前に終了した回の項目は、次の回にもう一度取得する", async () => {
   const dc = await fakeDiscord([{ id: "70", content: "位置合わせ", author: { id: OWNER } }])
   wire(dc.url)
   try {
@@ -257,7 +257,7 @@ test("記録し終える前に落ちた回のぶんは、次の回にもう一�
       // 読んだが `seen` を呼ばずに終えた回。位置は進んでいない。
       const first = await h.run(peek)
       assert.deepEqual([...first.items], [{ id: "71", text: "歯医者を来週にずらして" }])
-      // 二度覚えるのは直せるが、位置の向こう側に取り残されたものは取りに行けない。
+      // 二重記録は修復できるが、cursor 以前に取り残された項目は再取得できない。
       assert.deepEqual(await h.run(inbox), [{ id: "71", text: "歯医者を来週にずらして" }])
       assert.deepEqual(await h.run(inbox), [])
     })

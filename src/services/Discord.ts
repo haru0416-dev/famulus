@@ -66,8 +66,8 @@ export interface Inbound {
 /**
  * 1回読んだぶんと、まだ DB に書いていない既読位置。
  *
- * 読むことと記録することを分けてあるのは、記録前に cursor が進むと、記録が落ちた回のぶんが
- * 二度と読まれないから。絞り込みは id の比較なので、cursor の向こう側はチャンネルに残って
+ * 読むことと記録することを分けてあるのは、記録前に cursor が進むと、記録が失敗した回の項目が
+ * 二度と読まれないから。絞り込みは id の比較なので、cursor 以前の項目はチャンネルに残って
  * いても拾えない(docs/adr/0029)。
  */
 export interface Batch {
@@ -75,7 +75,7 @@ export interface Batch {
   readonly items: readonly Inbound[]
   /** チャンネルごとの新しい cursor。`seen` を呼ぶまで DB には入らない。 */
   readonly marks: Readonly<Record<string, string>>
-  /** 押されたぶんを落とした後の、リアクション待ちの一覧。 */
+  /** 処理済みリアクションを除外した後の、リアクション待ち一覧。 */
   readonly taps: Readonly<Record<string, Record<string, string>>>
   /** 最後に自由文が来たチャンネル。返事はここへ出す。 */
   readonly heard?: string

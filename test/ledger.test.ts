@@ -109,7 +109,7 @@ test("provenance は JSON として保存される(スキーマの json_valid �
       }),
     )
     const p = JSON.parse(String(row?.provenance)) as { pool: string; notionalUsd: number }
-    // 影の値段は provenance にだけ残す。usd 列には入れない(入れると定額 run が金額で止まる)。
+    // 従量課金換算額は provenance にだけ残す。usd 列には入れない(入れると定額 run が金額で止まる)。
     assert.equal(p.pool, "claude-max")
     assert.equal(p.notionalUsd, 0.031)
   })

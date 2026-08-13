@@ -1,13 +1,13 @@
 /**
- * 拾ったものをこのホストで実際に動かすための1本道。
+ * 取得したコードや手順をこのホストで実行検証するための経路。
  *
- * 読むだけの記録は誰が書いても同じ文にしかならない。詰まった箇所・落ちた経路・要った時間は、
+ * 読むだけの記録は誰が書いても同じ文にしかならない。停止した処理段階・失敗した経路・要った時間は、
  * 自分で走らせないと出てこない。そのために任意のコマンドを動かす手段が要るが、
  * このホストにはユーザーの鍵も DB(`.data/*.db`)も置いてある。境界を先に引かないと動かせない。
  *
- * 境界に docker を選んだのは、srt(bubblewrap)と headless の `claude -p` を実測して落としたから。
+ * 境界に docker を選んだのは、srt(bubblewrap)と headless の `claude -p` を実測して不採用にしたから。
  * 前者は AppArmor が入れ子の userns を塞いでいて動かず、後者は作業場の中にも書けない。
- * どちらの失敗も、越えるには sudo かサンドボックスの解除が要る。落とした経緯は docs/adr/0001。
+ * どちらの失敗も、越えるには sudo かサンドボックスの解除が要る。不採用の経緯は docs/adr/0001。
  *
  * docker は sudo 無しで通り、「作業場には書ける / `/home/haru` は見えない /
  * `--network none` なら外に出られない」が同時に成り立つ。中に資格情報を持ち込まないので、
@@ -25,24 +25,24 @@ import { TZ } from "../core/time.ts"
  *
  * 足すものを決めたのは走行記録 30回の実測で、呼ばれた道具は
  * git 11 / python3 7 / npx 7 / pip 6 / uv 4 / node 4 / curl 3 / apt 4 / jq 1 / go 1 / cargo 1。
- * このうち pip・uv・jq が素のイメージに無く、apt の4回は全部それを入れようとして落ちた回
+ * このうち pip・uv・jq が素のイメージに無く、apt の4回は全部それを入れようとして失敗した回
  * (非 root なので通らない)。go と cargo は「何が入っているか」を調べる走行の中でだけ呼ばれている。
  */
 const RUN_IMAGE = "open-zero-run:1"
-/** 組めなかったときの落ち先。ここでも走りはするが、pip も uv も jq も無い。 */
+/** ビルド失敗時のフォールバックイメージ。ここでも実行できるが、pip も uv も jq も無い。 */
 const BASE_IMAGE = "node:24-bookworm"
 /**
  * 1回の走行の上限。依存の取得は分単位で掛かるので、web の 20 秒とは桁が違う。
  *
  * 上限は tick の持ち時間(`OPEN_ZERO_TICK_TIMEOUT_MS`、既定 420 秒)より短く取ってある。
- * 走行が tick を食い切ると、その回は丸ごと落ちて走った記録が1行も残らない —
+ * 走行が tick の制限時間を使い切ると、その回は終了して走行記録が1行も残らない —
  * コンテナの中で起きたことはコンテナを捨てた時点で消えるので、書き残せなかった走行は無かったのと同じになる。
  * 長い作業は1回で終わらせず、同じ作業場に置いて次の tick で続ける。
  */
 const DEFAULT_TIMEOUT_MS = 3 * 60_000
 /** モデルに渡す上限。ビルドログは平気で数MB出るが、読ませたいのは詰まった箇所だけ。 */
 const MAX_OUTPUT_CHARS = 12_000
-/** コンテナに許す上限。このホストは 11GB / 6コアで、tick 自身もここで動く。走行が全部食うと tick が落ちる。 */
+/** コンテナに許す上限。このホストは 11GB / 6コアで、tick 自身もここで動く。走行が全資源を使うと tick が停止する。 */
 const MEMORY = "2g"
 const CPUS = "2"
 const PIDS = "512"
@@ -69,7 +69,7 @@ export interface RunResult {
 export const runsRoot = (): string => resolve(process.env.OPEN_ZERO_RUNS ?? ".data/runs")
 
 /**
- * 落としたパッケージの共有置き場。作業場の外に置く。
+ * 取得したパッケージの共有キャッシュ。作業場の外に置く。
  *
  * `HOME=/work` なので、既定のままだと npm も pip も uv も作業場ごとにキャッシュを作る。
  * このホストで測ると、`uv` で requests を入れる走行は作業場を変えた場合に
@@ -128,8 +128,8 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     // 日付を読む検査1件が中でだけ 9 時間ずれて落ちた(src/services/Search.ts の publishedDate)。
     "-e",
     `TZ=${TZ}`,
-    // 落としたものは作業場をまたいで使い回す。置き場は作業場の外(cacheRoot)。
-    // イメージ側にも同じ値を焼いてあるが、ここでも渡す — 落ち先の素のイメージには入っていないので、
+    // 取得キャッシュは作業場をまたいで使い回す。置き場は作業場の外(cacheRoot)。
+    // イメージ側にも同じ値を設定してあるが、ここでも渡す — フォールバック先の素のイメージには入っていないので、
     // 組めなかった回だけキャッシュが効かない、という差ができる。
     "-e",
     "npm_config_cache=/cache/npm",
@@ -140,7 +140,7 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     "-e",
     "XDG_CACHE_HOME=/cache/xdg",
     // uv は既定でキャッシュから hardlink する。/cache と /work は別のマウントなので張れず、
-    // 走行のたびに警告を出して copy へ落ちる。最初から copy と言っておく。
+    // 走行のたびに警告を出して copy に切り替わる。最初から copy と指定する。
     "-e",
     "UV_LINK_MODE=copy",
     "-v",
@@ -188,8 +188,8 @@ let imagePromise: Promise<string> | undefined
  * 走行の持ち時間から引かれるので、`ensureImage` は tick の締切より前に呼ぶ側で吸収する
  * — いまは `runInSandbox` の中で待つ。1回きりなので、二度目からは 0 秒。
  *
- * 組めなかったら素のイメージへ落ちる。ここで例外を投げると、Dockerfile の書き損じ1つで
- * 走行の道が丸ごと閉じる。落ちたことは走行の出力の頭に書いて、読む側に見せる。
+ * ビルドできなければ素のイメージへフォールバックする。ここで例外を投げると、Dockerfile の誤り1つで
+ * 走行経路がすべて使えなくなる。フォールバックしたことは走行出力の先頭に書いて、読む側に見せる。
  */
 export function ensureImage(): Promise<string> {
   imagePromise ??= (async () => {
@@ -205,12 +205,12 @@ export function ensureImage(): Promise<string> {
 }
 
 /**
- * 主のいないコンテナを消す。名前に持ち主の pid が入っていることだけを頼りにする
+ * 対応するホストプロセスが存在しないコンテナを消す。名前に起動元の pid が入っていることだけを頼りにする
  * (`oz-run-<時刻36進>-<pid>`)。時間切れの片付けは `docker rm -f` を投げた時点で終わりだが、
- * tick 自身が落ちた回・ホストが落ちた回はそれが飛ばないので、`--rm` の付いたコンテナが残る。
+ * tick 自身やホストが停止した回は削除処理が実行されず、`--rm` の付いたコンテナが残る。
  *
- * 生きている pid のものは触らない。pid は使い回されるので「死んでいる」以上の判定はできず、
- * 別のプロセスが同じ番号を拾っていれば消し損ねる。消しすぎる側には倒さない。
+ * 存在する pid のものは触らない。pid は使い回されるので、対応プロセスの同一性までは判定できず、
+ * 別のプロセスが同じ番号を使っていれば削除対象から漏れる。誤削除しない側に倒す。
  */
 export function orphanNames(
   names: readonly string[],
@@ -252,7 +252,7 @@ export async function sweepOrphans(dry = false): Promise<{ removed: string[]; ke
  * 1回走らせる。返すのは結果であって判断ではない — 失敗も失敗のまま返す。
  *
  * 出力は stdout と stderr を混ぜる。分けて返すと、ビルド系のように進捗を stderr へ流す道具で
- * 「どのコマンドがどこで落ちたか」の前後関係が消える。読む側が要るのはその順序のほう。
+ * 「どのコマンドがどこで失敗したか」の前後関係が消える。読む側が要るのはその順序のほう。
  */
 export async function runInSandbox(command: string, opts: RunOptions): Promise<RunResult> {
   if (!isAbsolute(opts.workDir)) throw new Error(`作業場は絶対パスで渡す: ${opts.workDir}`)

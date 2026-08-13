@@ -2,37 +2,37 @@
  * Effect の error channel に載せる、拒否と運用上の失敗の型。
  *
  * `{ ok: false, reason: string }` で返すと型としては全部同じ形になり、
- * 呼び出し側が「どの拒否を握り潰したか」をコンパイラに問われない。
+ * 呼び出し側が「どの拒否を未処理にしたか」をコンパイラに問われない。
  * 拒否ごとに別タグを持たせて `Effect.catchTag` で個別に扱わせる。
  *
  * 区別:
- *   - `Halt`          … 人間が明示解除するまで自動で明けない。全停止。
- *   - `QuotaCooldown` … 窓が明ければ自動で戻る。その枠だけ避ける。朝会を止めないため halt にしない。
+ *   - `Halt`          … 人間が明示解除するまで解除されない。全停止。
+ *   - `QuotaCooldown` … リセット時刻を過ぎれば自動で戻る。そのクォータだけ避ける。朝会を止めないため halt にしない。
  * この2つを同じ `Error` にすると、フォールバック実装がうっかり halt をリトライしてしまう。
  * `NotFound` / `Conflict` / `DbFailed` / `RunnerFailed` は拒否ではなく、操作・基盤側の失敗。
  */
 import * as Data from "effect/Data"
 
-/** 予算ブレーカーの停止。schema_meta の 'halt' が立っている。自動解除しない。 */
+/** 全停止状態。schema_meta の 'halt' が設定されている。自動解除しない。 */
 export class Halt extends Data.TaggedError("Halt")<{
   readonly reason: string
   readonly at: string
 }> {}
 
-/** サブスク枠のクールダウン。`untilMs` までこの枠だけ避ける(他の枠は使える)。 */
+/** サブスクリプションクォータの再実行抑止。`untilMs` までこの pool だけ避ける(他の pool は使える)。 */
 export class QuotaCooldown extends Data.TaggedError("QuotaCooldown")<{
   readonly pool: string
   readonly window: string
   readonly untilMs: number
 }> {}
 
-/** 日次 run 数の上限。定額枠では USD ではなくこれが量的な歯止め。 */
+/** 日次 run 数の上限。定額利用では USD ではなくこれが異常反復の安全上限。 */
 export class DailyRunLimit extends Data.TaggedError("DailyRunLimit")<{
   readonly count: number
   readonly limit: number
 }> {}
 
-/** 単価未登録モデルの事前拒否(従量経路のみ。記録されずに USD 上限を素通りする穴を塞ぐ)。 */
+/** 単価未登録モデルの事前拒否(従量経路のみ。記録されずに USD 上限を通過する経路を防ぐ)。 */
 export class UnpricedModel extends Data.TaggedError("UnpricedModel")<{
   readonly model: string
 }> {}
@@ -48,7 +48,7 @@ export class DeliveryRejected extends Data.TaggedError("DeliveryRejected")<{
   readonly reason: string
 }> {}
 
-/** runner(サブスク CLI)の失敗。枠シグナルが取れていれば添える。 */
+/** runner(サブスク CLI)の失敗。クォータシグナルが取れていれば添える。 */
 export class RunnerFailed extends Data.TaggedError("RunnerFailed")<{
   readonly pool: string
   readonly message: string
@@ -90,11 +90,11 @@ export type Refusal = Halt | QuotaCooldown | DailyRunLimit | UnpricedModel | Egr
  * 包まれた失敗から、いちばん内側の理由を一行で取り出す。ここで返した文字列がそのまま
  * 「止まった: …」として DB に残り、ユーザーが読む1行になる。
  *
- * 元は枠(Flue)が dispatch の失敗を `Agent run failed (submission sub_…)` にまとめてしまい、
- * 表に出た文字列だけを記録すると自走枠の使い切りも provider の落ちも同じ顔になっていた
+ * 元は Flue ランタイムが dispatch の失敗を `Agent run failed (submission sub_…)` にまとめてしまい、
+ * 表に出た文字列だけを記録すると自律実行上限への到達も provider の失敗も区別できなかった
  * (docs/adr/0011)。実際の理由は内側の `meta.reason` にあった。
  *
- * 枠が無くなっても包まれ方は残る。いまゲートが投げるのは素の `Error` で、道具ループが
+ * Flue を外しても包まれ方は残る。いま事前検査が投げるのは素の `Error` で、道具ループが
  * それをさらに包むことがある。だから `cause` を辿り、いちばん内側の `message` を返す —
  * 実測では halt 中の1ターンが `Error: 停止中(halt): …` として出ていて、
  * `String(e)` のままだと先頭に `Error: ` が付いたまま記録される。

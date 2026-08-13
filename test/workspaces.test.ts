@@ -82,8 +82,8 @@ test("説明を書き直すと上書きされる(区間は持たない)", async 
   })
 })
 
-/** `keep` はモデル側の口(`noteWorkspace`)からは動かせない。消えない指定は取り消しが効かない。 */
-test("noteWorkspace は keep を落とさない", async () => {
+/** `keep` はモデル側の経路(`noteWorkspace`)からは変更できない。消えない指定は取り消しが効かない。 */
+test("noteWorkspace は keep を変更しない", async () => {
   await withRuns(async (root, h) => {
     put(root, "selfdev", 16)
     const list = await h.run(
@@ -99,10 +99,10 @@ test("noteWorkspace は keep を落とさない", async () => {
 })
 
 /**
- * 下の階だけ触られた木で、時刻も大きさも取れること。
- * 上の階の刻しか見ないと、使っている作業場が古いと出る(cleanup がそれで消す)。
+ * 子孫だけが更新されたディレクトリで、時刻も大きさも取れること。
+ * ルートの mtime しか見ないと、使っている作業場が古いと出る(cleanup がそれで消す)。
  */
-test("scanTree は木の中で一番新しい刻と合計の大きさを返す", async () => {
+test("scanTree は子孫を含む最大 mtime と合計サイズを返す", async () => {
   const dir = mkdtempSync(join(tmpdir(), "oz-scan-"))
   try {
     mkdirSync(join(dir, "a", "b"), { recursive: true })
@@ -114,7 +114,7 @@ test("scanTree は木の中で一番新しい刻と合計の大きさを返す",
     utimesSync(dir, old, old)
     const t = scanTree(dir)
     assert.equal(t.bytes, 150)
-    assert.ok(Date.now() - t.newestMs < 60_000, "深いところの刻を拾う")
+    assert.ok(Date.now() - t.newestMs < 60_000, "子孫ファイルの mtime を取得する")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -1,5 +1,5 @@
 /**
- * 構造化処理用の推論入口。precheck → 実行 → 枠の計上 → 会計をまとめる。
+ * 構造化処理用の推論入口。precheck → 実行 → クォータ状態の更新 → 会計をまとめる。
  * AI SDK Agent 経路は src/model/governed.ts が同じ順序を middleware で実装する。
  * Layer が差し替え点なので、テストは `RunnerStub` を積むだけで API キーも `claude` バイナリも要らない。
  *
@@ -21,8 +21,8 @@ export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
 /**
  * 役割→モデル。品質が製品そのものになる役だけ opus に置く。
  *
- * 作業系は GPT(rmod 経由)へ逃がす。減っているのは金ではなくユーザーの Claude の枠なので、
- * 量を使う役をそちらから外すと、対話に使える枠が残る。ChatGPT 側も OAuth の定額枠で、
+ * 作業系は GPT(rmod 経由)へ振り分ける。減っているのは金ではなくユーザーの Claude クォータなので、
+ * 量を使う役をそちらから外すと、対話用クォータが残る。ChatGPT 側も OAuth の定額クォータで、
  * `poolForModel` が別の pool に数えるため、片方を回してももう片方は止まらない。
  *
  * 現在 ROLE_MODEL を参照して呼ばれるのは `scout` / `reviewer` / `structurer`。
@@ -46,10 +46,10 @@ export const ROLE_MODEL: Record<Role, string> = {
   dialogue: "claude-opus-5", // 対話(声。下げない)
   // 締めの keeper(keeper)。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
   // (keepGrounded)。scout と同じ性質なので同じ側に置く。ユーザーが話した回ごとに1回通るため、
-  // ここを opus にすると対話と同じ枠を毎回2回叩くことになる。
+  // ここを opus にすると対話と同じクォータを毎回2回消費することになる。
   structurer: "gpt-5.6-luna",
   // 下書きの精査(assistant の draft)。外に出る前の最後の検査で、書いた側とは別の系列に置く。
-  // 枠も分かれる(RMOD_POOL)ので、精査に1回使っても対話の枠は減らない。
+  // クォータも分かれる(RMOD_POOL)ので、精査に1回使っても対話用クォータは減らない。
   reviewer: "gpt-5.6-sol",
   scout: "gpt-5.6-luna", // 取り込みの構造化。引用を写す役(Intake.ingest)
   classify: "gpt-5.6-luna", // 分類(呼び手はまだ無い)
@@ -102,7 +102,7 @@ export interface RunnerApi {
 export class Runner extends Context.Tag("Runner")<Runner, RunnerApi>() {}
 
 /**
- * precheck → run → 枠の計上 → 会計 の共通骨格。実行本体だけ差し替えられるようにしてある
+ * precheck → run → クォータ状態の更新 → 会計 の共通処理。実行本体だけ差し替えられるようにしてある
  * (これが ClaudeCli 層と Stub 層の唯一の違い)。
  */
 const makeRunner = (
@@ -122,7 +122,8 @@ const makeRunner = (
         yield* gov.precheck({ meter: p.meter, pool: p.pool, model: p.model, at, nowMs: Date.now() })
 
         const out = yield* exec(req, p).pipe(
-          // 失敗でも枠シグナルが取れていれば必ず冷やす。冷やさないと閉じた窓を毎 run 叩いて捨てる。
+          // 失敗でもクォータシグナルが取れていれば必ず再実行を抑止する。
+          // 抑止しないとリセット前のクォータへ毎 run 再試行する。
           Effect.tapError((e) =>
             e.exhausted === true
               ? gov.noteQuota({ pool: p.pool, window: "unknown", exhausted: true }, at, Date.now())
@@ -134,7 +135,7 @@ const makeRunner = (
 
         yield* ledger.record({
           kind: req.kind ?? "run",
-          role: req.role, // role を入れないと日次 run 数の歯止めが効かない
+          role: req.role, // role を入れないと日次 run 数の上限を適用できない
           model: p.model,
           meter: p.meter,
           usage: {
@@ -142,7 +143,7 @@ const makeRunner = (
             outTok: out.usage.outTok,
             cacheRead: out.usage.cacheRead,
             cacheWrite: out.usage.cacheWrite,
-            // 定額枠なので実費は 0。CLI が返す金額は影の値段として provenance にだけ残す。
+            // 定額利用なので実費は 0。CLI が返す金額は従量課金換算額として provenance にだけ残す。
             usd: p.meter === "quota" ? 0 : out.usage.notionalUsd,
           },
           summary: traceOf(out.text),
@@ -160,14 +161,14 @@ const defaultPlan = (role: string): RunPlan => ({
   // 未知の role は生モデル id として通す。
   model: ROLE_MODEL[role as Role] ?? role,
   // `total_cost_usd` が返ることと、それが請求であることは別。Claude Max は定額なので限界費用は 0 で、
-  // 枯れるのは USD ではなく5時間窓。USD をゲートにすると窓が空いていても金額で止まる。
+  // 制限されるのは USD ではなく5時間単位の利用量。USD を条件にするとクォータが残っていても金額で止まる。
   meter: "quota",
-  // pool は role ではなくモデルで決まる。ここを固定にしていると GPT の消費が Claude の窓に
-  // 積まれ、「作業を GPT に逃がしたのに対話が止まる」が起きる。
+  // pool は role ではなくモデルで決まる。ここを固定にしていると GPT の消費が Claude のクォータに
+  // 計上され、「作業を GPT に振り分けたのに対話が止まる」が起きる。
   pool: poolForModel(ROLE_MODEL[role as Role] ?? role),
 })
 
-/** 本番の層。`claude -p` = 本人のサブスク枠。 */
+/** 本番の層。`claude -p` = ユーザー本人のサブスクリプションクォータ。 */
 export const RunnerClaudeCli = Layer.effect(
   Runner,
   makeRunner(
@@ -210,13 +211,13 @@ export interface StubReply {
   readonly text: string
   readonly structured?: unknown
   readonly quota?: QuotaSignal
-  /** 立てるとこの応答で失敗する(枠切れ経路の検査用)。 */
+  /** 立てるとこの応答で失敗する(クォータ枯渇経路の検査用)。 */
   readonly fail?: string
 }
 
 /**
  * テスト用の層。API キーも `claude` バイナリも要らない。
- * 台本を順に返し、尽きたら最後を繰り返す。precheck・記録・枠冷却は本番と同じ骨格を通るので、
+ * 台本を順に返し、尽きたら最後を繰り返す。precheck・記録・クォータ抑止は本番と同じ処理を通るので、
  * 「ゲートが実際に効くか」をモデルを呼ばずに端から端まで確かめられる。
  */
 export const RunnerStub = (script: readonly StubReply[]) => {

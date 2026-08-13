@@ -3,7 +3,7 @@
  *
  * `schema.sql` は全部 `CREATE TABLE IF NOT EXISTS` なので、空の DB では新旧どちらの形も
  * 同じように「通ってしまう」。壊れるのは既に行がある DB のときだけで、しかも壊れ方は静かで、
- * 気付くのはユーザーが古い事実を喋られたときになる。だから旧い形を手で作ってから掛ける。
+ * 気付くのはユーザーが古い事実を喋られたときになる。だから旧スキーマを明示的に作ってから適用する。
  */
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -66,7 +66,7 @@ test("旧い形の DB は開くだけで新しい形になる — 行は落ち�
       }),
     )
     assert.equal(out.cur?.value, "札幌", "既にあった行が消えていない")
-    // いつから真だったかは旧い形には無い。推測せず「DB が知った時刻」をそのまま置く。
+    // いつから真だったかは旧い形には無い。推測せず旧行の `updated_at` を `valid_from` に使う。
     assert.equal(out.cur?.validFrom, "2026-01-01T00:00:00Z")
     assert.equal(out.cur?.validUntil, null)
     assert.equal(out.after?.value, "東京")
@@ -76,14 +76,14 @@ test("旧い形の DB は開くだけで新しい形になる — 行は落ち�
   }
 })
 
-test("掛かっている DB に二度掛けても何も起きない", () => {
+test("migration 適用済み DB へ再適用しても変更しない", () => {
   const path = join(ROOT, "twice.db")
   makeV1(path)
   const d = openDb(path)
-  assert.deepEqual(migrate(d), ["belief_slots:bitemporal"], "1回目は掛かる")
+  assert.deepEqual(migrate(d), ["belief_slots:bitemporal"], "1回目は適用される")
   assert.deepEqual(migrate(d), [], "2回目は何もしない")
   const rows = d.prepare("SELECT slot, valid_from FROM belief_slots").all() as { slot: string }[]
-  assert.equal(rows.length, 1, "二度掛けても行が増えない・消えない")
+  assert.equal(rows.length, 1, "再適用しても行が増えない・消えない")
   d.close()
 })
 
@@ -211,7 +211,7 @@ test("空の DB では移行するものが無い(新規は schema.sql がその
 })
 
 /**
- * 継いだ枠を CHECK から落とす(docs/adr/0033)。
+ * 継承した到達不能な許可値を CHECK から削除する(docs/adr/0033)。
  *
  * ここで見るのは制約の文面で、列は1つも動かない。`PRAGMA table_info` では差が出ないので、
  * `sqlite_master` の文を読む。列で見ていると、掛かっていないのに掛かったことになる。
@@ -223,7 +223,7 @@ const tableSql = (d: ReturnType<typeof openDb>, name: string): string =>
       | undefined
   )?.sql ?? ""
 
-test("届かない kind と実行状態は CHECK から落ちる — 提案そのものは残る", () => {
+test("到達不能な kind と実行状態は CHECK の許可値から削除される — 提案そのものは残る", () => {
   const path = join(ROOT, "narrow-proposals.db")
   const d = openDb(path)
   // 提案を指している表を一緒に立てる。これが無いと、作り直しの手順を間違えても検査は通る

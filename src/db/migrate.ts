@@ -198,20 +198,20 @@ const rebuild = (d: Sqlite, table: string, createNew: string, cols: string): voi
 }
 
 /**
- * famulus-zero から持ってきた、届かない枠を CHECK から落とす(docs/adr/0033)。
+ * famulus-zero から継承した到達不能な許可値を CHECK から削除する(docs/adr/0033)。
  *
  * `proposals.kind` は7種あったが、こちらのコードが作れるのは `plan` だけ。
  * `status` の `executing`/`executed`/`failed` は、承認しても実行する仕組みが無いので誰も書けない。
  * `watchlist.next_move_owner` の `counterparty`(第三者)は実データ0件。
  *
- * 作り直すのは制約の文面のためで、列は1つも変わらない。生きている DB の `CREATE TABLE` は
+ * 作り直すのは制約の文面のためで、列は1つも変わらない。実運用 DB の `CREATE TABLE` は
  * 作られた時の文字列のままなので、`.schema` を読んだ側には7種の kind と3つの実行状態が見え続ける。
- * 見えるものが在るものだと読まれる、というのがこれを落とす理由なので、文面ごと入れ替える。
+ * 見えるものが在るものだと読まれる、というのがこれを削除する理由なので、文面ごと入れ替える。
  *
  * 中身が新しい制約に収まらないときは触らない。収まらない行があるなら、想定していない経路が
- * 書いたということで、ここで潰してよいものではない。`counterparty` だけは寄せ先がある —
+ * 書いたということで、ここで削除してよいものではない。`counterparty` だけは移行先がある —
  * 発火の判定は `famulus` かどうかしか見ておらず(src/services/Attention.ts)、
- * `human` と `counterparty` は同じ経路を通る。振る舞いを変えずに寄せられるのはこれだけ。
+ * `human` と `counterparty` は同じ経路を通る。振る舞いを変えずに移行できるのはこれだけ。
  */
 function narrowInheritedChecks(d: Sqlite): string[] {
   const done: string[] = []
@@ -257,7 +257,7 @@ function narrowInheritedChecks(d: Sqlite): string[] {
   }
 
   if (/'counterparty'/.test(ddl(d, "watchlist"))) {
-    // 寄せてから作り直す。寄せる前に作ると CHECK で弾かれて、掛からないまま次回も同じ所へ来る。
+    // 値を移行してから作り直す。移行前に作ると CHECK で弾かれて、適用されないまま次回も同じ所へ来る。
     d.exec("UPDATE watchlist SET next_move_owner = 'human' WHERE next_move_owner = 'counterparty'")
     rebuild(
       d,
@@ -286,12 +286,12 @@ function narrowInheritedChecks(d: Sqlite): string[] {
 }
 
 /**
- * 読み書きする側の無いテーブルを落とす(docs/adr/0007)。
+ * 読み書きする側の無いテーブルを削除する(docs/adr/0007)。
  *
  * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、テーブルは残り続ける。
- * 残ると `.schema` を読んだ側が「その仕組みが在る」と読む — 消したい理由がそれなので、実物も落とす。
+ * 残ると `.schema` を読んだ側が「その仕組みが在る」と読む — 消したい理由がそれなので、実物も削除する。
  *
- * 空のときだけ落とす。行があるなら、それは想定と違うことが起きている兆候で、
+ * 空のときだけ削除する。行があるなら、それは想定と違うことが起きている兆候で、
  * ここで消してよいものではない。名前を返さないので、残ったことは表に出ない。
  */
 const DROPPED = [

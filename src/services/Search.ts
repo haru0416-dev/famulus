@@ -522,14 +522,14 @@ const SOURCES: readonly Source[] = [
     parse: (b) => {
       // 媒体ごとに新しい順。募集 ID が掲載時刻の代わりになる。
       // 媒体をまたいで ID を比べても意味が無いので、先ごとに束ねてから並べ替える。
-      // 募集が生きているかまでは分からない(`reading` で開かせている)。
+      // 募集が現在も掲載中かまでは分からない(`reading` でページを確認させている)。
       const 束 = new Map<string, { hit: Hit; id: number }[]>()
       for (const h of searxngHits(b)) {
         const u = new URL(h.url)
         const host = u.hostname.replace(/^(?:www|en-jp)\./, "")
         const m = JOB_PATHS[host]?.exec(u.pathname)
         if (!m) continue
-        // 題が URL のままの項は落とす。索引が題を取れていないページで、語とは無関係に
+        // 題が URL のままの項は除外する。索引が題を取得できていないページで、語とは無関係に
         // 同じ URL が返ってくる。ID が大きいので放っておくと先頭に来る。
         if (h.title.replace(/^https?:\/\/(?:www\.)?/, "") === h.url.replace(/^https?:\/\/(?:www\.)?/, ""))
           continue

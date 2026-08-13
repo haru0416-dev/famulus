@@ -1,17 +1,17 @@
 /**
- * モデル呼び出しに統治を掛ける層。モデルの実体とは別に置く。
+ * モデル呼び出しに利用制限と会計を適用する層。モデルの実体とは別に置く。
  *
  * 掛けるのは3つ:
- *   1. 呼ぶ前のゲート(halt / 枠クールダウン / 日次 run 数)
- *   2. 枠シグナルの計上(閉じた窓を毎ターン叩かないため)
- *   3. 会計(ledger。日次 run 数の歯止めがこれを数える)
+ *   1. 呼ぶ前の検査(halt / クォータ抑止 / 日次 run 数)
+ *   2. クォータ状態の更新(リセット前に再試行しないため)
+ *   3. 会計(ledger。日次 run 数の上限がこれを数える)
  *
  * フックではなく middleware に置く。道具ループは1回の submission で何度も
  * モデルを呼ぶので、「開始時に1回」の位置に置くと検査は最初の1回きりになる。
- * 枠を実際に消費するのは1回1回の呼び出しなので、ゲートを通さずにモデルへ届く道を作らないには
+ * クォータを実際に消費するのは1回1回の呼び出しなので、事前検査を通さずにモデルへ届く経路を作らないには
  * `wrapGenerate` の位置しかない。
  *
- * src/model/Runner.ts が同じ順序(precheck → 実行 → 枠 → 会計)を Effect で持っている。
+ * src/model/Runner.ts が同じ順序(precheck → 実行 → クォータ状態更新 → 会計)を Effect で持っている。
  * こちらは AI SDK の道具ループから呼ばれる側で、同じ DB の同じ表に載る。
  */
 
@@ -28,26 +28,26 @@ import { claudeCliModel, PROVIDER_META } from "./language-model.ts"
 import { traceOf } from "./trace.ts"
 
 /**
- * この経路がどちらの枠を食うか。プロセス単位で決まる。
+ * この経路がどちらのクォータを消費するか。プロセス単位で決まる。
  * tick(src/tick.ts)は systemd から別プロセスで起きるので、環境変数で仕切る
  * (1プロセスの中で対話と自走が混ざることがない、という事実をそのまま配置で表している)。
  *
  * 読み込み時ではなく呼び出し時に見る。const にすると import の順序が意味を持ってしまい、
- * 「tick.ts が env を立てる前に評価されていたので対話枠を食っていた」が起きる。
+ * 「tick.ts が env を設定する前に評価されていたので対話用クォータを消費していた」が起きる。
  */
 export const lane = (): Lane => (process.env.OPEN_ZERO_LANE === "autonomous" ? "autonomous" : "interactive")
 
 /** この経路の ledger.role。`role IS NOT NULL` が日次 run 数の数え上げ対象なので必ず入れる。 */
 const laneRole = (): string => (lane() === "autonomous" ? AUTONOMOUS_ROLE : "dialogue")
 
-/** 呼ぶ前のゲート。拒否は Error にして投げる — 道具ループの外まで理由付きで出る。 */
+/** 呼ぶ前の検査。拒否は Error にして投げる — 道具ループの外まで理由付きで出る。 */
 async function gate(model: string): Promise<void> {
   const refusal = await run(
     Effect.gen(function* () {
       const gov = yield* Governance
       yield* gov.precheck({
         meter: "quota",
-        // pool はモデルで決まる(GPT を回しても Claude の窓は閉じない、逆も)。
+        // pool はモデルで決まる(GPT を回しても Claude のクォータ状態は変わらない、逆も)。
         pool: poolForModel(model),
         model,
         at: nowIso(),
@@ -61,7 +61,7 @@ async function gate(model: string): Promise<void> {
   throw new Error(isRefusal(refusal) ? describeRefusal(refusal) : `${refusal._tag}: ${refusal.message}`)
 }
 
-/** `providerMetadata` に載せた枠シグナルを型のある形に戻す。落ちても止めない。 */
+/** `providerMetadata` に載せたクォータシグナルを型のある形に戻す。解析できなくても処理は止めない。 */
 function readQuota(meta: unknown): QuotaSignal | undefined {
   if (typeof meta !== "object" || meta === null) return undefined
   const q = (meta as { quota?: unknown }).quota
@@ -78,9 +78,9 @@ function readQuota(meta: unknown): QuotaSignal | undefined {
 }
 
 /**
- * 会計と枠の計上。この経路と Runner 経路が同じ DB に載るようにしてある。
- * ここを飛ばすと ledger が空のままになり、日次 run 数の歯止め(ledger を数える)が永久に効かない。
- * 記録の失敗で応答そのものを落とすのは割に合わないので、失敗は握って進む。
+ * 会計とクォータ状態の更新。この経路と Runner 経路が同じ DB に載るようにしてある。
+ * ここを飛ばすと ledger が空のままになり、日次 run 数の上限(ledger を数える)を適用できない。
+ * 記録の失敗で応答そのものを失敗させるのは割に合わないので、記録失敗は応答へ波及させない。
  */
 async function account(
   model: string,
@@ -100,7 +100,7 @@ async function account(
         role: laneRole(),
         model,
         meter: "quota",
-        usage: { ...usage, usd: 0 }, // 定額枠。影の値段は provenance にだけ残す。
+        usage: { ...usage, usd: 0 }, // 定額利用。従量課金換算額は provenance にだけ残す。
         summary: traceOf(text),
         provenance: { pool: poolForModel(model), notionalUsd, via: "agent" },
         at,
@@ -109,7 +109,7 @@ async function account(
   )
 }
 
-/** 失敗しても枠シグナルが取れていれば冷やす。冷やさないと閉じた窓を毎ターン叩いて捨てる。 */
+/** 失敗してもクォータシグナルが取れていれば、リセット時刻まで再実行を抑止する。 */
 async function noteFailure(e: unknown): Promise<void> {
   if (!(e instanceof ClaudeCliError) || !e.quota) return
   const quota = e.quota
@@ -122,7 +122,7 @@ async function noteFailure(e: unknown): Promise<void> {
   )
 }
 
-/** AI SDK Agent 経路で、モデル呼び出しごとにゲート → 実行 → 枠計上 → 会計を行う。 */
+/** AI SDK Agent 経路で、モデル呼び出しごとに事前検査 → 実行 → クォータ状態更新 → 会計を行う。 */
 export function governance(): LanguageModelV4Middleware {
   return {
     specificationVersion: "v4",
@@ -156,7 +156,7 @@ export function governance(): LanguageModelV4Middleware {
 
 /**
  * 統治つきのモデル。エージェントに差すのはこれだけ。
- * 素の `claudeCliModel` を直接使う経路を作らない — ゲートを通らずに枠が減る。
+ * 素の `claudeCliModel` を直接使う経路を作らない — 事前検査を通らずにクォータが減る。
  */
 export function claudeMax(modelId: string): LanguageModelV4 {
   return wrapLanguageModel({ model: claudeCliModel(modelId), middleware: governance() })

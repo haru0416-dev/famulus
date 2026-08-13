@@ -107,7 +107,7 @@ test("commit は tick 自身の書き込みも消費する(同じ入力で二度
   })
 })
 
-test("自分が動く番の watch は起こす理由になる — ただし冷却中は起きない", async () => {
+test("自分が動く番の watch は実行条件になる — ただし冷却中は実行しない", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -279,7 +279,7 @@ test("冷却が同時に明けても、1回に載せるのは上限まで。残�
 
     assert.equal(d.stalled.length, STALLED_SHOW_MAX, "載せるのは上限まで")
     assert.equal(d.stalledHeld, 6 - STALLED_SHOW_MAX, "残りは落とすのではなく預かる")
-    // 起こす理由は明けた全部の数。載せた数で書くと、6件待っている回と3件しかない回が
+    // 実行条件は冷却が終了した全件の数。載せた数で書くと、6件待っている回と3件しかない回が
     // 同じ文になり、後ろに何件溜まっているかがどこにも出なくなる。
     assert.match(d.reasons.join(), /watch が 6 件/)
     assert.deepEqual(
@@ -294,7 +294,7 @@ test("載せたのに回さなかった watch も後ろへ回る — 進むの�
     const ids = await h.run(sixWatches)
     const first = await h.run(digestAt(T0 + hours(2)))
 
-    // digest だけでは進まない。digest は起きる理由が無い回にも走るので、ここで印を付けると
+    // digest だけでは進まない。digest は実行条件が無い回にも走るので、ここで記録すると
     // 誰も読んでいない一覧を載せたことにして順番だけが回る。
     const again = await h.run(digestAt(T0 + hours(3)))
     assert.deepEqual(
@@ -314,7 +314,7 @@ test("載せたのに回さなかった watch も後ろへ回る — 進むの�
     )
 
     // `ran` は1件も呼んでいない。それでも次は別の3件が載る — 回さずに終えた watch が
-    // 枠を占め続けるのを、ここで止めている。
+    // 表示上限を占め続けるのを、ここで止めている。
     const second = await h.run(digestAt(T0 + hours(4)))
     assert.deepEqual(
       second.stalled.map((w) => w.id),
@@ -339,7 +339,7 @@ test("載せたのに回さなかった watch も後ろへ回る — 進むの�
   })
 })
 
-test("自分が動く番でない watch は、動きが止まって初めて起こす", async () => {
+test("自分が動く番でない watch は、一定期間更新が無いときだけ実行条件になる", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -354,7 +354,7 @@ test("自分が動く番でない watch は、動きが止まって初めて起�
   })
 })
 
-test("未解決の問いは起こす理由にしない(自分では解消できないので永久に起こすことになる)", async () => {
+test("未解決の問いは実行条件にしない(自分では解消できないので永久に実行することになる)", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -371,7 +371,7 @@ test("未解決の問いは起こす理由にしない(自分では解消でき�
 
 /**
  * 問いの出口。答えるのと取り下げるのは別で、片方しか無いとプロンプトが一方通行で埋まる。
- * 起こす理由ではないぶん見落としやすいが、埋まったプロンプトは新しい問いを押し出す — そこまで見る。
+ * 実行条件ではないぶん見落としやすいが、上限に達したプロンプトは新しい問いを除外する — そこまで見る。
  */
 test("答えないまま取り下げられる。理由は残る", async () => {
   await withHarness(async (h) => {
@@ -391,7 +391,7 @@ test("答えないまま取り下げられる。理由は残る", async () => {
   })
 })
 
-test("死んだ問いが上限を埋めると新しい問いが tick に届かない — 取り下げれば届く", async () => {
+test("不要になった未解決質問が上限を占有すると新しい問いが tick に届かない — 取り下げれば届く", async () => {
   await withHarness(async (h) => {
     const ids = await h.run(
       Effect.gen(function* () {
@@ -484,7 +484,7 @@ test("同じ理由で起き続けると冷却が倍に伸びる。新しい入�
   })
 })
 
-test("期限が近い承認待ちは起こす理由になる", async () => {
+test("期限が近い承認待ちは実行条件になる", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -540,7 +540,7 @@ const denied = (n: number, at: string, reason: string | null) =>
  * 断られたことを次の回に渡す。渡さないと、同じ相手に同じ用件を出し直す。
  * watch に前回の結果を渡すのと同じ理由(docs/adr/0013 / 0017)。
  */
-test("断られた提案はプロンプトに載る — ただし起こす理由にはしない", async () => {
+test("断られた提案はプロンプトに載る — ただし実行条件にはしない", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {

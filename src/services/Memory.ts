@@ -1,5 +1,5 @@
 /**
- * memory サービス。正本は append-only の `events`、`belief_slots` と `events_fts` は projection。
+ * memory サービス。記録の基準は append-only の `events` で、`belief_slots` と `events_fts` は projection。
  *
  * 消せないことは SQL 側で強制する。忘却は DELETE ではなく `forget` イベントの追記、
  * 抹消は `content := NULL` の UPDATE だけ(それ以外の UPDATE はトリガが ABORT する)。
@@ -47,7 +47,7 @@ export interface EventRow {
   readonly supersedes: string | null
   readonly provenance: string
   readonly content: string | null
-  /** FTS に入れた素のテキスト(JSON の殻を剥いだもの)。読ませるのはこちら。 */
+  /** FTS に入れた素のテキスト(JSON の構造を除いたもの)。読ませるのはこちら。 */
   readonly text: string | null
   /** belief のとき、その slot の今の値か(0 なら上書き済みの旧版)。 */
   readonly is_current: number
@@ -88,8 +88,8 @@ const LAYER_BIAS = `CASE
 /**
  * 検索結果を読ませる形にする。呼ぶ側(CLI / recall ツール)で揃えたいのでここに置く。
  *
- * 生の `content` をそのまま出すと `{"said":"…` という JSON の殻がモデルにも人にも見える。
- * 殻は保存の都合であって中身ではない。索引に入れた素のテキストのほうを見せる。
+ * 生の `content` をそのまま出すと `{"said":"…` という JSON 構造がモデルにも人にも見える。
+ * JSON 構造は保存形式であって本文ではない。索引に入れた素のテキストのほうを見せる。
  * 併せてどの層の1行なのかを頭に付ける — 確定した事実と自分の独り言を、
  * 読む側が区別できないまま並べない。
  *
@@ -129,8 +129,8 @@ function safeText(content: string | null): string {
 }
 
 /**
- * 同じ本文の行を畳む。関連度順で最初に出たものを残す。
- * 同じことを5回言われた DB では、畳まないと1つの話題だけで枠が埋まる。
+ * 重複する本文の行を除外する。関連度順で最初に出たものを残す。
+ * 同じことを5回言われた DB では、除外しないと1つの話題だけで結果上限を埋める。
  */
 function dedupe(rows: readonly EventRow[], limit: number): EventRow[] {
   const seen = new Set<string>()
@@ -383,7 +383,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
           .split(/\s+/)
           .filter((t) => t.length > 0)
         if (terms.length === 0) return [] as EventRow[]
-        // 同じことを繰り返し言われた行が枠を食い潰さないよう、多めに取って本文で畳む。
+        // 同じことを繰り返し言われた行が結果上限を占有しないよう、多めに取って重複を除外する。
         const wide = Math.max(limit * 3, 30)
         // trigram は3文字窓なので、2文字以下の語は索引では引けない(日本語の常用語の多くがこれ)。
         // その語だけ本文への LIKE に落とし、索引で引ける語と AND で重ねる。

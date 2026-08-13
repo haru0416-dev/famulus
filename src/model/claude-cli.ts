@@ -7,18 +7,18 @@
  * 載せる経路で、上の判断とは別物なので使わない。
  *
  * 1回あたりの入力は CLI 側の前置きで数千 tok から始まり、`--system-prompt` を渡しても消えない。
- * `--bare` なら落とせるが、あれは認証を `ANTHROPIC_API_KEY` に固定するのでサブスクで走らせる
- * 目的と両立しない。逃がせるのは呼ぶ回数のほうで、量を使う役を rmod に置いてあるのはこの差による。
+ * `--bare` なら除外できるが、あれは認証を `ANTHROPIC_API_KEY` に固定するのでサブスクで実行する
+ * 目的と両立しない。削減できるのは呼び出し回数で、トークン使用量の多い役を rmod に置いてあるのはこの差による。
  *
  * `--json-schema` は StructuredOutput というツールとして実装されているため、
  * `--tools ""` と併用すると拒否されて `structured_output` が null になる。
- * 正解は封じを全部解くことではなく、StructuredOutput だけ通すこと。
+ * 必要なのは全ツールを許可することではなく、StructuredOutput だけを許可すること。
  * この形なら内側の claude に Read/Write/Bash は渡らない。
  *
  * CLI の出力を読むときの前提:
- *  - `api_error_status: 429` が枠切れの正。`subtype` は失敗時も "success" のままで当てにならない。
+ *  - `api_error_status: 429` がクォータ枯渇の判定根拠。`subtype` は失敗時も "success" のままで当てにならない。
  *  - 5xx は CLI 内で3分ほどリトライする。in-band には何も出ないので掴めるのは timeout だけ。
- *  - `rate_limit_event` が in-band で流れる(`{status, resetsAt, rateLimitType}`)= 枠ブレーカーの入力。
+ *  - `rate_limit_event` が in-band で流れる(`{status, resetsAt, rateLimitType}`)= クォータ再実行抑止の入力。
  *  - `usage.input_tokens` だけでは足りない。前置きは `cache_creation_input_tokens`(初回)と
  *    `cache_read_input_tokens`(2回目以降)へ回る。DB もこの3つを別々に持つ。
  */
@@ -27,11 +27,11 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
-/** この runner が消費する枠の識別子(governance/quota.ts の会計単位)。 */
+/** この runner が消費するクォータの識別子(Governance の集計単位)。 */
 export const CLAUDE_POOL = "claude-max"
 
 /**
- * GPT 経路の枠。Claude と同じ pool には入れない。
+ * GPT 経路のクォータ。Claude と同じ pool には入れない。
  * `quotaCooldown` は `quota:<pool>` を鍵に持つので、混ぜると「GPT を回したから Claude を止める」
  * (逆も)が起きる。減っているものが違う以上、数える場所も分ける。
  */
@@ -231,7 +231,7 @@ export interface ClaudeCallResult {
   readonly nativeToolAttempt?: boolean
 }
 
-/** 枠シグナルを載せて投げる失敗。これが無いと上位が枠を冷やせず、閉じた窓を毎回叩いて捨てる。 */
+/** クォータシグナル付きの失敗。これが無いと上位がリセット時刻まで再実行を抑止できない。 */
 export class ClaudeCliError extends Error {
   readonly quota: QuotaSignal | undefined
   constructor(message: string, quota?: QuotaSignal) {
@@ -270,7 +270,7 @@ export async function callClaude(opts: ClaudeCallOptions): Promise<ClaudeCallRes
     )
   }
 
-  // 枠シグナルに載せる pool。モデルで決まる(rmod 側の 429 を Claude の窓に積まない)。
+  // クォータシグナルに載せる pool。モデルで決まる(rmod 側の 429 を Claude の状態に記録しない)。
   const pool = poolForModel(opts.model)
 
   const cwd = mkdtempSync(join(tmpdir(), "open-zero-run-"))
@@ -404,7 +404,7 @@ export async function callClaude(opts: ClaudeCallOptions): Promise<ClaudeCallRes
   // 429 は result 行の api_error_status にだけ出る。`subtype` は失敗時も "success" のまま。
   if (done.api_error_status === 429) {
     quota = { ...(quota ?? { pool, window: "unknown" }), exhausted: true }
-    fail("claude -p: 429(枠切れ)")
+    fail("claude -p: 429(クォータ枯渇)")
   }
   if (done.is_error || done.api_error_status) {
     fail(`claude -p: 失敗(status=${done.api_error_status ?? "?"}) ${String(done.result ?? "").slice(0, 300)}`)

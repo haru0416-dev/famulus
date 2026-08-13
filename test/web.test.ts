@@ -497,7 +497,7 @@ test("続きを読むのに取り直さない(全文を覚えて切り出す)", 
   }
 })
 
-test("大きいページは窓で少しずつ読まず、語で当てる", () => {
+test("大きいページは固定長の範囲を順に読まず、語で検索する", () => {
   // 実測: 40万字の registry JSON を offset で 300,000→408,000 まで 12,000字刻みで
   // 10 ターン進めて空振りした(1ターンごとにモデル呼び出しが要るので約130秒)。
   const full = `${"x".repeat(50_000)}"3.22.1":"2026-07-30T04:29:21.637Z"${"y".repeat(50_000)}`
@@ -508,7 +508,7 @@ test("大きいページは窓で少しずつ読まず、語で当てる", () =>
   assert.match(hit.text, /2026-07-30T04:29:21\.637Z/)
   assert.ok(hit.text.length < 12_000)
 
-  // 無ければ 0。無いものを窓で探し直させないための返り値。
+  // 無ければ 0。読み取り範囲を変えて探し直させないための返り値。
   assert.equal(findIn(full, "4.0.0").count, 0)
   assert.equal(findIn(full, "4.0.0").text, "")
 
@@ -528,8 +528,8 @@ test("find は取りに行かず、覚えた全文の中を探す", async () => 
     const url = `https://example.com/reg-${Math.random().toString(36).slice(2)}`
     const t0 = 3_000_000
     const first = await fetchPage(url, { nowMs: t0 })
-    // 刻み始める前に、窓で読むと何回かかるかを数字で見せる。
-    assert.match(first.note ?? "", /窓\(12000字\)で頭から読むと 4 回/)
+    // 刻み始める前に、固定長で読むと何回かかるかを数字で見せる。
+    assert.match(first.note ?? "", /12000字ずつ頭から読むと 4 回/)
     assert.match(first.note ?? "", /`find` に語を渡す/)
 
     const found = await fetchPage(url, { find: "3.22.1", nowMs: t0 + 1_000 })

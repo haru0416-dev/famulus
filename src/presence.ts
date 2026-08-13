@@ -7,9 +7,9 @@
  * 30秒ごとに `inbox()` を叩いている間も、ユーザーの画面ではずっとオフラインだった。
  *
  * メッセージの経路はここに移さない。受け取りは今まで通り poll(REST)が持つ。
- * 分ける理由は落ち方が違うこと — この接続が切れても届いたものは30秒後に読まれるが、
- * 受け取りを常駐に寄せると、常駐が黙って死んだ日は誰も読まない(docs/adr/0027)。
- * ここが死んで失われるのは表示だけ。
+ * 分ける理由は障害時の影響が違うこと — この接続が切れても届いたものは30秒後に読まれるが、
+ * 受け取りを常駐に寄せると、常駐プロセスが通知なしに停止した間は誰も読まない(docs/adr/0027)。
+ * このプロセスが停止して失われるのは表示だけ。
  *
  * intents は 0 で、何も受け取らない。特権 intent が要らず、guild が増えても
  * 流れてくる量が変わらない。受け取らないので replay も要らないが、RESUME は実装する —
@@ -143,7 +143,7 @@ function once(
 
       if (m.op === 10) {
         const ms = (m.d as { heartbeat_interval: number }).heartbeat_interval
-        // 最初の1回だけずらす。全部の接続が同時に打つと、Discord 側で山になる。
+        // 最初の1回だけずらす。全接続が同時に送ると、Discord 側へ heartbeat が集中する。
         setTimeout(() => {
           if (ws.readyState !== WebSocket.OPEN) return
           ws.send(JSON.stringify({ op: 1, d: seq }))
@@ -204,7 +204,7 @@ function once(
       settled = true
       if (FATAL.has(e.code)) fatal = e.code
       if (STALE.has(e.code)) session = undefined
-      // 4000 は自分で閉じた回。それ以外は理由を残す — 黙って死なないための唯一の跡。
+      // 4000 は自分で閉じた回。それ以外は理由を残す — 通知なしの停止を診断するための唯一の記録。
       if (e.code !== 4000) log(`切れた: ${e.code} ${e.reason || ""}`)
       done({ session, seq, connected, ...(fatal === undefined ? {} : { fatal }) })
     }

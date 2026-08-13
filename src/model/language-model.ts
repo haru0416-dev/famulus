@@ -15,7 +15,7 @@
  * 道具の定義そのものもこちらの system prompt に載るので、その分だけ上乗せになる。
  *
  * ## 統治の側へ渡すもの
- * 枠シグナルと影の値段は `providerMetadata[PROVIDER_META]` に載せる。トークン数は V4 の `usage` が
+ * クォータシグナルと従量課金換算額は `providerMetadata[PROVIDER_META]` に載せる。トークン数は V4 の `usage` が
  * 素・キャッシュ読み・キャッシュ書きを最初から分けて持つので、そのまま入る(docs/adr/0005)。
  */
 
@@ -31,7 +31,7 @@ import { callClaude, RUNTIME_PROMPT } from "./claude-cli.ts"
 
 export const CLAUDE_MAX_PROVIDER_ID = "claude-max"
 
-/** `providerMetadata` の鍵。統治の middleware がここから枠シグナルと影の値段を拾う。 */
+/** `providerMetadata` の鍵。統治の middleware がここからクォータシグナルと従量課金換算額を読む。 */
 export const PROVIDER_META = CLAUDE_MAX_PROVIDER_ID
 
 /** 呼べるモデル id。`-web` が付いたものだけが外を見に行ける(claude-cli.ts の isWebModel)。 */
@@ -161,10 +161,10 @@ export function normalizeToolName(raw: string | undefined, names: readonly strin
 }
 
 /**
- * 取り直すか。指示の言い方だけに頼らないための歯止め。
+ * 再提出するか。指示文だけに頼らず、CLI のエラーから判定する。
  *
  * 内側の claude が提出用の名前をネイティブに呼んで CLI に弾かれ、そのまま「使えなかった」と
- * 手ぶらで戻ってくることがある。
+ * 道具呼び出しを1件も提出せず戻ることがある。
  * 判定に使うのは CLI が流した tool_use_error だけで、応答の文面は読まない —
  * 「ツールが無い」と書いてあるかどうかで決めると、正しく諦めた回までやり直す。
  */
@@ -253,7 +253,7 @@ export function claudeCliModel(modelId: string): LanguageModelV4 {
         },
         outputTokens: { total: u.outTok, text: u.outTok, reasoning: undefined },
       },
-      // 統治の側が読む欄。定額枠なので、値段は請求ではなく影の値段として渡すだけ。
+      // 統治の側が読む欄。定額利用なので、値段は請求ではなく従量課金換算額として渡すだけ。
       providerMetadata: {
         [PROVIDER_META]: {
           notionalUsd: result.usage.notionalUsd,

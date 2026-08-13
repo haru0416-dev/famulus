@@ -1,5 +1,5 @@
 /**
- * DB の入口。ユーザーが過去に喋った記録を開いて、残す価値のある分だけを DB に落とす。
+ * DB の取り込み入口。ユーザーが過去に話した記録を開いて、残す価値のある分だけを DB に保存する。
  *
  * 引く先は2つ — Claude Code の作業ログ(`~/.claude/projects` の JSONL)と、
  * Claude.ai の書き出し(`.data/claude-export`)。
@@ -8,15 +8,15 @@
  * 削るのは比率ではなく、何が人の判断で何が作業の残骸かの境界。
  *
  * 2段階に分けてある。
- *   1. 選別(モデルを使わない) … 道具の入出力を捨て、人の発話をそのまま残し、応答を畳む。
- *      枠を1回も使わずにここまで落とせるので、要約に渡る前に効果を確かめられる。
+ *   1. 選別(モデルを使わない) … 道具の入出力を捨て、人の発話をそのまま残し、中間応答を除外する。
+ *      モデルを呼ばずにここまで選別できるので、要約に渡る前に効果を確かめられる。
  *   2. 要約(scout モデル) …1会話 → 1イベント。ユーザーの判断だけを、引用付きで抜く。
  *
  * `memories.json` だけは2段目を通さない。既に要約済みのものを要約し直すと、二度均されて
  * 本人の言い回しが完全に消える。トピック別に切って、そのまま置く。
  *
- * Claude.ai の書き出しは大半の会話が uuid と日時だけの殻で、text も content も空になっている
- * (書き出し側の都合で、こちらでは復元できない)。本文の無い会話は落とす。
+ * Claude.ai の書き出しは大半の会話が uuid と日時だけのレコードで、text も content も空になっている
+ * (書き出し側の都合で、こちらでは復元できない)。本文の無い会話は除外する。
  *
  * 取り込み済みかどうかは `events` 自身が覚える(`kind='import'` の provenance に元の id)。
  * 別表を作らないので、DB を消さない限り二重取り込みは起きない。
@@ -49,10 +49,10 @@ const TYPED = "typed"
 const TYPED_MARK = `"promptSource":"${TYPED}"`
 
 /**
- * 生ログを1本読む。人が打った跡が無ければ `undefined`。
+ * 元の JSONL ログを1本読む。人が打った記録が無ければ `undefined`。
  *
  * 含有判定は Buffer のままやる。utf8 の文字列に起こす手間は読み取り自体より重く、
- * 実測(0.63G / 295 本)で 161ms → 1,544ms になる。生ログの大半は道具の入出力で、
+ * 実測(0.63G / 295 本)で 161ms → 1,544ms になる。元ログの大半は道具の入出力で、
  * その中身をこちらは一度も読まない(docs/adr/0026)。
  */
 function readTypedRaw(path: string): string | undefined {
@@ -60,7 +60,7 @@ function readTypedRaw(path: string): string | undefined {
   return buf.includes(TYPED_MARK) ? buf.toString("utf8") : undefined
 }
 
-/** 応答1件から残す長さの上限と下限。結論は最後に出るので、最後の1件だけ別枠で厚く取る。 */
+/** 応答1件から残す長さの上限と下限。結論は最後に出るので、最後の1件だけ文字数を多く割り当てる。 */
 const REPLY_HEAD = 400
 const REPLY_MIN = 100
 const LAST_REPLY = 1500
@@ -230,7 +230,7 @@ interface Read {
 /**
  * `conversations.json` を読む。1ファイルに全会話が入っているので、走査も取り込みもここを通る。
  *
- * 本文の落ちた殻(text も content も空)は捨てる。DB に空の会話を並べても、
+ * 本文フィールドが空の会話レコード(text も content も空)は捨てる。DB に空の会話を並べても、
  * 「その日に何か喋った」以上のことは言えず、検索の邪魔にしかならない。
  */
 function readWebChats(): Read[] {
@@ -345,7 +345,7 @@ function buildDesignFile(path: string): Read | undefined {
 
 /**
  * 1件だけ読み直す。ここを全体走査にしてはいけない。
- * `material` は取り込みのたびに呼ばれるので、毎回すべての生ログを読み直すと入口が使い物にならなくなる。
+ * `material` は取り込みのたびに呼ばれるので、毎回すべての元ログを読み直すと処理時間が過大になる。
  */
 function readOne(ref: SessionRef): Read | undefined {
   if (ref.kind === "claude-code") return readSession(ref.path)
@@ -383,7 +383,7 @@ function compress(turns: readonly Turn[]): string {
   const ownerChars = folded.reduce((n, t) => (t.who === "owner" ? n + t.text.length + 8 : n), 0)
   const replies = folded.filter((t) => t.who === "agent").length
 
-  // 残りを応答で山分けする。最後の1件は結論なので先に別枠で取っておく。
+  // 残り文字数を各応答に均等配分する。最後の1件は結論なので先に多く割り当てる。
   const left = MATERIAL_MAX - ownerChars - LAST_REPLY
   const cap =
     replies <= 1 ? REPLY_HEAD : Math.max(REPLY_MIN, Math.min(REPLY_HEAD, Math.floor(left / (replies - 1))))

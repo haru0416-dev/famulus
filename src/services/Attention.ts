@@ -1,11 +1,11 @@
 /**
- * 起きたときに何を見るかを DB 側に持つ。`watchlist`(未決の追跡対象)と
+ * tick の実行時に何を見るかを DB 側に持つ。`watchlist`(未決の追跡対象)と
  * `questions`(未検証の仮説)の2枚。
  *
  * `questions` を `belief_slots` と分けてあるのは、確認していないことが事実として溜まらない
  * ようにするため。自走中は答え合わせをする相手がいない。
  *
- * `digest` はモデルを呼ばない。起こすかどうかを SQL だけで決める。
+ * `digest` はモデルを呼ばない。モデル実行が必要かを SQL だけで決める。
  */
 import { randomUUID } from "node:crypto"
 import * as Effect from "effect/Effect"
@@ -14,7 +14,7 @@ import { dayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 /**
- * 次に動くのは誰か。`famulus` は自分(SOUL.md の名前)。
+ * 次に処理する主体。`famulus` は自律エージェント(SOUL.md の名前)。
  * `counterparty`(第三者)は実データ0件のまま落とした(docs/adr/0033)。
  */
 export type NextMove = "human" | "famulus"
@@ -60,7 +60,7 @@ export interface PendingProposal {
   readonly created_at: string
   readonly expires_at: string
   readonly daysLeft: number
-  /** tick が前に置いた結論。あるものは起こす理由に数えない(承認はユーザーしか出せない)。 */
+  /** tick が前に記録した結論。あるものは次回の実行条件に数えない(承認はユーザーしか出せない)。 */
   readonly settled_note: string | null
 }
 
@@ -84,7 +84,7 @@ export interface ObservedEvent {
   readonly content: string
 }
 
-/** tick 1回ぶんの入力。`idle` ならモデルを呼ばない。`reasons` は起こした理由。 */
+/** tick 1回ぶんの入力。`idle` ならモデルを呼ばない。`reasons` は今回の実行条件。 */
 export interface Digest {
   readonly at: string
   readonly cursor: number
@@ -101,9 +101,9 @@ export interface Digest {
   readonly reasons: readonly string[]
   /** 理由の組み合わせ(件数を除いたもの)。前回と同じなら次の冷却が伸びる。`commit` に渡す。 */
   readonly reasonKey: string
-  /** この tick で満たすべきだった冷却時間。後退が効いているかを外から見るため。 */
+  /** この tick で満たすべきだった冷却時間。指数バックオフの適用状況を外から見るため。 */
   readonly cooldownHours: number
-  /** 今日ぶんの下書きがまだ出ていない。冷却を無視して起きる(1日1回しか立たない)。 */
+  /** 今日ぶんの下書きがまだ出ていない。冷却を無視して実行条件になる(1日1回しか立たない)。 */
   readonly draftDue: boolean
   readonly idle: boolean
 }
@@ -144,15 +144,15 @@ export const STALLED_SHOW_MAX = 3
 export const EXPIRING_DAYS = 2
 /** 何も無くてもこの時間が経ったら1回起こす(反応するだけの機械にしないための下限)。 */
 export const IDLE_WAKE_HOURS = 24
-/** tick のプロンプトに載せる「断られたぶん」の数。起こす理由には数えない。 */
+/** tick のプロンプトに載せる「断られたぶん」の数。実行条件には数えない。 */
 export const REFUSED_LIMIT = 5
 /**
  * 現在区間の `valid_from` がこの日数より古い belief を、棚卸しの材料にする。
  *
  * これは確認鮮度ではなく、事実が真になった時点からの経過を見る。古いだけで誤りとは限らないため、
- * 起こす理由には数えず、別の理由で起きた回に確認候補として渡す。
+ * 実行条件には数えず、別の条件で実行した回に確認候補として渡す。
  *
- * 起こす理由には数えない。理由にすると、答えが返るまで毎回同じ slot で起き続ける。
+ * 実行条件には数えない。条件にすると、答えが返るまで毎回同じ slot で実行し続ける。
  */
 export const STALE_BELIEF_DAYS = 90
 
@@ -292,7 +292,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
      * プロンプトに載せたことを記録する。回したことではない。`ranWatch` と同じ列にすると、
      * 回さなかった watch が次の回もまた先頭に来て同じ数件が居座る。
      *
-     * 呼ぶのは digest ではなくプロンプトを組み立てる側。digest は起きる理由が無い回にも走るので、
+     * 呼ぶのは digest ではなくプロンプトを組み立てる側。digest は実行条件が無い回にも走るので、
      * そこで記録すると誰も見ていない一覧を載せたことになる。
      */
     const noteShown = (ids: readonly string[], at: string = nowIso()) =>
@@ -368,7 +368,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       })
 
     /**
-     * 答えないまま問いを畳む。`answer` しか出口が無いと、答える意味を失った問いも開いたまま残る。
+     * 答えないまま問いを取り下げる。`answer` しか終了方法が無いと、答える意味を失った問いも open のまま残る。
      * `openQuestions` は古い順に上限件数だけ渡すので、それが上限を埋めると新しい問いが tick に届かない。
      * 理由を残して閉じる。
      */
@@ -384,12 +384,12 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         .all("SELECT * FROM questions WHERE status = 'open' ORDER BY opened_at ASC LIMIT ?", limit)
         .pipe(Effect.map((rows) => rows as unknown as QuestionRow[]))
 
-    // ── tick の視野
+    // ── tick の処理対象
 
     /**
-     * 何を見て起きるべきかを SQL だけで決める。モデルは呼ばない。
+     * 何を処理するために実行するかを SQL だけで決める。モデルは呼ばない。
      * 見た位置(cursor)は進めない — tick が最後まで走り切ってから `commit` で進める
-     * (途中で落ちたら、次の tick が同じ入力をもう一度見る = 取りこぼさない)。
+     * (途中で失敗したら、次の tick が同じ入力をもう一度見る = 未処理のまま保持する)。
      */
     const digest = (nowMs: number = Date.now()) =>
       Effect.gen(function* () {
@@ -397,7 +397,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         const cursorRaw = yield* db.meta("tick:cursor")
         const cursor = Number(cursorRaw ?? 0)
 
-        // 自分が書いたもの(source='system')では起きない。起こすのは外から来た入力だけ。
+        // 自分が書いたもの(source='system')は実行条件にしない。外部入力だけを対象にする。
         const newEvents = (yield* db.all(
           `SELECT rowid, at, source, taint, content FROM events
             WHERE rowid > ?AND source != 'system' AND content IS NOT NULL
@@ -405,8 +405,8 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           cursor,
         )) as unknown as ObservedEvent[]
 
-        // 冷却が明けたものだけ。`next_move_owner = 'famulus'` は無条件で滞留に入るので、
-        // `dueNow` を挟まないと自分持ちの watch は回しても毎回の tick に上がり続ける。
+        // 冷却が終了したものだけ。`next_move_owner = 'famulus'` は無条件で候補に入るので、
+        // `dueNow` を挟まないと自分持ちの watch は確認後も毎回の tick で処理対象になり続ける。
         const due = (yield* openWatches(nowMs)).filter(
           (w) => w.dueNow && (w.next_move_owner === "famulus" || w.stalledDays >= STALLED_DAYS),
         )
@@ -466,41 +466,41 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           ? (nowMs - Date.parse(lastActive)) / 3_600_000
           : Number.POSITIVE_INFINITY
 
-        // 起こす理由。未解決の問いは理由にしない — 自分では解消できないものが多く、
-        // 理由に数えると同じ問いで起き続ける。起きたときの材料としてだけ渡す。
+        // 実行条件。未解決の問いは条件にしない — 自分では解消できないものが多く、
+        // 条件に数えると同じ問いで実行し続ける。実行時の材料としてだけ渡す。
         const reasons: string[] = []
         if (newEvents.length > 0) reasons.push(`まだ見ていない入力が ${newEvents.length} 件`)
-        // 結論を置いたものは数えない。承認を出せるのはユーザーだけなので、tick が起きても
+        // 結論を置いたものは数えない。承認を出せるのはユーザーだけなので、tick を実行しても
         // 「あなた待ちです」をもう一度書くだけになる。承認はまだ要るので一覧には残す。
         const expiring = pending.filter((p) => p.daysLeft <= EXPIRING_DAYS && p.settled_note === null)
 
         // 組み合わせはプロンプトに何が載っているかだけ。件数も経過時間も入れない。
-        // 件数を入れると watch が1件増えただけで新しい理由になり、後退が掛からない。
-        // 経過時間(24時間超え)を入れると、後退が上限に達した瞬間に組み合わせが変わって
+        // 件数を入れると watch が1件増えただけで新しい条件になり、指数バックオフが適用されない。
+        // 経過時間(24時間超え)を入れると、バックオフが上限に達した瞬間に組み合わせが変わって
         // 数え直しになり、1.5時間と24時間を往復する。
         const overdue = sinceLastActiveHours >= IDLE_WAKE_HOURS
         const reasonKey = [queued.length > 0 ? "stalled" : "", expiring.length > 0 ? "expiring" : ""]
           .filter(Boolean)
           .join("+")
 
-        // 前回と同じ組み合わせで起きた回数だけ、次に起きるまでを倍にする。
+        // 前回と同じ組み合わせで実行した回数だけ、次回実行までを倍にする。
         const lastKey = yield* db.meta("tick:reason_key")
         const repeats =
           reasonKey !== "" && reasonKey === lastKey ? Number((yield* db.meta("tick:repeat")) ?? 0) : 0
         const cooldownHours = Math.min(ACTIVE_COOLDOWN_HOURS * 2 ** repeats, MAX_COOLDOWN_HOURS)
 
-        // 新しい入力が無いなら、直前に動いたばかりの tick は動かない(自家中毒を止める)。
+        // 新しい入力が無いなら、直前に動いたばかりの tick は実行しない(自己起動ループを止める)。
         const cooled = sinceLastActiveHours >= cooldownHours
         if (cooled) {
-          // 冷却が明けた全部の数を書く。載せる数で書くと、6件待っている回と
+          // 冷却が終了した全部の数を書く。載せる数で書くと、6件待っている回と
           // 3件しか無い回が同じ文になり、後ろに何件溜まっているかが出ない。
-          if (queued.length > 0) reasons.push(`動いていない watch が ${queued.length} 件`)
+          if (queued.length > 0) reasons.push(`対応対象の watch が ${queued.length} 件`)
           if (expiring.length > 0) reasons.push(`期限が近い承認待ちが ${expiring.length} 件`)
           if (overdue) reasons.push(`前回の棚卸しから ${IDLE_WAKE_HOURS} 時間以上`)
         }
 
-        // 冷却の外に出す。1日に1回しか立たない理由で、抑えると夕方に別の理由で動いた日は
-        // 下書きが丸ごと落ちる。
+        // 冷却の対象外にする。1日に1回しか成立しない条件で、抑えると夕方に別の理由で動いた日は
+        // 下書きが生成されない。
         const draftDue =
           localHour(at) >= dailyDraftHour() && (yield* db.meta("daily:draft")) !== dayRange(at).key
         if (draftDue) reasons.push("今日ぶんの下書きがまだ出ていない")

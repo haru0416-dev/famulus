@@ -37,9 +37,9 @@ export interface QuotaState {
 export interface BudgetConfig {
   readonly dailyRuns: number
   /**
-   * そのうち自走(tick)に使ってよい上限。対話の取り分を残すための仕切り。
+   * そのうち自走(tick)に使ってよい上限。対話用の run 数を残すための区分。
    * 自走を入れると走行回数を決めるのが人間ではなくタイマーになるので、
-   * 全体上限だけだと「気づいたら tick が枠を食い切っていて、話しかけたら止まっている」が起きる。
+   * 全体上限だけだと、tick が run 数を使い切り、次の対話が上限で止まることがある。
    */
   readonly autonomousRuns: number
   readonly dailyUsd: number
@@ -54,9 +54,9 @@ const envInt = (key: string, fallback: number): number => {
 /**
  * 既定値。
  *
- * `dailyRuns` は予算ではなく、繰り返しの歯止め。1回ごとに課金されるなら run 数が金額の代理になるが、
- * 定額枠ではならない(USD 上限が無意味なのと同じ理由 — precheck の 4 番を見よ)。
- * 定額枠でも無料ではなく、消えているのは金ではなくユーザー自身の Claude の枠で、
+ * `dailyRuns` は予算ではなく、異常反復の安全上限。1回ごとに課金されるなら run 数が金額の代理になるが、
+ * 定額利用ではならない(USD 上限が無意味なのと同じ理由 — precheck の 4 番を見よ)。
+ * 定額利用でも無料ではなく、消費しているのはユーザー自身の Claude クォータで、
  * それを測るのは run 数ではなく `quotaCooldown`(実際の使用率)。run 数は
  * 「同じことを無限に繰り返している」を止めるための上限として、実運用より十分高く置く。
  */
@@ -68,10 +68,10 @@ export const BUDGET: BudgetConfig = {
   monthlyUsd: envInt("OPEN_ZERO_MONTHLY_USD", 200),
 }
 
-/** どちらの経路の run か。自走は別枠で数える。 */
+/** どちらの経路の run か。自走は別区分で数える。 */
 export type Lane = "interactive" | "autonomous"
 
-/** 自走 run の記録 role。日次の自走枠はこの role の行を数える。 */
+/** 自走 run の記録 role。日次の自走上限はこの role の行を数える。 */
 export const AUTONOMOUS_ROLE = "autonomous"
 
 /** 使用率がこれ以上なら枯渇の手前として扱い、窓が明けるまで避ける(残りは朝会のために取っておく)。 */
@@ -142,7 +142,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
 
     const clearHalt = db.run("DELETE FROM schema_meta WHERE key = 'halt'")
 
-    /** この枠が今クールダウン中か。明けていれば掃除して undefined(自動解除)。 */
+    /** この pool が現在再実行抑止中か。リセット時刻を過ぎていれば状態を削除して undefined を返す。 */
     const quotaCooldown = (pool: string, nowMs: number) =>
       Effect.gen(function* () {
         const value = yield* db.meta(`quota:${pool}`)
@@ -151,7 +151,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         try {
           state = JSON.parse(value) as QuotaState
         } catch {
-          return undefined // 破損した状態は無視する。実際に枠切れなら runner の signal で記録し直す。
+          return undefined // 破損した状態は無視する。実際にクォータが枯渇していれば runner の signal で記録し直す。
         }
         if (state.untilMs <= nowMs) {
           yield* db.run("DELETE FROM schema_meta WHERE key = ?", `quota:${pool}`)
@@ -160,7 +160,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         return state
       })
 
-    /** run の結果に載ってきた枠シグナルを記録する。健全なら既存状態を消す。 */
+    /** run の結果に含まれるクォータシグナルを記録する。利用可能なら既存の抑止状態を消す。 */
     const noteQuota = (signal: QuotaSignal, at: string, nowMs: number) =>
       Effect.gen(function* () {
         const strained =
@@ -192,7 +192,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         const halt = yield* readHalt
         if (halt) return yield* Effect.fail(new Halt({ reason: halt.reason, at: halt.at }))
 
-        // 2. 枠クールダウン — 窓が明ければ自動で戻る。この枠だけ避ける。
+        // 2. クォータによる再実行抑止 — リセット時刻を過ぎれば自動解除する。この pool だけ避ける。
         const cooldown = yield* quotaCooldown(opts.pool, opts.nowMs)
         if (cooldown) {
           return yield* Effect.fail(
@@ -200,13 +200,13 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
           )
         }
 
-        // 3. 日次 run 数 — 繰り返しの歯止め。境界はユーザーの1日(core/time.ts)。
-        // UTC で切るとユーザーの暦日とずれる。Asia/Tokyo なら朝9時に枠が戻る。
+        // 3. 日次 run 数 — 異常反復を止める安全上限。境界はユーザーの1日(core/time.ts)。
+        // UTC で切るとユーザーの暦日とずれる。Asia/Tokyo なら現地時刻の0時に上限がリセットされる。
         //
         // halt は立てない。1回ごとに課金される前提なら上限に当たること自体が
-        // 「金が漏れている」の合図になるが、定額枠ではそうではない。
+        // 想定外の従量課金を示すが、定額利用ではそうではない。
         // ここで halt を立てると、翌日には自動で戻るはずの上限が、人が `oz resume` を打つまで
-        // 対話まで含めた全停止として残る(3b の自走枠で halt を立てないのと同じ判断)。
+        // 対話まで含めた全停止として残る(3b の自律実行上限で halt を設定しないのと同じ判断)。
         const day = dayRange(opts.at)
         const row = yield* db.get(
           "SELECT COUNT(*)n FROM ledger WHERE role IS NOT NULL AND at >= ?AND at < ?",
@@ -218,9 +218,9 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
           return yield* Effect.fail(new DailyRunLimit({ count: runs, limit: config.dailyRuns }))
         }
 
-        // 3b. 自走枠 — tick が対話の取り分まで食べないように仕切る。
-        // ここでは halt を立てない。自走が枠を使い切っただけで人との対話まで止めるのは行き過ぎで、
-        // 翌日には自動で戻るべきもの(halt は人が解除するまで明けない)。
+        // 3b. 自律実行上限 — tick が対話用の実行回数まで消費しないよう分離する。
+        // ここでは halt を設定しない。自律実行が日次上限に達しただけで人との対話まで止めるのは行き過ぎで、
+        // 翌日には自動で戻るべきもの(halt は人が解除するまで解除されない)。
         if (opts.lane === "autonomous") {
           const a = yield* db.get(
             "SELECT COUNT(*)n FROM ledger WHERE role = ?AND at >= ?AND at < ?",
@@ -234,10 +234,10 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
           }
         }
 
-        // ここから下は USD 会計だけ。定額枠(quota)の run は限界費用 0 なので USD 上限に意味が無い。
+        // ここから下は USD 会計だけ。定額利用(quota)の run は追加費用 0 なので USD 上限に意味が無い。
         if (opts.meter !== "usd") return
 
-        // 4. 単価未登録の事前拒否(記録されずに USD 上限を素通りする穴を塞ぐ)。
+        // 4. 単価未登録の事前拒否(記録されずに USD 上限判定を通過する経路を防ぐ)。
         if (opts.hasPricing && !opts.hasPricing(opts.model)) {
           return yield* Effect.fail(new UnpricedModel({ model: opts.model }))
         }

@@ -501,16 +501,16 @@ function buildTools(state: TurnState) {
           Effect.gen(function* () {
             const proposals = yield* Proposals
             const p = yield* proposals.settle(id, note)
-            return `提案 ${p.id.slice(0, 8)}「${p.summary}」に結論を残した: ${note}。これでこの件では起こされない(承認待ちのままで、一覧には残る)。`
+            return `提案 ${p.id.slice(0, 8)}「${p.summary}」に結論を残した: ${note}。これでこの件は次回の実行条件から外れる(承認待ちのままで、一覧には残る)。`
           }),
         ),
     }),
 
-    // ── 次に起きたとき何を見るかを自分で置いていくための道具。
-    // これが無いと、tick で起きても手掛かりが無く、毎回ゼロから考え直すことになる。
+    // ── 次回の自律実行で何を見るかを自分で登録するための道具。
+    // これが無いと、tick が実行されても参照対象が無く、毎回ゼロから考え直すことになる。
     watch: tool({
       description:
-        "決着していない件を watch に登録する。次に自分が起きたとき、これが手掛かりになる。動きが無いまま数日経つと自動で上がってくる。**同じ件を登録し直さない** — 一周回したら ran を使う。",
+        "決着していない件を watch に登録する。famulus が次に動く未対応の watch は次回の自律実行時、human が次に動く watch は一定期間動きが無いときに提示される。`ran` で対応結果を記録した後は、設定時間が経過すると再び提示される。**同じ件を登録し直さない** — 状態を確認するか自分の担当作業を進めたら ran を使う。",
       inputSchema: vs(
         v.object({
           subject: v.pipe(
@@ -525,7 +525,7 @@ function buildTools(state: TurnState) {
             v.pipe(
               v.number(),
               v.description(
-                "一周回した後、次にプロンプトに載せるまでの時間。既定は24。毎日見るものなら24、週次なら168。",
+                "対応結果を記録した後、次にプロンプトへ載せるまでの時間。既定は24。毎日扱うものなら24、週次なら168。",
               ),
             ),
           ),
@@ -547,14 +547,14 @@ function buildTools(state: TurnState) {
 
     ran: tool({
       description:
-        "watch を一周回した記録を付ける。**回したら必ず呼ぶ** — 呼ばないと同じ watch が次の tick でまたプロンプトに載る。何も出てこなかった回も呼ぶ(空振りだったこと自体が次に渡す情報)。result は次に回すときの起点になるので、件数や日付など**差分を言える形**で書く。**前に回したのを記録し忘れていたなら、そのときの時刻を `at` で渡して今から記録してよい** — 冷却は渡した時刻から数えるので、後ろへずれない。",
+        "watch の状態確認または自分の担当作業を進めた結果を記録する。**対応したら必ず呼ぶ** — 呼ばないと同じ watch が次の tick でもプロンプトに載る。変化が無くても呼ぶ(変化なしも次回の判断材料になる)。result は次回対応の基準になるので、実施内容と結果を具体的に書く。**以前の対応結果を記録し忘れていたなら、そのときの時刻を `at` で渡して今から記録してよい** — 冷却は渡した時刻から数えるので、後ろへずれない。",
       inputSchema: vs(
         v.object({
           id: v.pipe(v.string(), v.description("watch の id(先頭8文字でよい)。")),
           result: v.pipe(
             v.string(),
             v.description(
-              "回して分かったこと。次の回はこれを起点にする(例: '8/12 時点で HN 新着に該当なし。前回拾った X はその後 star +300')。",
+              "対応して分かったこと。次回はこれを判断基準にする(例: '8/12 時点で HN 新着に該当なし'、'A社への返信案を作成済み')。",
             ),
           ),
           at: v.optional(
@@ -572,7 +572,7 @@ function buildTools(state: TurnState) {
           Effect.gen(function* () {
             const att = yield* Attention
             const w = yield* att.ranWatch(id, result, at)
-            return `watch ${w.id.slice(0, 8)}「${w.subject}」を回した(通算 ${w.run_count} 回、回した時刻 ${w.last_run_at})。次に上がるのは そこから ${w.cooldown_hours} 時間後。`
+            return `watch ${w.id.slice(0, 8)}「${w.subject}」の対応結果を記録した(通算 ${w.run_count} 回、対応時刻 ${w.last_run_at})。次に対応対象になるのは、そこから ${w.cooldown_hours} 時間後。`
           }),
         ),
     }),
@@ -658,7 +658,7 @@ function buildTools(state: TurnState) {
     }),
 
     /**
-     * 拾ったものを実際に動かす経路。下書きの材料は、ここを通ったものだけが自分の言葉になる。
+     * 取得したコードや手順を実行検証する経路。下書きの材料は、ここを通ったものだけが自分の言葉になる。
      *
      * 境界と、他の道を落とした理由は src/services/Sandbox.ts の頭。
      * ここで足しているのは止める条件だけ: halt が立っているなら走らせない。
@@ -668,13 +668,13 @@ function buildTools(state: TurnState) {
     shell: tool({
       description:
         "コマンドを走らせて、出力をそのまま受け取る。**読むのではなく動かすための道具**。" +
-        "拾ったものを実際に動かし、詰まった箇所・落ちた経路・要った時間を記録に落とすのに使う。" +
+        "取得したコードや手順を実際に動かし、停止した処理段階・失敗した実行経路・要った時間を記録するのに使う。" +
         "隔離されたコンテナ(docker)の中で走るので、**ユーザーのファイルにも DB にも触れない**。" +
         "書けるのは作業場だけで、コンテナは毎回捨てられる — 残るのは作業場に置いたファイルだけ。" +
         "既定では外に出られない。clone や install が要るときだけ net を true にする。" +
         "入っているもの: node / npm / npx / python3 / pip / venv / uv / git / curl / jq / rg / make / gcc。" +
         "**apt は通らない**(非 root)。python は uv か pip、それ以外は npx で足りる範囲でやる。" +
-        "落としたパッケージ(npm / pip / uv)は作業場をまたいで共有されるので、二度目は取り直さない。" +
+        "取得したパッケージのキャッシュ(npm / pip / uv)は作業場をまたいで共有されるので、二度目は取得し直さない。" +
         "上限は3分 / メモリ 2GB。返るのは出力の末尾 12,000字。" +
         "**短い単位に割る** — 返り値に載る残り時間を見て、尽きる前に切り上げる。" +
         "同じ作業場の名前を渡せば置いたファイルは残るので、続きは次の tick でやればよい。" +
@@ -722,7 +722,7 @@ function buildTools(state: TurnState) {
             const mem = yield* Memory
             const dir = runDir(workspace)
             // DB に載せる名前は正規化後のほう。モデルが書いた綴りをそのまま入れると、
-            // 一覧の名前で `shell` を呼び直したときに別のディレクトリが立つ。
+            // 一覧の名前で `shell` を呼び直したときに別のディレクトリが作成される。
             const name = basename(dir)
             if (purpose) yield* noteWorkspace(name, purpose)
             const unnamed = !purpose && (yield* purposeOf(name)) === undefined
@@ -776,7 +776,7 @@ function buildTools(state: TurnState) {
 
     /**
      * ユーザーに届ける経路。`remember` は自分の側に残すだけで、ユーザーは `oz recall` を
-     * 打たない限り読まない。読ませたいものはここから外へ押す。
+     * 打たない限り読まない。読ませたいものはここから Discord へ送る。
      * 承認は要らない — 出るのはユーザーしか居ない場所(DM か、ユーザーが用意した囲いの中)だけ。
      *
      * 出し先は Discord の会話。`draft` とは場所を分ける — あちらは押して返す文、
@@ -786,7 +786,7 @@ function buildTools(state: TurnState) {
       description:
         "ユーザーに直接届ける(Discord の会話に出る)。**用があるときだけ**。相手が今すぐ知りたいこと・" +
         "知らないと選べないこと・こちらが動いた結果だけを出す。作業の経過、気付きの共有、起きた報告は出さない — " +
-        "鳴った回数が増えるほど次に鳴ったとき読まれなくなる。届いて困らないかではなく、**鳴らす価値があるか**で決める。",
+        "通知回数が増えるほど次の通知が読まれにくくなる。届いて困らないかではなく、**通知する価値があるか**で決める。",
       inputSchema: vs(
         v.object({
           title: v.pipe(
@@ -989,7 +989,7 @@ function buildTools(state: TurnState) {
             // 入力は3列(素・キャッシュ読み・キャッシュ書き)の和。今日の run を全部足したもの。
             return (
               `${t.day}: run ${t.runs} 回 / 入力 ${t.inTok} tok・出力 ${t.outTok} tok` +
-              ` / 影の値段 $${t.usd.toFixed(4)} / ${states.join(" / ")}`
+              ` / 従量課金換算 $${t.usd.toFixed(4)} / ${states.join(" / ")}`
             )
           }),
         ),

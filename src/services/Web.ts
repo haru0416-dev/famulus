@@ -273,7 +273,7 @@ export function renderFeed(xml: string): string | undefined {
  * ここで止めているのは、これ以上削ると中身を消すから:
  * 重複 DOM の繰り返しを落とすには窓付きの除去が要り、正当に並ぶ表の行まで巻き込む。
  * 短い行の連続はナビの残骸ではなく、リンク集や分類一覧というページの中身であることが多い。
- * どちらも枠を食うだけで、間違った中身を渡す欠陥ではない。
+ * どちらもコンテキスト容量を使うだけで、間違った中身を渡す欠陥ではない。
  * JS で後から入る値(`読込中...` のまま届く値段など)は、この道からは取れない。
  */
 export function toText(raw: string, contentType: string): string {
@@ -445,14 +445,14 @@ export function detour(url: string): string | undefined {
     return `npmjs.com は 403 で弾かれる。https://registry.npmjs.org/${pkg ?? "<パッケージ名>"}/latest を開く`
   }
   if (isHost(u, "x.com") || isHost(u, "twitter.com")) {
-    // 取りに行く前に断る(`refusedBeforeFetch`)。理由は2つ。直に引いても JS の殻しか返らず、
+    // 取りに行く前に断る(`refusedBeforeFetch`)。理由は2つ。直に引いても本文を含まないクライアント描画用 HTML しか返らず、
     // かつ `x.com/robots.txt` が `Disallow: /` で本文の取れる API も全部断られている。
     // 投稿の中身は `search` の `x` から読む(索引の要約で、X を叩いていない)。
     const who = /^\/([A-Za-z0-9_]{1,15})\/status\/\d+/.exec(u.pathname)?.[1]
     // 「取れない」で終わらせると読み手はそこで諦めて、search に出ている投稿本文を
     // 使わずに終える。行き先まで言う。
     return (
-      "robots で断られていて、開いても JS の殻しか返らない。**ただし投稿の本文は search で読める** — " +
+      "robots で断られていて、開いても本文を含まないクライアント描画用 HTML しか返らない。**ただし投稿の本文は search で読める** — " +
       `\`where: ["x"]\` で引くと、要約に投稿の文字そのものが入る` +
       (who ? `。この人に絞るなら語に \`from:${who}\`` : "")
     )
@@ -680,7 +680,7 @@ function thinNote(p: {
 /**
  * 全文から語を探して、当たりの前後だけを返す。
  *
- * 窓を進めるだけでは大きなページに手が届かない。40万字の JSON を `MAX_CHARS` 刻みで読むと
+ * 読み取り範囲を順に進めるだけでは大きなページの目的箇所に届かない。40万字の JSON を `MAX_CHARS` 刻みで読むと
  * 十数ターン掛かり、1ターンごとにモデル呼び出しが要る。語で当てて前後だけ返す道を別に置く。
  */
 const FIND_MAX = 6
@@ -714,10 +714,10 @@ function slice(doc: CachedDoc, offset: number, agoSec: number | undefined): Fetc
   if (doc.note) notes.push(doc.note)
   if (offset > 0 && text.length === 0)
     notes.push(`このページは全 ${doc.full.length}字で、${offset}字目より先は無い。続きを探すなら別の出典へ。`)
-  // 大きいページを窓で少しずつ読ませない。回数を数字で見せておくと、offset を刻む前に find へ行ける。
+  // 大きいページを固定長の範囲で少しずつ読ませない。回数を数字で見せておくと、offset を刻む前に find へ行ける。
   if (more && doc.full.length > MAX_CHARS * 3)
     notes.push(
-      `このページは全 ${doc.full.length}字。窓(${MAX_CHARS}字)で頭から読むと ${Math.ceil(doc.full.length / MAX_CHARS)} 回かかる。` +
+      `このページは全 ${doc.full.length}字。${MAX_CHARS}字ずつ頭から読むと ${Math.ceil(doc.full.length / MAX_CHARS)} 回かかる。` +
         `探すものが決まっているなら offset を刻まず \`find\` に語を渡す(当たった箇所の前後だけ返る)。`,
     )
   if (agoSec !== undefined)
@@ -740,7 +740,7 @@ function search(doc: CachedDoc, needle: string): FetchedPage {
   const notes = [doc.note].filter((s): s is string => Boolean(s))
   if (hit.count === 0)
     notes.push(
-      `「${needle}」はこのページ(全 ${doc.full.length}字)に無い。綴りを変えるか、別のページへ。**無いものを窓で探し直さない。**`,
+      `「${needle}」はこのページ(全 ${doc.full.length}字)に無い。綴りを変えるか、別のページへ。**読み取り範囲を変えて探し直さない。**`,
     )
   return {
     url: doc.url,
@@ -776,7 +776,7 @@ export async function fetchPage(raw: string, opts: FetchOptions = {}): Promise<F
 
 /**
  * 実際に取りに行く。転送は自分で追い、各転送先を内側判定に通す。
- * 取得上限まで組み立てた本文を返し、12,000字の窓へ切るのは呼び出し側(`slice`)。
+ * 取得上限まで組み立てた本文を返し、12,000字の範囲へ切るのは呼び出し側(`slice`)。
  */
 async function fetchFresh(raw: string): Promise<CachedDoc> {
   // 断られていると分かっている先へは、確かめに行かない。`detour` は普通は取ってから

@@ -255,7 +255,7 @@ test("同じ本文の繰り返しは畳まれる(1つの話題で枠を埋めな
   })
 })
 
-test("recall の描画は JSON の殻を出さず、どの層の1行かを示す", async () => {
+test("recall の描画は JSON 構造を出さず、どの層の1行かを示す", async () => {
   await withHarness(async (h) => {
     const out = await h.run(
       Effect.gen(function* () {

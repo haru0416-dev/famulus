@@ -3,14 +3,14 @@
  * ユーザー向け管理 CLI。提案の承認・却下、停止、状態確認、記憶や watch の操作をまとめる。
  * 提案の承認を記録する入口はこの CLI だけで、承認後の実行コネクタはまだ無い。
  *
- *   oz status              … 停止/枠/今日の使用量/承認待ち件数/tick の生死
+ *   oz status              … 停止/クォータ/今日の使用量/承認待ち件数/tick の最終実行状態
  *   oz halt <理由>         … 全停止。自動では明けない
  *   oz resume              … 停止解除
- *   oz attention           …tick が今なにを見ているか(watch・問い・次に起きる条件)
+ *   oz attention           …tick の処理対象(watch・問い・次回の実行条件)
  *   oz journal [n]         …tick が実際に何をしたか(呼んだ道具・残った行・モデル使用量)
  *   oz answer <id> <答え>  … 問いに答えて閉じる
- *   oz drop <id> <理由>    … 追わないと決めた問いを畳む(答えずに閉じる)
- *   oz watch <やること>    …watch に置く(既定は famulus = tick の起床理由になる)
+ *   oz drop <id> <理由>    … 追跡を終了する問いを、答えずに取り下げる
+ *   oz watch <やること>    …watch に置く(既定は famulus = tick の実行条件になる)
  *   oz unwatch <id>        … 決着した watch を閉じる
  *   oz list [status]       … 提案一覧(既定は承認待ち)
  *   oz show <id>           … 承認カード全文(id は前方一致でよい)
@@ -18,8 +18,8 @@
  *   oz deny <id> <理由>    … 却下。理由は次の生成へ還流させるので必須
  *   oz recall <語>         … 記憶を引く
  *   oz belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
- *   oz dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定に上げる(1回ぶんでは見えない値)
- *   oz cleanup [日数] [--dry]… `.data/` の増え続けるものを落とす(events は触らない)
+ *   oz dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定値として保存する(1回ぶんでは見えない値)
+ *   oz cleanup [日数] [--dry]… `.data/` の増え続けるものを削除する(events は触らない)
  *   oz ws                  … 作業場の一覧(名前・用途・大きさ・最後に触った時刻)
  *   oz selfdev [--fresh]   … 自分のソースの clone を作業場に置く(コンテナから直せるようにする)
  *   oz intake [--dry] [n]  … 過去の会話を圧縮して DB に入れる(DB の入口)
@@ -61,10 +61,10 @@ const place = (ch: string | undefined, dm: string | undefined) =>
 
 const USAGE = `oz — open-zero の承認 CLI
 
-  oz status                今の停止状態・枠・今日の使用量・承認待ち件数・tick の生死
+  oz status                今の停止状態・クォータ・今日の使用量・承認待ち件数・tick の最終実行状態
   oz halt <理由>           全停止(自動解除しない)
   oz resume                停止解除
-  oz attention             tick の視野(watch・未解決の問い・次に起きる条件)
+  oz attention             tick の処理対象(watch・未解決の問い・次回の実行条件)
   oz journal [n]           tick の実働(既定 10 回)。呼んだ道具・残った行数・実費を、
                            自分で書いた報告文と分けて出す
   oz answer <id> <答え>    問いに答えて閉じる(ユーザーの答えは確認済みとして入る)
@@ -218,7 +218,7 @@ const program = (argv: readonly string[]) =>
           `${t.day}: run ${t.runs} 回(うち自走 ${Number(a?.n ?? 0)}/${BUDGET.autonomousRuns})` +
             ` / 入力 ${fmtTok(t.inTok)} 出力 ${fmtTok(t.outTok)}` +
             ` / 実費 $${t.usd.toFixed(4)}${t.unpriced > 0 ? ` / 単価未登録 ${t.unpriced} 件` : ""}`,
-          // tick は黙って死ぬ。最後に呼ばれた時刻を出しておかないと、
+          // tick は通知なしに停止しうる。最後に呼ばれた時刻を出しておかないと、
           // 「静かなのは用が無いからか、止まっているからか」がユーザーに区別できない。
           last
             ? `tick: 最終 ${last}(最後に実際に動いたのは ${lastActive ?? "まだ無い"})`
@@ -477,7 +477,7 @@ const program = (argv: readonly string[]) =>
         let stopped = ""
         for (const ref of refs) {
           // 途中で枠が閉じたら、そこで止めて済んだぶんは残す。
-          // 全体を1トランザクションにすると、最後の1件の枠切れでそれまで取り込んだぶんまで消える。
+          // 全体を1トランザクションにすると、最後の1件のクォータ枯渇でそれまで取り込んだぶんまで消える。
           const r = yield* intake.ingest(ref).pipe(
             Effect.catchAll((e) => {
               stopped = isRefusal(e) ? describeRefusal(e) : describe(e)

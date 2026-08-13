@@ -79,23 +79,23 @@ test("中の時計の帯はホストと同じ", () => {
 
 /**
  * キャッシュを作業場の外へ出す。`HOME=/work` のままだと npm も pip も uv も
- * 作業場ごとに同じものを落とす(実測: 別の作業場で uv が 2041ms → 3274ms、57MB を二重に持つ)。
+ * 作業場ごとに同じパッケージを取得する(実測: 別の作業場で uv が 2041ms → 3274ms、57MB を二重に持つ)。
  */
-test("落としたものは作業場の外に置く", () => {
+test("パッケージキャッシュは作業場の外で共有する", () => {
   const args = dockerArgs("npm i", { workDir: "/tmp/w", name: "oz-run-test" })
   const env = args.filter((_, i) => args[i - 1] === "-e")
   for (const k of ["npm_config_cache=/cache/npm", "PIP_CACHE_DIR=/cache/pip", "UV_CACHE_DIR=/cache/uv"]) {
     assert.ok(env.includes(k), `${k} が渡っていない: ${env.join(" ")}`)
   }
-  // 置き場が `.data/runs` の下にあると、cleanup が作業場として数えて 14 日で落とす。
+  // 置き場が `.data/runs` の下にあると、cleanup が作業場として数えて 14 日で削除する。
   assert.ok(!cacheRoot().startsWith(`${runsRoot()}/`), "キャッシュが作業場の置き場の中にある")
 })
 
 /**
- * 時間切れの片付けが飛ばなかった回を後から拾う。名前の末尾の pid だけで決める。
- * 生きているものを消すと、走っている最中の走行が理由不明で落ちる。
+ * 時間切れ時の削除が実行されなかった回を後から処理する。名前の末尾の pid だけで決める。
+ * 起動元プロセスが存在するものを消すと、実行中の走行が理由不明で停止する。
  */
-test("主のいないコンテナだけ消す", () => {
+test("起動元のホストPIDが存在しないコンテナだけ消す", () => {
   const mine = process.pid
   const out = orphanNames(
     [`oz-run-abc-${mine}`, "oz-run-abc-999999", "oz-run-abc-notapid", "oz-run-abc-0"],

@@ -114,11 +114,11 @@ test("材料の見出しに、1回ぶんではないと書いてある", async (
       await h.run(seed.pipe(Effect.andThen(dream({ at: AT }))))
       const prompt = h.calls[0]?.prompt ?? ""
       assert.match(prompt, /1回ぶんではない/)
-      // 窓を広げたぶんの判定は system 側に足す。keeper の本文は書き換えない。
+      // 対象期間を広げたぶんの判定は system 側に足す。keeper の本文は書き換えない。
       const system = h.calls[0]?.systemPrompt ?? ""
       assert.match(system, /別々の機会/)
       // 足すだけで、keeper の本文は残っている(判定を2本に割らない)。
-      assert.match(system, /写せないなら上げません/)
+      assert.match(system, /写せないなら保存しません/)
       // 繰り返しから上げるものの名前空間を固定する(割れると片方しか引けない)。
       assert.match(system, /`interest\.` で始めます/)
     },
@@ -126,7 +126,7 @@ test("材料の見出しに、1回ぶんではないと書いてある", async (
   )
 })
 
-test("上げるものは keeper と同じ照合を通る(写せない引用は落ちる)", async () => {
+test("保存候補は keeper と同じ照合を通る(写せない引用は除外される)", async () => {
   await withHarness(
     async (h) => {
       const out = await h.run(
@@ -137,8 +137,8 @@ test("上げるものは keeper と同じ照合を通る(写せない引用は�
           return { line, cur: yield* mem.belief("week.topic") }
         }),
       )
-      assert.match(out.line, /1 件を確定へ/)
-      assert.match(out.line, /引用が材料に無く 1 件を落とした/)
+      assert.match(out.line, /1 件を確定値として保存/)
+      assert.match(out.line, /引用が材料に無く 1 件を除外した/)
       assert.equal(out.cur?.value, "月曜と火曜に同じ話をしている")
     },
     [

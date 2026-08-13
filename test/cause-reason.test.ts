@@ -2,14 +2,14 @@
  * 止まった理由がそのまま DB に残るかを見る。
  *
  * 元の実装は `agent.read` の失敗を全部「300秒で切られた」として記録していた。
- * 実際に自走枠を使い切って 211 秒で止まった回も、DB には時間切れとして残っていて、
+ * 実際に自律実行上限へ到達して 211 秒で止まった回も、DB には時間切れとして残っていて、
  * 記録を読んでも何を直せばいいか分からなかった(docs/adr/0011)。
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { causeReason } from "../src/core/errors.ts"
 
-/** 枠(Flue)が投げていた形。理由は外側に出ず、内側の `meta.reason` にだけあった。 */
+/** Flue ランタイムが投げていた形。理由は外側に出ず、内側の `meta.reason` にだけあった。 */
 const metaError = (reason: string): Error => {
   const inner = Object.assign(new Error("dispatch failed"), {
     meta: { operation: "dispatch(sub_01X)", reason },
@@ -42,9 +42,9 @@ test("取り出せるものが無ければ元の文字列を返す", () => {
 
 test("何段包まれていても辿る", () => {
   const deep = Object.assign(new Error("外"), {
-    cause: { cause: metaError("枠 claude-max はクールダウン中") },
+    cause: { cause: metaError("pool claude-max は再実行抑止中") },
   })
-  assert.equal(causeReason(deep), "枠 claude-max はクールダウン中")
+  assert.equal(causeReason(deep), "pool claude-max は再実行抑止中")
 })
 
 test("cause が輪になっていても止まる", () => {

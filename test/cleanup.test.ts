@@ -1,5 +1,5 @@
 /**
- * `.data/` を落とすほうの検査。消しすぎないことを固定する。
+ * `.data/` を削除する処理の検査。消しすぎないことを固定する。
  *
  * こちらはモデルを呼ばない代わりに、取り消せない操作をする。
  * 見るのは「残すべきものが残るか」で、消えるほうは1件ずつ数える。
@@ -59,7 +59,7 @@ const workspace = (dir: string, name: string, daysAgo: number, deepDaysAgo?: num
   return ws
 }
 
-test("しばらく触られていない作業場だけ落ちる", async () => {
+test("しばらく触られていない作業場だけ削除される", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "old", 10)
     workspace(dir, "fresh", 1)
@@ -71,14 +71,14 @@ test("しばらく触られていない作業場だけ落ちる", async () => {
 })
 
 /**
- * 続きをやっている作業場を消さない。上の階の刻は中を書き換えても動かないので、
- * そこだけ見ると「10 日前から放置」に見える。木の中で一番新しい刻で判定する。
+ * 続きをやっている作業場を消さない。ルートディレクトリの mtime は子孫を書き換えても動かないので、
+ * そこだけ見ると「10 日前から放置」に見える。全子孫の最大 mtime で判定する。
  */
-test("下の階だけ書き換えた作業場は残る", async () => {
+test("子孫ファイルが更新された作業場は残る", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "working", 10, 1)
     const line = await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans }))
-    assert.match(line, /落とすものは無かった/)
+    assert.match(line, /削除対象は無かった/)
     assert.equal(existsSync(join(dir, "runs", "working")), true)
   })
 })
@@ -89,13 +89,15 @@ test("--dry は数えるだけで消さない", async () => {
     const line = await h.run(cleanup({ at: AT, days: DAYS, dry: true, orphans: noOrphans }))
     assert.match(line, /数えただけ/)
     assert.match(line, /作業場 1 件/)
+    assert.match(line, /削除対象$/)
+    assert.doesNotMatch(line, /削除した/)
     assert.equal(existsSync(join(dir, "runs", "old")), true)
   })
 })
 
 test("作業場が1つも無くても落ちない", async () => {
   await withTmp(async (_dir, h) => {
-    assert.match(await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans })), /落とすものは無かった/)
+    assert.match(await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans })), /削除対象は無かった/)
   })
 })
 
@@ -103,7 +105,7 @@ test("作業場が1つも無くても落ちない", async () => {
  * 共有キャッシュは古さで切らない。使い回すために置いてあるので、
  * 触られていないことは消してよい理由にならない。切るのは上限だけ。
  */
-test("共有キャッシュは上限を超えたときだけ落ちる", async () => {
+test("共有キャッシュは上限を超えたときだけ削除される", async () => {
   await withTmp(async (dir, h) => {
     const cache = join(dir, "cache", "uv")
     mkdirSync(cache, { recursive: true })
@@ -111,8 +113,8 @@ test("共有キャッシュは上限を超えたときだけ落ちる", async ()
     writeFileSync(blob, "x".repeat(64 * 1024))
     age(blob, 90)
     const kept = await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans }))
-    assert.match(kept, /落とすものは無かった/)
-    assert.equal(existsSync(blob), true, "上限内のキャッシュが古さで落ちた")
+    assert.match(kept, /削除対象は無かった/)
+    assert.equal(existsSync(blob), true, "上限内のキャッシュが古さで削除された")
 
     const line = await h.run(cleanup({ at: AT, days: DAYS, cacheMaxMb: 0, orphans: noOrphans }))
     assert.match(line, /共有キャッシュ/)
@@ -162,8 +164,8 @@ test("keep を立てた作業場は古くても残る", async () => {
   })
 })
 
-/** 実体を消したら説明も落とす。残すと、実体の無い説明だけが溜まっていく。 */
-test("落とした作業場の登録も消える(--dry では消えない)", async () => {
+/** 実体を消したら説明も削除する。残すと、実体の無い説明だけが溜まっていく。 */
+test("削除した作業場の登録も消える(--dry では消えない)", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "old", 30)
     const after = await h.run(

@@ -1,13 +1,13 @@
 /**
  * 記録。全 run を1行残す。単価不明を黙って 0 円にしない(`unpriced=1` で立てる)。
  *
- * 定額枠(meter="quota")の run は `usd=0` かつ `unpriced=0` で入れる。
+ * 定額利用(meter="quota")の run は `usd=0` かつ `unpriced=0` で入れる。
  * ここが従量経路との決定的な違いで、「値段が分からないから0」ではなく「限界費用が本当に0」。
  * この2つを同じ 0 にしてしまうと、Governance の USD 上限が意味を失うか、
  * 逆に定額 run を金額で止め始める(= サブスクを買った意味を捨てる)。
  *
  * Governance の日次 run 数は `role IS NOT NULL` の行を数えるので、
- * モデルを呼んだ run は必ず role を入れる(入れないと歯止めが効かない)。
+ * モデルを呼んだ run は必ず role を入れる(入れないと日次上限を適用できない)。
  */
 import { randomUUID } from "node:crypto"
 import * as Effect from "effect/Effect"

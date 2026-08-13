@@ -6,16 +6,16 @@
  * 自走にするというのは、起動の理由を人の発話から DB の状態に移すこと。
  * このファイルがその置き換えで、systemd のタイマーから定期的に呼ばれる。
  *
- *   1. Attention.digest() …SQL だけで「起きる理由があるか」を決める。ここでモデルは呼ばない。
- *   2. 理由が無ければ何もせず終わる(枠を1回も食わない)。定期実行の大半はこの経路を通る。
- *   3. 理由があるときだけエージェントを組み立て、1回だけ投げる。
+ *   1. Attention.digest() …SQL だけでモデル実行が必要かを決める。ここでモデルは呼ばない。
+ *   2. 実行条件を満たさなければ何もせず終わる(モデル利用量を消費しない)。定期実行の大半はこの経路を通る。
+ *   3. 実行条件を満たすときだけエージェントを組み立て、1回実行する。
  *   4. 返ってきたものを system イベントとして DB に残し、既読位置を進める。
  *
- * 2 が本体。「15分ごとに推論を1回回す」形にすると、自走ではなく空回りしながら枠を食うだけになる。
- * 起こす条件は Attention 側に全部あり、ここは「起こす/起こさない」を実行するだけにしてある。
+ * 2 が本体。「15分ごとに推論を1回実行する」形にすると、用件が無い回にも利用量を消費する。
+ * 実行条件は Attention 側に集約し、ここは判定結果に従って実行するだけにしてある。
  *
- * 枠は `OPEN_ZERO_LANE=autonomous` で自走側に付け替える。日次 run 数の内訳が対話と分かれ、
- * tick が暴れても対話の取り分は残る(Governance.BUDGET.autonomousRuns)。
+ * `OPEN_ZERO_LANE=autonomous` で自律実行として計上する。日次 run 数の内訳が対話と分かれ、
+ * tick が過剰実行されても対話用の run 数は残る(Governance.BUDGET.autonomousRuns)。
  */
 import * as Effect from "effect/Effect"
 import { DRAFTING } from "./agent/drafting.ts"
@@ -67,8 +67,8 @@ function renderEvent(e: ObservedEvent): string {
 
 /**
  * tick のプロンプト。「何もしない」を正解として明示するのが要点。
- * 起こされた以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を出す。
- * 起きた理由と材料だけ渡して、動かす必要が無ければ一行で終えてよいと書く。
+ * 実行された以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を出す。
+ * 実行条件と材料だけ渡して、処理する必要が無ければ一行で終えてよいと書く。
  */
 function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspace[]): string {
   const sections: string[] = []
@@ -82,7 +82,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
         ? `いま ${d.at}。**この回で最後に書いた文が、そのまま Discord の返信として届く。**`
         : `いま ${d.at}。**ユーザーはこの場にいない** — 訊いても今は誰も答えない。`,
       "",
-      `## なぜ起きたか`,
+      `## 今回の実行条件`,
       ...d.reasons.map((r) => `- ${r}`),
     ].join("\n"),
   )
@@ -99,7 +99,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
   if (d.stalled.length > 0) {
     sections.push(
       [
-        "## 動いていない watch",
+        "## 対応対象の watch",
         // 前回の結果を一緒に渡す。無いと毎回まっさらな状態で同じ一覧を読み直すことになり、
         // 先週を踏まえた文が一度も出ない。実際に AI追跡の watch がそうなっていた。
         ...d.stalled.map((w) => {
@@ -113,12 +113,12 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
         ...(d.stalledHeld > 0
           ? [
               `他に ${d.stalledHeld} 件が冷却明けで待っているが、**この回は上の ${d.stalled.length} 件だけ見る。**`,
-              "残りは次の回に上がる。全部を見ようとしない — 一覧を読み直すだけで終わった回が実際に続いた。",
+              "残りは次回の処理対象になる。全部を見ようとしない — 一覧を読み直すだけで終わった回が実際に続いた。",
               "",
             ]
           : []),
-        "回したら `ran` で結果を残す。**何も出てこなかった回も残す** — 呼ばないと次の tick でまた上がる。",
-        "**前に回したのに記録し忘れているなら、そのときの時刻を `at` に渡して今記録する。**",
+        "状態を確認するか自分の担当作業を進めたら `ran` で結果を残す。**変化が無くても残す** — 呼ばないと次の tick でも対応対象になる。",
+        "**以前対応した結果を記録し忘れているなら、そのときの時刻を `at` に渡して今記録する。**",
         "冷却はその時刻から数えるので後ろへずれない。件名に走行記録を書き込むのではなく、ここを使う。",
       ].join("\n"),
     )
@@ -137,11 +137,12 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
         "## 返事待ちの提案(あなたは決められない。ユーザーが見るのを待っている)",
         // 前回の結論を一緒に渡す。watch の `前回:` と同じ形(docs/adr/0017)。
         ...d.pending.map((p) => {
-          const head = `- ${short(p.id)} ${p.summary}(あと ${p.daysLeft} 日で流れる)`
+          const expiry = p.daysLeft >= 0 ? `あと ${p.daysLeft} 日で期限切れ` : "期限切れ"
+          const head = `- ${short(p.id)} ${p.summary}(${expiry})`
           return p.settled_note ? `${head}\n  前回: ${p.settled_note}` : head
         }),
         "",
-        "**今回できることが無いなら `settle` で一行残す。** 残すとこの件では起こされなくなる",
+        "**今回できることが無いなら `settle` で一行残す。** 残すとこの件は次回の実行条件から外れる",
         "(一覧には残る — 承認はまだ要る)。呼ばないと、期限が近いというだけで毎回起きて、",
         "毎回同じ「あなた待ちです」を書き直すことになる。**前回の結論が既に載っているなら、",
         "同じことをもう一度書かない。**状況が動いたときだけ `settle` を上書きする。",
@@ -156,7 +157,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
         "## 断られた提案(同じ形をもう一度出さない)",
         ...d.refused.map((p) => `- ${p.summary}\n  → ${p.reason}`),
         "",
-        "**理由が「前提が変わった」「その話ごと畳んだ」なら、その用件は出さない。**",
+        "**理由が「前提が変わった」「その用件自体を中止した」なら、その用件は出さない。**",
         "日付や文面を差し替えて出し直してよいのは、断られた理由がその一点だけだったとき。",
       ].join("\n"),
     )
@@ -176,7 +177,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
     )
   }
 
-  // 下書きの規律は出す日にだけ載せる。毎回渡すと、書かない回のぶんだけ枠を食う。
+  // 下書きの規律は出す日にだけ載せる。毎回渡すと、書かない回にもコンテキスト容量を使う。
   if (d.draftDue) {
     sections.push(
       [
@@ -184,7 +185,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
         "1日に1本、外に出せる文を `draft` で置く。出す先は Zenn を想定した記事。",
         "",
         "**書き始める前に `recall` で自分の走行記録を引く。** 切られた tick、通らなかった経路、",
-        "効かなかった設定、使った枠 — 自走するエージェントを実際に動かして壊れた記録は他の誰も持っていない。",
+        "効かなかった設定、使ったモデル利用量 — 自走するエージェントを実際に動かして失敗した記録は他の誰も持っていない。",
         "引いて何も出てこなければ `draft` を呼ばず、「材料が無い」と一行書いて終える。",
         "",
         DRAFTING,
@@ -206,9 +207,9 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
           ]
         : [
             "**書いても届かない。** ここで書いたものは自分の側に残るだけで、ユーザーは読みに来ない。",
-            "読んでほしいものがあるなら `tell` でユーザーの手元へ押す。ただし**用があるときだけ**",
-            "— 動いた結果、知らないと選べないこと、期限が迫っているもの。経過や気付きは押さない。",
-            "鳴る回数が増えるほど、次に鳴ったときに読まれなくなる。",
+            "読んでほしいものがあるなら `tell` で Discord に通知する。ただし**用があるときだけ**",
+            "— 動いた結果、知らないと選べないこと、期限が迫っているもの。経過や気付きだけでは通知しない。",
+            "通知回数が増えるほど、次の通知が読まれにくくなる。",
           ]),
       "",
       "**調べ直すより、手元にあるもので終える。** tick は数分で切られる。途中で切られると",
@@ -237,9 +238,9 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
           ]
         : d.stalled.length > 0
           ? [
-              "**上の「動いていない watch」から、この回で少なくとも1件は回す。** 載っているのは",
-              "冷却が明けたものだけで、読み直すために出しているのではない。回して `ran` に残せば、",
-              "**何も出てこなかった回でもこの回の成果になる。** 一覧を眺めて終えた回だけが何も残さない。",
+              "**上の「対応対象の watch」から、この回で少なくとも1件に対応する。** human が次に動くものは状態を確認し、",
+              "famulus が次に動くものは自分の担当作業を進める。対応して `ran` に残せば、",
+              "**変化が無い結果でもこの回の成果になる。** 一覧を眺めて終えた回だけが何も残さない。",
               "そのうえで**新しく仕事を作らない。** 用が無いのに watch を増やしたり提案を出したりしない。",
             ]
           : [
@@ -273,7 +274,7 @@ const blocked = Effect.gen(function* () {
     )
 })
 
-/** tick の回数だけ数えておく。行を増やさずに「生きているか」が分かる最小の痕跡。 */
+/** tick の起動回数だけ数える。行を増やさずに最終実行状態を確認するための最小記録。 */
 const bumpCount = (key: string) =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -286,7 +287,7 @@ async function tick(): Promise<string> {
   const d = await run(
     Effect.gen(function* () {
       // digest より先に読む — 届いていた文がそのまま未読の入力になり、「ユーザーから
-      // 言われた」ことが起きる理由になる。ここが後だと、返事は次の tick まで読まれない。
+      // 言われた」ことが実行条件になる。ここが後だと、返事は次の tick まで読まれない。
       // poll が先に取り込んでいれば0件で通り、DB に残っているぶんが digest に出る。
       const arrived = yield* drainInbox
       if (arrived > 0) log(`受信箱から ${arrived} 件`)
@@ -295,21 +296,21 @@ async function tick(): Promise<string> {
     }),
   )
 
-  // ── 起きる理由が無い。ここで終わるのが正常。モデルは1回も呼ばない。
+  // ── 実行条件が無い。ここで終わるのが正常。モデルは1回も呼ばない。
   if (d.idle) {
     // ただし1日1回だけ、何日ぶんかの見直しをここで回す(docs/adr/0018)。
     // idle の回に置く理由は、返信を待たせないため。見直しは Luna で 30 秒前後かかるので、
-    // 話しかけられた回に挟むとその秒数だけ返事が遅れる。起きる理由が無い回なら誰も待っていない。
-    // その日に idle の回が一度も来なければ翌日へ回る — 窓は 7 日あり、`dream:through` が
+    // 話しかけられた回に挟むとその秒数だけ返事が遅れる。実行条件が無い回なら誰も待っていない。
+    // その日に idle の回が一度も来なければ翌日へ回る — 対象期間は 7 日あり、`dream:through` が
     // 進んだところを覚えているので、飛ばした日ぶんの材料は次の回にそのまま出てくる。
     const dreamed = (await run(dreamDue(d.at)))
-      ? await run(dream()).catch((e: unknown) => `dream: 落ちた(${causeReason(e)})`)
+      ? await run(dream()).catch((e: unknown) => `dream: 失敗(${causeReason(e)})`)
       : undefined
     if (dreamed) log(dreamed)
-    // 落とすほうも1日1回(docs/adr/0019)。印は別に持つ — 見直しが落ちた日に
-    // 掃除まで止まると、増える側だけが進む。こちらはモデルを呼ばないので枠にも関係しない。
+    // 削除処理も1日1回(docs/adr/0019)。実行済み状態は別に持つ — 見直しが失敗した日に
+    // 掃除まで止まると、データの増加だけが進む。こちらはモデルを呼ばないのでクォータにも関係しない。
     const swept = (await run(cleanupDue(d.at)))
-      ? await run(cleanup()).catch((e: unknown) => `cleanup: 落ちた(${causeReason(e)})`)
+      ? await run(cleanup()).catch((e: unknown) => `cleanup: 失敗(${causeReason(e)})`)
       : undefined
     if (swept) log(swept)
     const n = await run(
@@ -318,7 +319,7 @@ async function tick(): Promise<string> {
         const db = yield* Db
         const mem = yield* Memory
         const n = yield* bumpCount("tick:idle_count")
-        // 落ちた回にも印を付ける。付けないと、同じ落ち方を 15 分ごとに1日じゅう繰り返す。
+        // 失敗した回にも実行済み状態を付ける。付けないと、同じ失敗を 15 分ごとに1日じゅう繰り返す。
         if (dreamed) yield* db.setMeta(DREAM_DAILY, dayRange(d.at).key)
         if (swept) yield* db.setMeta(CLEANUP_DAILY, dayRange(d.at).key)
         const lines = [dreamed, swept].filter(Boolean) as string[]
@@ -346,16 +347,16 @@ async function tick(): Promise<string> {
   const stop = await run(blocked)
   if (stop) return `見送った: ${stop}`
 
-  // 話しかけられて起きたのか、自分の都合で起きたのか。ここで返信の宛先が決まる。
+  // ユーザー入力による実行か、自律条件による実行か。ここで返信の宛先が決まる。
   // owner の未読があるなら、この回の最後の文は DB ではなくユーザーの画面へ出す。
   const spokenTo = d.newEvents.some((e) => e.source === "owner")
-  log("起きる:", d.reasons.join(" / "), spokenTo ? "(返信)" : "")
+  log("実行条件:", d.reasons.join(" / "), spokenTo ? "(返信)" : "")
 
-  // 自走枠であることを、エージェントを組み立てる前に立てる。
+  // 自律実行区分であることを、エージェントを組み立てる前に設定する。
   // lane() は呼び出し時評価なのでこれだけで足りるが、モデル id は createAssistant() の
   // 時点で確定するので、差し替えるならこの順序でなければ効かない。
   process.env.OPEN_ZERO_LANE = "autonomous"
-  // 道具一式を読み込むのは、起きると決まってから。idle の回(定期実行の大半)は
+  // 道具一式を読み込むのは、モデル実行が必要と決まってから。idle の回(定期実行の大半)は
   // ここを通らないので、その回の起動は DB を1回引くだけで終わる。
   const { createAssistant } = await import("./agent/assistant.ts")
 
@@ -365,11 +366,11 @@ async function tick(): Promise<string> {
     // 走らせるかどうかを決める時点では過去の話になっている(src/core/deadline.ts)。
     startDeadline(TIMEOUT_MS)
     // 切られてもここで受け止める。投げ返すと commit に辿り着かないので冷却の起点が進まず、
-    // 次のタイマーが同じ理由で起きて同じだけ焼いて同じように落ちる。落ちた回も1回動いた回として
+    // 次のタイマーが同じ条件で実行され、同量のクォータと時間を消費して同じ理由で失敗する。失敗した回も1回動いた回として
     // 締める — 実際にモデルは走り、道具も動いて、その跡は DB に残っている。
     const deadline = AbortSignal.timeout(TIMEOUT_MS)
     const prompt = buildPrompt(d, spokenTo, await run(listWorkspaces))
-    // 「載せた」を記録するのはここ。digest の中ではない — digest は起きる理由が無い回にも
+    // 「載せた」を記録するのはここ。digest の中ではない — digest は実行条件が無い回にも
     // 走るので、そこで印を付けると誰も読んでいない一覧を載せたことにして順番だけが進む。
     // 切られた回でも記録は残す。載ったことは事実で、次は他のものに順番を渡す(docs/adr/0028)。
     if (d.stalled.length > 0) {
@@ -384,7 +385,7 @@ async function tick(): Promise<string> {
     const turn = await assistant.respond(prompt, { signal: deadline })
     const ms = Date.now() - began
     // 時間切れと、それ以外の止まり方を混ぜない。混ぜると「420秒で切られた」だけが DB に残り、
-    // 自走枠の使い切りもモデル側の落ちも同じ顔になる。次の回で何を直せばいいか読めなくなる。
+    // 自律実行上限への到達もモデル側の失敗も同じ文言になる。次回に何を直せばいいか読めなくなる。
     const cutOff = turn.cutOff
       ? deadline.aborted
         ? `${Math.round(TIMEOUT_MS / 1000)}秒で時間切れ`
@@ -482,7 +483,7 @@ const main = async (): Promise<void> => {
   try {
     console.log(await tick())
   } catch (e) {
-    // 拒否(halt / 枠 / 自走枠の使い切り)は失敗ではなく設計どおりの結果。
+    // 拒否(halt / クォータ再実行抑止 / 自律実行上限)は失敗ではなく設計どおりの結果。
     // 既読位置を進めないので、窓が開いた次の tick が同じ入力をもう一度見る。
     const cause = e instanceof Error && "cause" in e ? (e as { cause?: unknown }).cause : undefined
     const inner = isRefusal(cause) ? cause : e
