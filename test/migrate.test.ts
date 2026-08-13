@@ -1,5 +1,5 @@
 /**
- * マイグレーションの検査。**中身の入った DB で確かめる。**
+ * マイグレーションの検査。中身の入った DB で確かめる。
  *
  * `schema.sql` は全部 `CREATE TABLE IF NOT EXISTS` なので、空の DB では新旧どちらの形も
  * 同じように「通ってしまう」。壊れるのは既に行がある DB のときだけで、しかも壊れ方は静かで、
@@ -67,7 +67,7 @@ test("旧い形の DB は開くだけで新しい形になる — 行は落ち�
       }),
     )
     assert.equal(out.cur?.value, "札幌", "既にあった行が消えていない")
-    // **いつから真だったかは旧い形には無い。** 推測せず「DB が知った時刻」をそのまま置く。
+    // いつから真だったかは旧い形には無い。推測せず「DB が知った時刻」をそのまま置く。
     assert.equal(out.cur?.validFrom, "2026-01-01T00:00:00Z")
     assert.equal(out.cur?.validUntil, null)
     assert.equal(out.after?.value, "東京")
@@ -104,7 +104,7 @@ test("cache_write の無い ledger は列が足され、既存の行は残る", 
   assert.deepEqual(migrate(d), ["ledger:cache_write"], "1回目は掛かる")
   assert.deepEqual(migrate(d), [], "2回目は何もしない")
   const row = d.prepare("SELECT in_tok, out_tok, cache_write FROM ledger").get() as Record<string, number>
-  // **過去の行は復元できない。** 当時の cache_creation は残っていないので 0 のまま置く(推測で埋めない)。
+  // 過去の行は復元できない。当時の cache_creation は残っていないので 0 のまま置く(推測で埋めない)。
   assert.deepEqual([row.in_tok, row.out_tok, row.cache_write], [2, 500, 0])
   d.close()
 })
@@ -127,7 +127,7 @@ test("発火の記録を持たない watchlist は列が足され、既存の wa
     .prepare("SELECT last_run_at, cooldown_hours, run_count, last_result, last_shown_at FROM watchlist")
     .get() as Record<string, unknown> | null
   assert.ok(row, "移行したはずの行が引けない")
-  // **回した跡も載せた跡もどこにも残っていない。** `opened_at` で埋めると、
+  // 回した跡も載せた跡もどこにも残っていない。`opened_at` で埋めると、
   // 回していないものを回したことにし、載せていないものを載せたことにする。
   assert.deepEqual(
     { ...row },
@@ -150,7 +150,7 @@ test("結論の置き場を持たない proposals は列が足され、既存の
   assert.deepEqual(migrate(d), ["proposals:settled"], "1回目は掛かる")
   assert.deepEqual(migrate(d), [], "2回目は何もしない")
   const row = d.prepare("SELECT settled_at, settled_note FROM proposals").get() as Record<string, unknown>
-  // **言った跡はどこにも残っていない。** created_at で埋めると、言っていないものを言ったことにする。
+  // 言った跡はどこにも残っていない。created_at で埋めると、言っていないものを言ったことにする。
   assert.deepEqual({ ...row }, { settled_at: null, settled_note: null })
   d.close()
 })
@@ -165,7 +165,7 @@ test("外した経路の印は落ちる — 残すと「まだその経路があ
   assert.deepEqual(migrate(d), ["drop:ntfy_cursor"], "1回目は落ちる")
   assert.deepEqual(migrate(d), [], "2回目は何もしない")
   const rows = d.prepare("SELECT key FROM schema_meta ORDER BY key").all() as { key: string }[]
-  // **他の印は巻き込まない。** tick の記録が消えると、動いていた事実が消える。
+  // 他の印は巻き込まない。tick の記録が消えると、動いていた事実が消える。
   assert.deepEqual(
     rows.map((r) => r.key),
     ["tick:last"],
@@ -214,7 +214,7 @@ test("空の DB では移行するものが無い(新規は schema.sql がその
 /**
  * 継いだ枠を CHECK から落とす(docs/adr/0033)。
  *
- * ここで見るのは**制約の文面**で、列は1つも動かない。`PRAGMA table_info` では差が出ないので、
+ * ここで見るのは制約の文面で、列は1つも動かない。`PRAGMA table_info` では差が出ないので、
  * `sqlite_master` の文を読む。列で見ていると、掛かっていないのに掛かったことになる。
  */
 const tableSql = (d: ReturnType<typeof openDb>, name: string): string =>
@@ -227,7 +227,7 @@ const tableSql = (d: ReturnType<typeof openDb>, name: string): string =>
 test("届かない kind と実行状態は CHECK から落ちる — 提案そのものは残る", () => {
   const path = join(ROOT, "narrow-proposals.db")
   const d = openDb(path)
-  // **提案を指している表を一緒に立てる。** これが無いと、作り直しの手順を間違えても検査は通る
+  // 提案を指している表を一緒に立てる。これが無いと、作り直しの手順を間違えても検査は通る
   // — 実物では `approvals` `decisions` `ledger` の3つが指していて、そこで落ちた(docs/adr/0033)。
   d.exec("PRAGMA foreign_keys=ON")
   d.exec(`
@@ -257,7 +257,7 @@ test("届かない kind と実行状態は CHECK から落ちる — 提案そ�
     );
     INSERT INTO decisions (id, proposal_id, at)VALUES ('d1', 'p1', '2026-08-09T09:00:00Z');
   `)
-  // **列を足す側が先、文面を入れ替える側が後。** 逆だと、作り直した表に settled_at が無い。
+  // 列を足す側が先、文面を入れ替える側が後。逆だと、作り直した表に settled_at が無い。
   assert.deepEqual(migrate(d), ["proposals:settled", "narrow:proposals:kind+status"], "1回目は掛かる")
   assert.deepEqual(migrate(d), [], "2回目は何もしない")
 
@@ -269,7 +269,7 @@ test("届かない kind と実行状態は CHECK から落ちる — 提案そ�
     string,
     unknown
   >
-  // **中身は1文字も変えない。** 落としたのは届かない枠だけで、書かれた提案はそのまま残る。
+  // 中身は1文字も変えない。落としたのは届かない枠だけで、書かれた提案はそのまま残る。
   assert.deepEqual(
     { ...row },
     {
@@ -280,7 +280,7 @@ test("届かない kind と実行状態は CHECK から落ちる — 提案そ�
       settled_at: null,
     },
   )
-  // **指している側が生きたままか。** 作り直しの順を間違えると、決定は残るのに指す先が消える。
+  // 指している側が生きたままか。作り直しの順を間違えると、決定は残るのに指す先が消える。
   assert.deepEqual(d.prepare("PRAGMA foreign_key_check").all(), [], "参照が切れた")
   assert.equal(
     (d.prepare("SELECT proposal_id FROM decisions").get() as { proposal_id: string }).proposal_id,
@@ -290,7 +290,7 @@ test("届かない kind と実行状態は CHECK から落ちる — 提案そ�
 })
 
 /**
- * `counterparty` だけは寄せ先がある。**発火の判定は `famulus` かどうかしか見ていない**ので、
+ * `counterparty` だけは寄せ先がある。発火の判定は `famulus` かどうかしか見ていないので、
  * `human` と `counterparty` は同じ経路を通る。寄せても起き方が変わらないことを、ここで固定する。
  */
 test("counterparty の watch は human に寄る — 起き方は変わらない", () => {
@@ -322,7 +322,7 @@ test("counterparty の watch は human に寄る — 起き方は変わらない
 })
 
 /**
- * **収まらない行があるなら触らない。** 誰も書けないはずの状態が書かれているということは、
+ * 収まらない行があるなら触らない。誰も書けないはずの状態が書かれているということは、
  * 想定していない経路が在るということで、ここで潰すと在ることの証拠ごと消える。
  */
 test("新しい CHECK に収まらない行があれば、作り直さずに残す", () => {

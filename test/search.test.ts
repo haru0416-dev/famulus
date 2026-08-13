@@ -1,9 +1,9 @@
 /**
- * 検索の検査。**外へ出ない。** 見ているのは「相手の応答をどう読むか」だけ。
+ * 検索の検査。外へ出ない。見ているのは「相手の応答をどう読むか」だけ。
  *
  * 実際に引けることは probe で外へ出して測った(2026-08-11: 既定の先へ同時に出して
  * 0.8〜1.3秒で 14〜16件)。ここで押さえたいのは、その測定では通らない側 —
- * **応答が欠けている・途中で切れている・想定と違う形で来たときに落ちないか**。
+ * 応答が欠けている・途中で切れている・想定と違う形で来たときに落ちないか。
  *
  * フィクスチャの欄名は同日に実際に返ってきた応答から取った(npm の `updated` のように
  * 項の外側にある欄も含む)。TZ は import より先に差す(`time.ts` が読み込み時に確定する)。
@@ -12,11 +12,11 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
-// **`OPEN_ZERO_TZ` は `new Date()` には届かない。** 帯の付いていない日付
+// `OPEN_ZERO_TZ` は `new Date()` には届かない。帯の付いていない日付
 // (SearXNG の `publishedDate`)を読む1件は素の `Date` を通るので、走らせたホストの帯で答が変わる。
 // ここまでは「たまたまこのホストが Asia/Tokyo だから通っていた」検査で、コンテナの中では 9 時間ずれた。
 process.env.TZ = "Asia/Tokyo"
-// 同じホストへの間隔は既定 1 秒。**ここは fetch を差し替えてあるので誰も叩いていない** —
+// 同じホストへの間隔は既定 1 秒。ここは fetch を差し替えてあるので誰も叩いていない —
 // 待つぶんがそのままゲートの所要になるので 0 にする(src/services/Web.ts の hostIntervalMs)。
 process.env.OPEN_ZERO_HOST_INTERVAL_MS = "0"
 const { defaultSources, parseFrom, plainQuery, renderHits, searchWeb } = await import(
@@ -54,7 +54,7 @@ test("zenn — path から URL を組み、いいねを目印にする", () => {
 
 test("qiita — 途中で切れた応答から、閉じている項だけ拾う", () => {
   // 実際に踏んだ形。本文が丸ごと入るので上限に当たって JSON が途中で終わり、
-  // `JSON.parse` が丸ごと失敗して**揃っていた分まで 0 件になった**。
+  // `JSON.parse` が丸ごと失敗して揃っていた分まで 0 件になった。
   const item = (n: number) =>
     JSON.stringify({
       title: `記事${n}`,
@@ -251,9 +251,9 @@ test("SearXNG の応答を読む — 索引の数と要約が入る", () => {
   assert.equal(hits?.[0]?.note, "3索引 / Layer を使って依存を組み立てる話。")
   assert.equal(hits?.[1]?.note, "1索引")
   assert.equal(hits?.[1]?.at, undefined)
-  // **SearXNG の日付には時間帯が付かない。** `Z` も `+09:00` も無い `2025-03-04T00:00:00` が来る。
+  // SearXNG の日付には時間帯が付かない。`Z` も `+09:00` も無い `2025-03-04T00:00:00` が来る。
   // これをユーザーの時刻として読むと 2025-03-03T15:00Z になり、ユーザーの時計へ戻すと元の日に戻る。
-  // UTC として読むと逆に、夕方以降の記事が翌日としてずれる。**見せる日を文字列と一致させる**ほうを取る。
+  // UTC として読むと逆に、夕方以降の記事が翌日としてずれる。見せる日を文字列と一致させるほうを取る。
   assert.equal(hits?.[0]?.at, "2025-03-03T15:00:00.000Z")
   assert.equal(renderHits([{ source: "web", hits: hits ?? [] }]).includes("2025-03-04"), true)
 })
@@ -306,7 +306,7 @@ test("いつまで待てばいいかを見出しから拾う", () => {
 })
 
 /**
- * ここから下の2つは順番に依存する。**回数制限に当たった記録は過程に残る**ので、
+ * ここから下の2つは順番に依存する。回数制限に当たった記録は過程に残るので、
  * 絞り込みを外す側を先に置く(逆にすると qiita が休んでいて引けない)。
  */
 /** qiita を1回叩き、投げた URL を全部返す。 */
@@ -341,7 +341,7 @@ test("zenn — 長すぎる語は 100 文字で切る(101 文字だと 400 が�
     const sent = decodeURIComponent(new URL(called[0] ?? "https://x/").searchParams.get("q") ?? "")
     assert.ok([...sent].length <= 100, `100 文字を越えている: ${[...sent].length}`)
     // 語の途中では切らない。半端な語尾(`environm`)を投げても当たらないので、
-    // **元の語の頭からの並びで、次が空白になる位置**で止まっていることを見る。
+    // 元の語の頭からの並びで、次が空白になる位置で止まっていることを見る。
     assert.ok(long.startsWith(sent), "元の語の頭から切っていない")
     assert.equal(long[sent.length], " ", `語の途中で切れている: …${sent.slice(-12)}`)
 
@@ -446,7 +446,7 @@ async function urlsFor(source: string, term: string, body: string): Promise<read
 
 test("x — site:x.com は実装が付ける。呼ぶ側が書いた site: と競合させない", async () => {
   // X 本体は robots で全部断られている(`x.com`・`cdn.syndication.twimg.com`・
-  // `publish.x.com/oembed` の3つとも 2026-08-11 に確認)。**取りに行くのは SearXNG だけ。**
+  // `publish.x.com/oembed` の3つとも 2026-08-11 に確認)。取りに行くのは SearXNG だけ。
   const called = await urlsFor("x", 'site:zenn.dev "Effect" schema', '{"results":[]}')
   assert.equal(called.length, 1)
   const q = new URL(called[0] ?? "http://x/").searchParams.get("q") ?? ""
@@ -461,7 +461,7 @@ test("x — site:x.com は実装が付ける。呼ぶ側が書いた site: と�
 test("x — from:名前 と @名前 は、その人の投稿だけに絞る", async () => {
   // 実測: `site:x.com/youyuxi` は 12件が 12件とも本人。`site:x.com from:youyuxi` は
   // 30件中 15件が投稿でそれは全部本人、`site:x.com @youyuxi` は 31件中 14件のうち本人が 11件。
-  // **path に入れる形が一番外さない**ので、どちらの書き方も path に直す。
+  // path に入れる形が一番外さないので、どちらの書き方も path に直す。
   for (const term of ["from:youyuxi Environment API", "@youyuxi Environment API"]) {
     const called = await urlsFor("x", term, '{"results":[]}')
     const q = new URL(called[0] ?? "http://x/").searchParams.get("q") ?? ""
@@ -488,7 +488,7 @@ test("x — 投稿の本文は SearXNG の要約から来る(こちらは x.com 
     ],
   })
   assert.equal(hits[0]?.url, "https://x.com/EffectTS_/status/2071913655281635437")
-  // いくつの索引が拾ったか、と本文。**本文が要約に入ることがこの先の値打ち**なので、落とさない。
+  // いくつの索引が拾ったか、と本文。本文が要約に入ることがこの先の値打ちなので、落とさない。
   assert.match(hits[0]?.note ?? "", /2索引/)
   assert.match(hits[0]?.note ?? "", /115 likes 4 replies/)
 })
@@ -496,7 +496,7 @@ test("x — 投稿の本文は SearXNG の要約から来る(こちらは x.com 
 test("x の結果には読み方を添える(要約を捨てさせない)", () => {
   // 実測(端から端まで4回目): この一行が無かった回、外を見る役は
   // 「索引に出た要約はあるが、それは原文じゃないので引用として使わない」と書いて、
-  // **取れていた投稿本文を捨てた**。道具の説明の「要約を事実として書かない」が逆に働いた。
+  // 取れていた投稿本文を捨てた。道具の説明の「要約を事実として書かない」が逆に働いた。
   const text = renderHits([
     { source: "x", hits: [{ title: "投稿", url: "https://x.com/haru/status/1", note: "2索引 / 本文" }] },
     { source: "hn", hits: [{ title: "記事", url: "https://example.com/a" }] },
@@ -510,7 +510,7 @@ test("x の結果には読み方を添える(要約を捨てさせない)", () =
 
 test("web に site:x.com と書かれたら x の先で受ける", async () => {
   // 実測(端から端まで2回): 道具の説明に `where: ["x"]` と書いた後でも、
-  // モデルは 12 回とも `web` に `site:x.com/youyuxi ...` と書いてきた。**書き方のほうを受ける。**
+  // モデルは 12 回とも `web` に `site:x.com/youyuxi ...` と書いてきた。書き方のほうを受ける。
   const called = await urlsFor("web", "site:x.com/youyuxi Environment API", '{"results":[]}')
   assert.equal(called.length, 1, "外向きの回数は増やさない")
   assert.equal(new URL(called[0] ?? "http://x/").searchParams.get("q"), "site:x.com/youyuxi Environment API")
@@ -540,7 +540,7 @@ test("回した先は x として返る(どこから来たかを読む側に見�
   try {
     const r = await searchWeb("site:x.com Vite", { where: ["web"] })
     assert.equal(r[0]?.source, "x", "web のまま返している")
-    // **回した値打ちはここ** — 頼んだのが site:x.com なら vite.dev はどのみち間違い。
+    // 回した値打ちはここ — 頼んだのが site:x.com なら vite.dev はどのみち間違い。
     assert.deepEqual(
       r[0]?.hits.map((h) => h.url),
       ["https://x.com/youyuxi/status/9"],
@@ -551,7 +551,7 @@ test("回した先は x として返る(どこから来たかを読む側に見�
 })
 
 test("x — 投稿でない項は落とす(site:x.com を守らない索引が混ざる)", () => {
-  // 実測: 6問 268 件のうち 113 件が投稿でなかった。**混ざっていた実物**を並べる。
+  // 実測: 6問 268 件のうち 113 件が投稿でなかった。混ざっていた実物を並べる。
   const hits = parse("x", {
     results: [
       { url: "https://x.com/youyuxi/status/1904855853037215958", title: "残る", content: "本文" },
@@ -651,7 +651,7 @@ test("hn に「Show HN」と書かれたら showhn の先で受ける", async ()
     const called = await urlsFor("hn", q, '{"hits":[]}')
     const u = new URL(called[0] ?? "http://x/")
     assert.equal(u.searchParams.get("tags"), "show_hn", `タグで絞っていない: ${q}`)
-    // **2語は落とす。** 語として残すと近接ランキングがそこに引かれる(`toShowHnTerm` の注)。
+    // 2語は落とす。語として残すと近接ランキングがそこに引かれる(`toShowHnTerm` の注)。
     assert.equal(u.searchParams.get("query"), want, `語を直していない: ${q}`)
   }
 })

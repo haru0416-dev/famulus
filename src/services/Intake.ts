@@ -1,26 +1,25 @@
 /**
- * DB の入口。**ユーザーが過去に喋った記録を開いて、残す価値のある分だけを DB に落とす。**
+ * DB の入口。ユーザーが過去に喋った記録を開いて、残す価値のある分だけを DB に落とす。
  *
  * 引く先は2つ — Claude Code の作業ログ(`~/.claude/projects` の JSONL)と、
  * Claude.ai の書き出し(`.data/claude-export`)。
  *
- * **どちらの入口でも、人の言葉は全体のごく一部しか占めない。**残りは道具の入出力と応答の地の文。
- * だから圧縮は「小さくする工夫」ではなく、*何が人の判断で、何が作業の残骸か* を分けることそのものになる。
- * 比率を削るのではなく境界を引く。
+ * どちらの入口でも、人の言葉は全体のごく一部しか占めない。残りは道具の入出力と応答の地の文。
+ * 削るのは比率ではなく、何が人の判断で何が作業の残骸かの境界。
  *
  * 2段階に分けてある。
  *   1. 選別(モデルを使わない) … 道具の入出力を捨て、人の発話をそのまま残し、応答を畳む。
- *      **枠を1回も使わずにここまで落とせる**ので、要約に渡る前に効果を確かめられる。
+ *      枠を1回も使わずにここまで落とせるので、要約に渡る前に効果を確かめられる。
  *   2. 要約(scout = haiku) …1会話 → 1イベント。ユーザーの判断だけを、引用付きで抜く。
  *
- * `memories.json` だけは2段目を通さない。**既に要約済みのものを要約し直すと、
- * 二度均されて本人の言い回しが完全に消える。** トピック別に切って、そのまま置く。
+ * `memories.json` だけは2段目を通さない。既に要約済みのものを要約し直すと、二度均されて
+ * 本人の言い回しが完全に消える。トピック別に切って、そのまま置く。
  *
  * Claude.ai の書き出しは大半の会話が uuid と日時だけの殻で、text も content も空になっている
  * (書き出し側の都合で、こちらでは復元できない)。本文の無い会話は落とす。
  *
  * 取り込み済みかどうかは `events` 自身が覚える(`kind='import'` の provenance に元の id)。
- * 別表を作らないので、**DB を消さない限り二重取り込みは起きない**。
+ * 別表を作らないので、DB を消さない限り二重取り込みは起きない。
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
@@ -32,9 +31,7 @@ import { Db } from "./Db.ts"
 import { buildFencedPrompt } from "./Governance.ts"
 import { Memory } from "./Memory.ts"
 
-/**
- * ログの置き場。**呼び出し時に読む**(モジュール読み込み時に固めない) — 検査が別の場所を指せるように。
- */
+/** ログの置き場。呼び出し時に読む(モジュール読み込み時に固めない) — 検査が別の場所を指せるように。 */
 const root = (): string => process.env.OPEN_ZERO_TRANSCRIPT_ROOT ?? join(homedir(), ".claude", "projects")
 
 /** Claude.ai の書き出しを展開した場所。zip のまま置かないのは、標準ライブラリだけで開けないから。 */
@@ -54,7 +51,7 @@ const TYPED_MARK = `"promptSource":"${TYPED}"`
 /**
  * 生ログを1本読む。人が打った跡が無ければ `undefined`。
  *
- * **含有判定は Buffer のままやる。** utf8 の文字列に起こす手間は読み取り自体より重く、
+ * 含有判定は Buffer のままやる。utf8 の文字列に起こす手間は読み取り自体より重く、
  * 実測(0.63G / 295 本)で 161ms → 1,544ms になる。生ログの大半は道具の入出力で、
  * その中身をこちらは一度も読まない(docs/adr/0026)。
  */
@@ -106,7 +103,7 @@ const iso = (s: unknown): string => {
 
 /**
  * 読んだ JSON を持っておく。`conversations.json` は全会話が1ファイルに入っていて、
- * 走査と取り込みで何度も開く。**mtime が変わったら捨てる**ので、差分の zip を足しても読み直せる。
+ * 走査と取り込みで何度も開く。mtime が変わったら捨てるので、差分の zip を足しても読み直せる。
  */
 const cache = new Map<string, { mtime: number; value: unknown }>()
 function cached<T>(key: string, path: string, build: () => T): T {
@@ -122,7 +119,7 @@ const readJson = (path: string): unknown =>
   cached(`json:${path}`, path, () => JSON.parse(readFileSync(path, "utf8")) as unknown)
 
 /**
- * content から地の文だけを取り出す。**`tool_use` `tool_result` `thinking` は読まない**。
+ * content から地の文だけを取り出す。`tool_use` `tool_result` `thinking` は読まない。
  * 生ログの大半がこれだが、「何を決めたか」はここには一度も書かれていない。
  */
 function plainText(content: unknown): string {
@@ -182,7 +179,7 @@ function readSession(path: string): { ref: SessionRef; turns: Turn[]; rawBytes: 
 }
 
 /**
- * 走査用に `ref` だけを作る。**全行を JSON にしない。**
+ * 走査用に `ref` だけを作る。全行を JSON にしない。
  *
  * `scan` が要るのは「どの回がまだ入っていないか」だけで、応答の地の文は一度も見ない。
  * owner の発話になり得るのは `TYPED_MARK` を含む行だけなので、そこだけ解く —
@@ -234,7 +231,7 @@ interface Read {
 /**
  * `conversations.json` を読む。1ファイルに全会話が入っているので、走査も取り込みもここを通る。
  *
- * 本文の落ちた殻(text も content も空)は**黙って捨てる**。DB に空の会話を並べても、
+ * 本文の落ちた殻(text も content も空)は捨てる。DB に空の会話を並べても、
  * 「その日に何か喋った」以上のことは言えず、検索の邪魔にしかならない。
  */
 function readWebChats(): Read[] {
@@ -289,7 +286,7 @@ function buildWebChats(path: string): Read[] {
  * `design_chats/` を読む。1会話1ファイルで、本文は `content.content` に一段深く入っている。
  *
  * `attachments` は読まない。中身は「このプロジェクトは Design Components を使う…」という
- * **仕組み側が毎回差し込む定型文**で、ユーザーが打った文字ではない。量だけは多い。
+ * 仕組み側が毎回差し込む定型文で、ユーザーが打った文字ではない。量だけは多い。
  */
 function readWebDesign(): Read[] {
   const dir = join(exportRoot(), "design_chats")
@@ -348,7 +345,7 @@ function buildDesignFile(path: string): Read | undefined {
 }
 
 /**
- * 1件だけ読み直す。**ここを全体走査にしてはいけない。**
+ * 1件だけ読み直す。ここを全体走査にしてはいけない。
  * `material` は取り込みのたびに呼ばれるので、毎回すべての生ログを読み直すと入口が使い物にならなくなる。
  */
 function readOne(ref: SessionRef): Read | undefined {
@@ -360,18 +357,18 @@ function readOne(ref: SessionRef): Read | undefined {
 }
 
 /**
- * 素材にする。**ユーザーの発話は1文字も削らない** — 短いので削る意味がなく、削れば原文が消える。
+ * 素材にする。ユーザーの発話は1文字も削らない — 短いので削る意味がなく、削れば原文が消える。
  *
  * 上限に当たったとき、素材全体の真ん中を落とすやり方は取らない。
- * 一番長い会話は一番よく喋った会話 — つまり**ユーザーの言葉が一番多い回**で、
+ * 一番長い会話は一番よく喋った会話、つまりユーザーの言葉が一番多い回で、
  * そこを真ん中から切ると、削る価値の高い順とちょうど逆のものが消える。
  * 削るのは常に応答側の地の文だけにして、割り当てを詰める形で収める。
  */
 function compress(turns: readonly Turn[]): string {
-  // 1往復 = ユーザーの発話1件 + それに続く応答すべて。**残すのはその最後の1件だけ**。
+  // 1往復 = ユーザーの発話1件 + それに続く応答すべて。残すのはその最後の1件だけ。
   //
   // JSONL の "assistant" は道具を呼ぶたびに1件増えるので、1回の依頼に応答が数十件並ぶ。
-  // 途中のものは経過報告で、何を決めたかは**次にユーザーが口を開く直前**に書かれている。
+  // 途中のものは経過報告で、何を決めたかは次にユーザーが口を開く直前に書かれている。
   // 途中を薄く広く残すより、答えの1件を厚く残すほうが同じ量で情報が多い。
   const folded: Turn[] = []
   for (const t of turns) {
@@ -401,7 +398,7 @@ function compress(turns: readonly Turn[]): string {
     .join("\n")
 }
 
-/** 引用(`said`)を必須にした項目。**これが DB に入る最小単位**。 */
+/** 引用(`said`)を必須にした項目。これが DB に入る最小単位。 */
 const QUOTED = (what: string, said: string) =>
   ({
     type: "object",
@@ -418,9 +415,9 @@ const SAID = "根拠になった owner: 行からの**そのままの引用**(20
 /**
  * 抽出させる形。散文で返させると DB に入れる段で結局こちらが読み解くことになる。
  *
- * **どの項目にも `said`(ユーザーの発話からの引用)を必須にしてある。**
+ * どの項目にも `said`(ユーザーの発話からの引用)を必須にしてある。
  * 引用を求めないと、素材の量で勝る応答側の地の文に引きずられて
- * 「REST API が完全動作することを確認」のような**作業報告**が「決定」として返る。
+ * 「REST API が完全動作することを確認」のような作業報告が「決定」として返る。
  * それは誰の判断でもない。引用を要求すれば、ユーザーの言葉に根拠が無い項目は書けなくなる。
  *
  * `preferences` と `corrections` にも同じ引用を要求する。「ユーザーはこういうやり方を好む」は
@@ -473,7 +470,7 @@ interface Digest {
 }
 
 /**
- * 引用の無い項目を落とす。**スキーマの `required` は空文字を止めない。**
+ * 引用の無い項目を落とす。スキーマの `required` は空文字を止めない。
  *
  * 指示で頼むだけにすると、素材から引けなかった回に空の `said` を付けて形だけ通してくる。
  * 「引用できないものは残さない」を守るのはここ(モデルが提案し、こちら側が決定的に弾く)。
@@ -482,7 +479,7 @@ const quoted = <T extends { said?: unknown }>(xs: readonly T[] | undefined): T[]
   (xs ?? []).filter((x) => typeof x.said === "string" && x.said.trim() !== "")
 
 /**
- * 日本語の割合。**0 に近いものは、日本語で探しても一生当たらない。**
+ * 日本語の割合。0 に近いものは、日本語で探しても当たらない。
  *
  * 索引は trigram で、語の意味は見ていない。`job-searching` と書かれた行は「転職」では引けない。
  * ユーザーは日本語で探すので、英語のまま置いた覚え書きは DB にあっても無いのと同じになる。
@@ -494,7 +491,7 @@ function japaneseRatio(s: string): number {
 const JP_MIN = 0.05
 
 /**
- * 英語の覚え書きに足す、日本語の見出し。**訳文でも要約でもない。**
+ * 英語の覚え書きに足す、日本語の見出し。訳文でも要約でもない。
  * 本文はそのまま残したうえで、日本語の検索語から辿り着くための行を1本増やすだけ。
  */
 const HEADER_SCHEMA = {
@@ -554,7 +551,7 @@ ${RULES}`,
 
 /**
  * DB に入れる1行にする。FTS に載るのはこの文字列。
- * 引用も索引に入れる — **ユーザー自身の言い回しで引ける**ようにするため。
+ * 引用も索引に入れる — ユーザー自身の言い回しで引けるようにするため。
  * 要約は言葉を均してしまうので、原文の語が残っていないと本人の検索語に当たらない。
  */
 function render(d: Digest, ref: SessionRef): string {
@@ -606,7 +603,7 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
     /**
      * 取り込み済みの id。provenance の先頭 ref に入れてある。
      *
-     * **抹消された行は済んだことにしない**。要約が的外れだったとき、取り直す手段が無いと
+     * 抹消された行は済んだことにしない。要約が的外れだったとき、取り直す手段が無いと
      * 入口の間違いが DB に固定される。`redact` すれば同じ会話がまた候補に戻る
      * — 抹消が「これは無かったことにして、もう一度取れ」の意味になる。
      */
@@ -641,10 +638,10 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
     })
 
     /**
-     * まだ取り込んでいない会話を**古い順**に返す。
+     * まだ取り込んでいない会話を古い順に返す。
      * 新しい順にしないのは、判断の履歴は順番に読めないと理由が繋がらないから。
      *
-     * **済んだ回は、開く前に外す。** Claude Code の作業ログはファイル名が sessionId なので、
+     * 済んだ回は、開く前に外す。Claude Code の作業ログはファイル名が sessionId なので、
      * 中を読まなくても取り込み済みかどうかが分かる。読み終えてから `sessionId` で外す形だと、
      * 生ログの大半を占める「もう入っている回」を毎回開き直すことになる —
      * 実測で 295 本 0.63G のうち 81 本が済みで、その 81 本がほぼ全部の量だった(docs/adr/0026)。
@@ -696,7 +693,7 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
     /**
      * 1会話を1イベントにする。
      *
-     * 素材は**境界マーカーで囲って**渡す。会話ログには web もファイルも通り抜けてきているので、
+     * 素材は境界マーカーで囲って渡す。会話ログには web もファイルも通り抜けてきているので、
      * ユーザーの指示と同じ平面に置かない。
      * 書き出すイベントも `taint` を立てる — 由来が信用できない材料から起こした要約だから。
      */
@@ -714,7 +711,7 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
           schema: DIGEST_SCHEMA,
         })
         const d = (out.structured ?? {}) as Partial<Digest>
-        // 引用の無い項目はここで落ちる。**指示ではなくコードが弾く**(quoted のコメント参照)。
+        // 引用の無い項目はここで落ちる。指示ではなくコードが弾く(quoted のコメント参照)。
         const digest: Digest = {
           topic: d.topic ?? "",
           decisions: quoted(d.decisions),
@@ -736,18 +733,18 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
       })
 
     /**
-     * `memories.json` を DB に移す。**本文は要約しない。**
+     * `memories.json` を DB に移す。本文は要約しない。
      *
      * これは会話ログではなく、Claude.ai 側が作ったユーザーの像そのもの(トピック別の記憶と散文の要約)。
      * 要約済みのものをもう一度要約させると本人の言い回しが二度均されて消えるので、そのまま置く。
      *
-     * 例外は**英語で書かれたもの**だけ。索引は trigram で語の意味を見ないので、
+     * 例外は英語で書かれたものだけ。索引は trigram で語の意味を見ないので、
      * `job-searching` と書かれた行は「転職」では引けない。ユーザーは日本語で探すから、
      * 英語のまま置いた覚え書きは DB にあっても無いのと同じになる。
-     * そこにだけ、日本語の見出しを1行足す(**本文は消さない。訳文で置き換えない**)。
+     * そこにだけ、日本語の見出しを1行足す(本文は消さない。訳文で置き換えない)。
      *
-     * `taint` は全部に立てる。**書いたのはユーザーではない。**
-     * DB に載っていることを本人について検証された事実として扱わない、という区別はここでも要る。
+     * `taint` は全部に立てる。書いたのはユーザーではないので、DB に載っていることを
+     * 本人について検証された事実として扱わない。
      */
     const ingestMemories = Effect.gen(function* () {
       const path = join(exportRoot(), "memories.json")
@@ -783,7 +780,7 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
           skipped += 1
           continue
         }
-        // 見出しは付けられなければ無しで通す。**索引が作れないことは取り込まない理由にならない。**
+        // 見出しは付けられなければ無しで通す。索引が作れないことは取り込まない理由にならない。
         const head =
           japaneseRatio(it.body) >= JP_MIN
             ? undefined

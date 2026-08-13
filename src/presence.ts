@@ -1,22 +1,22 @@
 #!/usr/bin/env bun
 /**
- * Discord の Gateway に接続を張り続ける。**オンライン表示を出すためだけに在る。**
+ * Discord の Gateway に接続を張り続ける。オンライン表示を出すためだけに在る。
  *
  * ボットが「オンライン」と出るかどうかは、Gateway の WebSocket セッションを持っているか
  * だけで決まる。REST でメッセージを出しても表示は動かない — だから `src/poll.ts` が
  * 30秒ごとに `inbox()` を叩いている間も、ユーザーの画面ではずっとオフラインだった。
  *
- * **メッセージの経路はここに移さない。** 受け取りは今まで通り poll(REST)が持つ。
+ * メッセージの経路はここに移さない。受け取りは今まで通り poll(REST)が持つ。
  * 分ける理由は落ち方が違うこと — この接続が切れても届いたものは30秒後に読まれるが、
  * 受け取りを常駐に寄せると、常駐が黙って死んだ日は誰も読まない(docs/adr/0027)。
  * ここが死んで失われるのは表示だけ。
  *
- * **intents は 0。** 何も受け取らない。特権 intent を要らないし、guild が増えても
+ * intents は 0 で、何も受け取らない。特権 intent が要らず、guild が増えても
  * 流れてくる量が変わらない。受け取らないので replay も要らないが、RESUME は実装する —
  * 再接続のたびに IDENTIFY を消費すると、回線が揺れた日に日次の上限に当たる。
  *
  * 状態(未読と watch の数)を出すのは、緑の丸だけでは「繋がっている」以上のことを言えないから。
- * DB が読めなくても接続は落とさない。**表示のために接続を切らない。**
+ * DB が読めなくても接続は落とさない。表示のために接続を切らない。
  */
 import { Database } from "bun:sqlite"
 import { loadEnv } from "./core/env.ts"
@@ -35,7 +35,7 @@ const ENTRY = "wss://gateway.discord.gg/?v=10&encoding=json"
 const REFRESH_MS = 60_000
 
 /**
- * 再接続の待ちの上限。**IDENTIFY は日に 1000 回まで。**
+ * 再接続の待ちの上限。IDENTIFY は日に 1000 回まで。
  * 120秒で頭打ちにすると、繋がらない状態が丸1日続いても 720 回で収まる。
  */
 const BACKOFF_MAX_MS = 120_000
@@ -49,7 +49,7 @@ const STALE = new Set([4007, 4009])
 const log = (m: string): void => console.log(`${nowIso()} ${m}`)
 
 /**
- * 表示に出す文。**読み取り専用で開く** — 常駐が書き込みの錠を持つと、tick が待たされる。
+ * 表示に出す文。読み取り専用で開く — 常駐が書き込みの錠を持つと、tick が待たされる。
  * 読めなければ `undefined`(掃除の最中や、まだ DB が無い状態は普通にある)。
  */
 export function stateLine(path: string = DEFAULT_DB_PATH): string | undefined {
@@ -97,7 +97,7 @@ interface Session {
 }
 
 /**
- * 1回ぶんの接続。**閉じた理由を返す** — 呼ぶ側が次に RESUME するか IDENTIFY するかを決める。
+ * 1回ぶんの接続。閉じた理由を返す — 呼ぶ側が次に RESUME するか IDENTIFY するかを決める。
  * 例外にしないのは、切れることが異常ではないから(Discord 側から定期的に張り直させられる)。
  */
 function once(
@@ -113,14 +113,14 @@ function once(
     let acked = true
     let fatal: number | undefined
     let settled = false
-    /** READY か RESUMED まで行ったか。**行っていない回だけ待つ** — 回線が落ちている間に毎秒叩かない。 */
+    /** READY か RESUMED まで行ったか。行っていない回だけ待つ — 回線が落ちている間に毎秒叩かない。 */
     let connected = false
 
     const stop = () => {
       clearInterval(beat)
       clearInterval(refresh)
     }
-    /** 張り直させる。**4000 番台で閉じると Discord はセッションを残す** — 1000 で閉じると消える。 */
+    /** 張り直させる。4000 番台で閉じると Discord はセッションを残す — 1000 で閉じると消える。 */
     const again = () => {
       stop()
       try {
@@ -240,7 +240,7 @@ async function main(): Promise<void> {
     }
     session = r.session
     seq = r.seq
-    // **一度でも繋がった回は待たない。** 待つのは繋がらなかった回だけ — そちらは相手か回線の側で、
+    // 一度でも繋がった回は待たない。待つのは繋がらなかった回だけ — そちらは相手か回線の側で、
     // 間を詰めても直らない。繋がった回で待つと、Discord から張り直させられるたびに表示が消える。
     if (r.connected) {
       wait = 1_000
@@ -253,7 +253,7 @@ async function main(): Promise<void> {
 }
 
 // systemd から止められたら黙って降りる。落ちたことにすると Restart が数える。
-// **入口として走ったときだけ。** 検査から import したときに接続を張らせない。
+// 入口として走ったときだけ。検査から import したときに接続を張らせない。
 if (import.meta.main) {
   for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => process.exit(0))
   await main()

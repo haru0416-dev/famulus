@@ -1,17 +1,17 @@
 /**
- * `claude -p` を AI SDK の `LanguageModelV4` として差す。**ここは翻訳だけで、統治は持たない。**
+ * `claude -p` を AI SDK の `LanguageModelV4` として差す。ここは翻訳だけで、統治は持たない。
  *
  * 分けてある理由: 前の形(src/model/provider.ts)は、CLI の呼び出しとゲートと会計が
- * 1つの `stream()` の中に並んでいた。**同じ骨格が src/model/Runner.ts にもある**ので、
+ * 1つの `stream()` の中に並んでいた。同じ骨格が src/model/Runner.ts にもあるので、
  * 統治が二重に書かれていた。統治は middleware(src/model/governed.ts)に寄せ、
  * このファイルは「CLI の入出力を V4 の形に直す」だけを持つ。
  *
  * ## ツール呼び出しの搬送
  * `claude -p` は「ツール呼び出しを返す」API ではなく、自分でループを回して最終テキストを返す CLI。
- * なので道具があるときは **`--json-schema` で「次に呼びたい道具」を構造化提出させ**、
+ * なので道具があるときは `--json-schema` で「次に呼びたい道具」を構造化提出させ、
  * それを `tool-call` コンテンツに翻訳して返す。実行するのは AI SDK 側。内側の claude は道具を持たない。
  *
- * **構造化提出はテキスト応答より入力が重い**(StructuredOutput の定義が載るため)。
+ * 構造化提出はテキスト応答より入力が重い(StructuredOutput の定義が載るため)。
  * 道具の定義そのものもこちらの system prompt に載るので、その分だけ上乗せになる。
  *
  * ## 統治の側へ渡すもの
@@ -40,7 +40,7 @@ export const MODEL_IDS = [
   "claude-sonnet-5",
   "claude-fable-5",
   "claude-haiku-4-5",
-  // GPT 側は **rmod 経由**(Anthropic Messages API を話す局所プロキシ)。アダプタは1本も要らず、
+  // GPT 側は rmod 経由(Anthropic Messages API を話す局所プロキシ)。アダプタは1本も要らず、
   // `binForModel` が実行ファイルを振り分けるだけで claude-cli.ts がそのまま通る。
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -126,7 +126,7 @@ export function toolInstruction(tools: LanguageModelV4CallOptions["tools"]): str
     .join("\n")
   return [
     "",
-    // **見出しを「ツール」にしない。** 内側の claude はツール一覧を「今この場で呼べるもの」と読み、
+    // 見出しを「ツール」にしない。内側の claude はツール一覧を「今この場で呼べるもの」と読み、
     // ネイティブに呼びに行って CLI に `No such tool available` で弾かれ、そこで「使えない」と
     // 結論して toolCalls を空のまま返す。呼び方が1つしかないことを見出しの側で先に言う。
     "## 提出できる依頼(**ツールではない**)",
@@ -161,7 +161,7 @@ export function normalizeToolName(raw: string | undefined, names: readonly strin
 }
 
 /**
- * 取り直すか。**言い方だけに頼らない**ための歯止め。
+ * 取り直すか。指示の言い方だけに頼らないための歯止め。
  *
  * 内側の claude が提出用の名前をネイティブに呼んで CLI に弾かれ、そのまま「使えなかった」と
  * 手ぶらで戻ってくることがある。
@@ -176,14 +176,14 @@ export function needsResubmit(
   return hasTools && nativeToolAttempt === true && calls === 0
 }
 
-/** 取り直しのときだけ足す一行。**道具ではなく呼び方の問題だと名指しする。** */
+/** 取り直しのときだけ足す一行。道具ではなく呼び方の問題だと名指しする。 */
 const RESUBMIT_HINT = `
 直前の試行で、上の名前をネイティブのツールとして呼んで \`No such tool available\` に弾かれている。
 **道具が無いのではなく、呼び方が違う。** 今回は必ず \`toolCalls\` に \`{name, arguments}\` を書いて提出する。
 「使えない」と書いて終わらせない。`
 
 /**
- * `claude -p` を1つの V4 モデルにする。**統治は掛かっていない** —
+ * `claude -p` を1つの V4 モデルにする。統治は掛かっていない —
  * ゲートと会計は src/model/governed.ts の middleware が包む。素のこれを直接使わない。
  */
 export function claudeCliModel(modelId: string): LanguageModelV4 {
@@ -244,7 +244,7 @@ export function claudeCliModel(modelId: string): LanguageModelV4 {
         raw: undefined,
       },
       usage: {
-        // **入力は3つ足して数える**(docs/adr/0005)。V4 は最初からこの3列を持つ。
+        // 入力は3つ足して数える(docs/adr/0005)。V4 は最初からこの3列を持つ。
         inputTokens: {
           total: u.inTok + u.cacheRead + u.cacheWrite,
           noCache: u.inTok,
@@ -253,7 +253,7 @@ export function claudeCliModel(modelId: string): LanguageModelV4 {
         },
         outputTokens: { total: u.outTok, text: u.outTok, reasoning: undefined },
       },
-      // 統治の側が読む欄。**定額枠なので値段は請求ではなく影の値段**として渡すだけ。
+      // 統治の側が読む欄。定額枠なので、値段は請求ではなく影の値段として渡すだけ。
       providerMetadata: {
         [PROVIDER_META]: {
           notionalUsd: result.usage.notionalUsd,
@@ -283,7 +283,7 @@ export function claudeCliModel(modelId: string): LanguageModelV4 {
     supportedUrls: {},
     doGenerate,
     /**
-     * CLI は完了してから result を返すので、**本当の逐次配信はここには無い。**
+     * CLI は完了してから result を返すので、逐次配信はここには無い。
      * 1回ぶんを組み立ててから流し直しているだけ(構造化提出の途中は JSON なので出せない)。
      */
     async doStream(options) {

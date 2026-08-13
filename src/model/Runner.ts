@@ -1,11 +1,11 @@
 /**
- * 統治された推論の唯一の入口。**precheck → 実行 → 枠の計上 → 会計** を1本にまとめる。
+ * 統治された推論の唯一の入口。precheck → 実行 → 枠の計上 → 会計 を1本にまとめる。
  *
  * governance・runner・ledger を別々に呼ぶ形にすると「ゲートを通さずに走らせる経路」が
  * 型の上で常に可能になる。ここでは Runner を通す以外にモデルへ届く道を作らない。
  * Layer が差し替え点なので、テストは `RunnerStub` を積むだけで API キーも `claude` バイナリも要らない。
  *
- * 役割→モデルは**静的表**。LLM にモデル選択と課金経路を開かない。
+ * 役割→モデルは静的表。LLM にモデル選択と課金経路を開かない。
  */
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
@@ -23,38 +23,38 @@ export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
 /**
  * 役割→モデル。品質が製品そのものになる役だけ opus に置く。
  *
- * **作業系は GPT(rmod 経由)へ逃がす。** 減っているのは金ではなくユーザーの Claude の枠なので、
+ * 作業系は GPT(rmod 経由)へ逃がす。減っているのは金ではなくユーザーの Claude の枠なので、
  * 量を使う役をそちらから外すと、対話に使える枠が残る。ChatGPT 側も OAuth の定額枠で、
  * `poolForModel` が別の pool に数えるため、片方を回してももう片方は止まらない。
  *
- * **この表で今このプロセスから実際に呼ばれるのは `scout` / `reviewer` / `structurer` だけ**
+ * この表で今このプロセスから実際に呼ばれるのは `scout` / `reviewer` / `structurer` だけ
  * (src/services/Intake.ts の取り込み、src/agent/assistant.ts の `draft`、src/agent/keeper.ts の締め)。
  * `briefing` と `dialogue` は Flue 経路(src/model/provider.ts)を通るので、モデルは
  * `OPEN_ZERO_MODEL` / `OPEN_ZERO_TICK_MODEL` が決める。`classify` は呼び手がまだ無い。
  * ここを取り違えると「structurer を守った」つもりで、引用を写す仕事のほうを動かすことになる。
  *
- * `reviewer` は**書いた側と別のモデルに置く**(docs/adr/0031)。前は opus が書いて opus が読んでいた。
+ * `reviewer` は書いた側と別のモデルに置く(docs/adr/0031)。前は opus が書いて opus が読んでいた。
  * ADR 0012 が「書いた本人以外に読ませてから出す」と決めたのに、同じモデルの2回目は同じ死角を持つ。
- * 弱い読み手に渡せないのはそのままなので、下げるのではなく**別の系列の同じ段**に移した。
+ * 弱い読み手に渡せないのはそのままなので、下げるのではなく別の系列の同じ段に移した。
  *
  * 実測(下書き4本 × 本文2通り = 8件、docs/adr/0031): 引用を本文から一字一句写した割合は
  * opus 19/19・sol 18/18(luna は 19/24 で、写せなかった指摘はコードが落とす)。
- * 秒数は 8/8 で sol が opus より短い(中央値 24.8 秒 / 50.3 秒)。**強さは測っていない。**
+ * 秒数は 8/8 で sol が opus より短い(中央値 24.8 秒 / 50.3 秒)。強さは測っていない。
  *
- * その `scout` が持つのは**引用を原文のまま写す**仕事で、引けなかった項目はコードが落とす。
+ * その `scout` が持つのは引用を原文のまま写す仕事で、引けなかった項目はコードが落とす。
  * 落ちた分は後から復元できないので、モデルを替えるときは引用の原文一致率を測ってから替える。
  */
 export const ROLE_MODEL: Record<Role, string> = {
   briefing: "claude-opus-5", // 朝会執筆
   dialogue: "claude-opus-5", // 対話(声。下げない)
-  // 締めの keeper(keeper)。**ユーザーの発言から引用を写す仕事**で、写せなかったものはコードが落とす
+  // 締めの keeper(keeper)。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
   // (keepGrounded)。scout と同じ性質なので同じ側に置く。ユーザーが話した回ごとに1回通るため、
   // ここを opus にすると対話と同じ枠を毎回2回叩くことになる。
   structurer: "gpt-5.6-luna",
-  // 下書きの精査(assistant の draft)。**外に出る前の最後の検査**で、書いた側とは別の系列に置く。
+  // 下書きの精査(assistant の draft)。外に出る前の最後の検査で、書いた側とは別の系列に置く。
   // 枠も分かれる(RMOD_POOL)ので、精査に1回使っても対話の枠は減らない。
   reviewer: "gpt-5.6-sol",
-  scout: "gpt-5.6-luna", // 取り込みの構造化。**引用を写す役**(Intake.ingest)
+  scout: "gpt-5.6-luna", // 取り込みの構造化。引用を写す役(Intake.ingest)
   classify: "gpt-5.6-luna", // 分類(呼び手はまだ無い)
 }
 
@@ -85,7 +85,7 @@ export interface RunnerResult {
     inTok: number
     outTok: number
     cacheRead: number
-    /** 初回にキャッシュへ書いた入力。**system とスキーマ定義はここに入る**ので、落とすと入力の大半が消える。 */
+    /** 初回にキャッシュへ書いた入力。system とスキーマ定義はここに入るので、落とすと入力の大半が消える。 */
     cacheWrite: number
     notionalUsd: number
   }
@@ -93,7 +93,7 @@ export interface RunnerResult {
 }
 
 /**
- * run が失敗しうる理由の全部。**呼び出し側はこれを網羅しないとコンパイルが通らない**。
+ * run が失敗しうる理由の全部。呼び出し側はこれを網羅しないとコンパイルが通らない。
  * `{ ok:false, reason:string }` に潰すと「枠クールダウン(待てば戻る)」と
  * 「halt(人間の解除が要る)」の区別が呼び出し側から消える。
  */
@@ -164,10 +164,10 @@ const makeRunner = (
 const defaultPlan = (role: string): RunPlan => ({
   // 未知の role は生モデル id として通す。
   model: ROLE_MODEL[role as Role] ?? role,
-  // **`total_cost_usd` が返ることと、それが請求であることは別**。Claude Max は定額なので限界費用は 0 で、
+  // `total_cost_usd` が返ることと、それが請求であることは別。Claude Max は定額なので限界費用は 0 で、
   // 枯れるのは USD ではなく5時間窓。USD をゲートにすると窓が空いていても金額で止まる。
   meter: "quota",
-  // **pool は role ではなくモデルで決まる。** ここを固定にしていると GPT の消費が Claude の窓に
+  // pool は role ではなくモデルで決まる。ここを固定にしていると GPT の消費が Claude の窓に
   // 積まれ、「作業を GPT に逃がしたのに対話が止まる」が起きる。
   pool: poolForModel(ROLE_MODEL[role as Role] ?? role),
 })
@@ -220,7 +220,7 @@ export interface StubReply {
 }
 
 /**
- * テスト用の層。**API キーも `claude` バイナリも要らない**。
+ * テスト用の層。API キーも `claude` バイナリも要らない。
  * 台本を順に返し、尽きたら最後を繰り返す。precheck・記録・枠冷却は本番と同じ骨格を通るので、
  * 「ゲートが実際に効くか」をモデルを呼ばずに端から端まで確かめられる。
  */

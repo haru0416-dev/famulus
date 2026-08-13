@@ -2,12 +2,12 @@
  * 自分のソースを、自分が動かせる場所に置く。
  *
  * コンテナに見えるのは作業場だけで、`/home/haru` は映らない(src/services/Sandbox.ts)。
- * この境界のせいで、**自走している側は自分のソースを読むことも直すこともできなかった**。
+ * この境界のせいで、自走している側は自分のソースを読むことも直すこともできなかった。
  * 実測で 2026-08-12 の tick が到達したのは「拾ってきた他人のリポジトリを動かす」ところまでで、
- * 自分の欠陥を見つけても書き換える手が無い。境界は緩めない — 代わりに**複製をこちら側から置く**。
+ * 自分の欠陥を見つけても書き換える手が無い。境界は緩めない — 代わりに複製をこちら側から置く。
  *
  * 置くのは clone。作業ツリーのコピーではなく履歴ごと渡すのは、直した結果を `git diff` で
- * 取り出せるようにするため。**本体への反映はここではやらない** — 反映は取り消しの効かない操作で、
+ * 取り出せるようにするため。本体への反映はここではやらない — 反映は取り消しの効かない操作で、
  * コンテナの中で通ったゲートは「その複製で通った」という意味しか持たない。
  *
  * `keep` を立てて登録するので cleanup の日数では消えない(src/core/workspaces.ts)。
@@ -27,18 +27,18 @@ export const SELFDEV = "selfdev"
 /** 作業場の中でのソースの位置。`npm` の置き土産(`.npm`)を clone の外に落とすために1段掘る。 */
 const CLONE = "open-zero"
 
-/** このファイルから見たリポジトリの根。**cwd に依らない** — CLI はどこから叩かれるか分からない。 */
+/** このファイルから見たリポジトリの根。cwd に依らない — CLI はどこから叩かれるか分からない。 */
 export const repoRoot = (): string => fileURLToPath(new URL("../..", import.meta.url))
 
 /**
- * 次の tick がこれを読んで「ここで何ができるか」を決める。**通し方を本文に書く。**
+ * 次の tick がこれを読んで「ここで何ができるか」を決める。通し方を本文に書く。
  * 一覧に出るのは名前とこの一行だけなので、ここに無い手順は次の回には存在しない。
  *
- * 中身は package.json の `gate` に置いてある。**定義を2か所に持たない** —
+ * 中身は package.json の `gate` に置いてある。定義を2か所に持たない —
  * ここに並べ直すと、ホストで通しているものとコンテナで通しているものが黙って食い違う。
  * `corepack` を頭に付けるのは、コンテナの image に pnpm が入っていないから(corepack は入っている)。
  *
- * **検査を回す bun も image には入っていない。**`bun` を devDependency に置いてあるので、
+ * 検査を回す bun も image には入っていない。`bun` を devDependency に置いてあるので、
  * `pnpm run` が `node_modules/.bin` を PATH に載せた先で引ける。image を差し替えずに済み、
  * ホストとコンテナで同じ版が走る(docs/adr/0024)。
  */
@@ -62,7 +62,7 @@ const sh = (cmd: string, args: readonly string[], cwd?: string): string =>
 /**
  * 作業場を作って(あるいは作り直して)、中でゲートが通るところまで確かめる。
  *
- * `fresh` は clone ごと捨てて取り直す。**取り消せない**ので既定では取らない —
+ * `fresh` は clone ごと捨てて取り直す。取り消せないので既定では取らない —
  * 中で直しかけていたものが消える。
  */
 export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
@@ -77,11 +77,11 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
       lines.push("clone を捨てた(--fresh)")
     }
 
-    // ── ソースを置く。**--no-hardlinks**: 既定だと同じ FS の clone は object を共有する。
+    // ソースを置く。`--no-hardlinks` を付けるのは、既定だと同じ FS の clone が object を共有するため。
     // コンテナに渡す先が本体の `.git` と同じ inode を指す状態は、境界を引いた意味を薄める。
     if (existsSync(join(clone, ".git"))) {
       sh("git", ["-C", clone, "fetch", "origin", "--prune"])
-      // `origin/HEAD` は clone のときに1度書かれるだけ。**張り直してから読む** —
+      // `origin/HEAD` は clone のときに1度書かれるだけ。張り直してから読む —
       // 無い状態(古い git や壊れた clone)で rev-parse すると、ここで丸ごと落ちる。
       sh("git", ["-C", clone, "remote", "set-head", "origin", "-a"])
       const head = sh("git", ["-C", clone, "rev-parse", "--short", "origin/HEAD"])
@@ -91,7 +91,7 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
       sh("git", ["clone", "--no-hardlinks", root, clone])
       lines.push(`clone した: ${root} → ${clone}`)
     }
-    // 手元の未コミットは clone に入らない。**入っていないことを書く** —
+    // 手元の未コミットは clone に入らない。入っていないことを書く —
     // 「直したのに直っていない」の原因が、ここの取りこぼしだと分かるように。
     const dirty = sh("git", ["-C", root, "status", "--porcelain"])
     if (dirty) lines.push(`※ 本体の未コミット ${dirty.split("\n").length} ファイルは clone に入っていない`)
@@ -113,13 +113,13 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
 
     if (opts?.skipGate === true) return lines.join("\n")
 
-    // ── **ここまでで止めない。** 置いただけでは「中でゲートが通る」ことの証拠にならない。
+    // ここまでで止めない。置いただけでは「中でゲートが通る」ことの証拠にならない。
     //
     // `net` を開ける。検査は fetch を差し替えてあるので外へは出ないが、SSRF の防ぎは
     // 差し替えの手前で名前を引く(src/services/Web.ts の fetchFresh)。閉じたコンテナでは
-    // そこが「名前が解決できない」で落ちるだけで、**検査が見ている条件とは関係が無い**。
+    // そこが「名前が解決できない」で落ちるだけで、検査が見ている条件とは関係が無い。
     //
-    // 出力を `| tail` で削らない。**パイプは終了コードを飲む** — 実際にここで
+    // 出力を `| tail` で削らない。パイプは終了コードを飲む — 実際にここで
     // 「ゲート: 終了コード 0」と出しながら検査が 3 件落ちている状態を作った。
     // 長さは runInSandbox が末尾 12,000 字で切る。
     const gate = yield* Effect.promise(() =>

@@ -1,5 +1,5 @@
 /**
- * 提案と承認。**エージェントが実行しないための受け皿**。
+ * 提案と承認。エージェントが実行しないための受け皿。
  *
  * この設計の芯は「実行を伴うことはエージェントが直接やらず、提案として1件書いて止まる」ことなので、
  * 提案を作る側(ツール)と承認する側(CLI)が同じ1本の API を通るようにしておく。
@@ -10,14 +10,14 @@
  *      │ deny→ denied
  *      └ 期限切れ→ expired
  *
- * **approved の先は無い。** 実行の仕組みもコネクタも1つも書かれていないので、`executing` /
- * `executed` / `failed` には**どの経路からも到達しない**(CHECK には残っているだけ)。
+ * approved の先は無い。実行の仕組みもコネクタも1つも書かれていないので、`executing` /
+ * `executed` / `failed` にはどの経路からも到達しない(CHECK には残っているだけ)。
  * approved は「承認済み・未実行」で止まり、実際に動かすのはユーザー。
  * ここで実行したことにする方が嘘としては大きいので、止めたままにしてある。
  *
- * `approve` は **approvals 行を必ず書く**。承認した時点の payload の指紋を残すためで、
+ * `approve` は approvals 行を必ず書く。承認した時点の payload の指紋を残すためで、
  * 実行する側を作るときに「承認後に中身が差し替わっていないか」を照合できるようにしてある。
- * **照合する側はまだ無い。** 今あるのは記録だけ。
+ * 照合する側はまだ無い。今あるのは記録だけ。
  */
 import { createHash, randomUUID } from "node:crypto"
 import * as Effect from "effect/Effect"
@@ -26,7 +26,7 @@ import { nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 /**
- * 提案の種類。**`plan` の1つだけ**(docs/adr/0033)。
+ * 提案の種類。`plan` の1つだけ(docs/adr/0033)。
  *
  * 前は7種あった(`reminder` `research` `vault-update` `outbound-draft` `skill-promote` `skill-retire`)。
  * 全部 famulus-zero から持ってきた枠で、こちらのコードが作れるのは `plan` だけだった
@@ -35,7 +35,7 @@ import { Db } from "./Db.ts"
 export type ProposalKind = "plan"
 
 /**
- * 提案の状態。**実行の3つ(`executing` `executed` `failed`)は落とした**(docs/adr/0033)。
+ * 提案の状態。実行の3つ(`executing` `executed` `failed`)は落とした(docs/adr/0033)。
  *
  * 承認しても実行する仕組みが無い。到達しない状態を残すと、`oz list` を読んだ側が
  * 「承認すれば動く」と読む。実行を付ける日が来たら、そのときに足す。
@@ -90,7 +90,7 @@ export const MAX_PENDING_DAYS = 7
 const plusDays = (at: string, days: number) =>
   new Date(Date.parse(at) + days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z")
 
-/** 承認した時点の payload の指紋。**照合する側を作るまでは、ただの記録。** */
+/** 承認した時点の payload の指紋。照合する側を作るまでは、ただの記録。 */
 export const payloadHash = (payload: string): string => createHash("sha256").update(payload).digest("hex")
 
 /** 承認を受け付ける状態。executing 以降は人の承認の対象ではない。 */
@@ -132,7 +132,7 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
 
     /**
      * id 前方一致で1件引く。CLI で 36 文字の UUID を打たせないため。
-     * **複数に当たったら選ばずに失敗させる** — 曖昧なまま承認を通すのが一番まずい。
+     * 複数に当たったら選ばずに失敗させる — 曖昧なまま承認を通すのが一番まずい。
      */
     const get = (idOrPrefix: string) =>
       Effect.gen(function* () {
@@ -196,8 +196,8 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
           )
 
     /**
-     * 承認。**approvals 行と status 遷移を同一トランザクションで**行う
-     * (承認記録の無い approved を作らない = **後で照合する相手を必ず残す**)。
+     * 承認。approvals 行と status 遷移を同一トランザクションで行う
+     * (承認記録の無い approved を作らない = 後で照合する相手を必ず残す)。
      */
     const approve = (idOrPrefix: string, opts?: { approverRef?: string; at?: string }) =>
       Effect.gen(function* () {
@@ -241,13 +241,13 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
       })
 
     /**
-     * 承認待ちについて、tick 側の結論を置く。**提案の状態は動かさない。**
+     * 承認待ちについて、tick 側の結論を置く。提案の状態は動かさない。
      *
      * 承認を出せるのはユーザーだけなので、tick に決着はつけられない。つけられるのは
      * 「今回できることは無い」まで — それを書く場所が無いと、期限が近いというだけで毎回起きて、
      * 毎回同じ結論を書き直す(実測で4回、いずれも道具呼び出し4回以下)。
      *
-     * 書いた後は `digest` が起こす理由に数えない。**一覧からは消さない** — 承認はまだ要る。
+     * 書いた後は `digest` が起こす理由に数えない。一覧からは消さない — 承認はまだ要る。
      * `ranWatch` と同じ形(docs/adr/0013 / 0017)。上書きしてよい: 状況が動けば結論も変わる。
      */
     const settle = (idOrPrefix: string, note: string, opts?: { at?: string }) =>

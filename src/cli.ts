@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * ユーザー側の入口。**承認はここでしか起きない**。
+ * ユーザー側の入口。承認はここでしか起きない。
  *
  * エージェント側(Flue)は提案を書いて止まる。その相手方が無いと片肺なので、
  * 承認・却下・停止・解除・確認を1本の CLI に置く。Discord も Web も無い今、
@@ -27,7 +27,7 @@
  *   oz selfdev [--fresh]   … 自分のソースの clone を作業場に置く(コンテナから直せるようにする)
  *   oz intake [--dry] [n]  … 過去の会話を圧縮して DB に入れる(DB の入口)
  *
- * **承認しても実行はされない**。コネクタ(送信・予約)が1つも無いので、approved は
+ * 承認しても実行はされない。コネクタ(送信・予約)が1つも無いので、approved は
  * 「承認済み・未実行」で止まる。ここを実行したことにするのが一番大きい嘘なので、そうしない。
  */
 import * as Cause from "effect/Cause"
@@ -58,7 +58,7 @@ const short = (id: string) => id.slice(0, 8)
 const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
 const kb = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`)
 
-/** Discord の出し先。**DM かチャンネルかを言い分ける** — 読む側が探しに行く場所が違う。 */
+/** Discord の出し先。DM かチャンネルかを言い分ける — 読む側が探しに行く場所が違う。 */
 const place = (ch: string | undefined, dm: string | undefined) =>
   ch === undefined ? "出せない" : ch === dm ? "DM" : `チャンネル ${ch}`
 
@@ -106,7 +106,7 @@ const STATUS_LABEL: Record<string, string> = {
 /**
  * `<id> <自由文>` を取る命令の引数(deny / answer / drop が同じ形)。
  * シェルは自由文を空白で刻んで渡してくるので、繋ぎ直してから空を弾く。
- * 足りないときは `null` を返し、**呼んだ側がその命令の使い方を出す** — 文言が一つに揃うと、
+ * 足りないときは `null` を返し、呼んだ側がその命令の使い方を出す — 文言が一つに揃うと、
  * どれが足りなかったのか読めなくなる。
  */
 const idAndText = (rest: readonly string[]): { id: string; text: string } | null => {
@@ -124,7 +124,7 @@ const NEXT_MOVE_FLAG: Readonly<Record<string, NextMove>> = {
 /**
  * `oz watch <やること> [--human]` の引数を割る。
  *
- * **知らない札は読み飛ばさずに弾く。** 読み飛ばすと、打ち間違えた札が watch の本文から
+ * 知らない札は読み飛ばさずに弾く。読み飛ばすと、打ち間違えた札が watch の本文から
  * 一語消えたまま登録され、宛先も既定のままになる — 二重に化けたうえ、
  * 登録は成功して見えるので気づく機会が無い。
  */
@@ -156,7 +156,7 @@ const card = (p: ProposalRow) =>
     `id        : ${p.id}`,
     `状態      : ${STATUS_LABEL[p.status] ?? p.status}${p.deny_reason ? ` — ${p.deny_reason}` : ""}`,
     `作成      : ${p.created_at}   期限: ${p.expires_at}`,
-    // tick 側の結論。**承認の代わりではない** — 「自分の側では進まない」と書いただけで、
+    // tick 側の結論。承認の代わりではない — 「自分の側では進まない」と書いただけで、
     // 提案はまだユーザーの判断を待っている(docs/adr/0028)。
     ...(p.settled_note ? [`tick の結論: ${p.settled_note}(${p.settled_at})`] : []),
     "",
@@ -182,7 +182,7 @@ const program = (argv: readonly string[]) =>
         const ledger = yield* Ledger
         const db = yield* Db
         const halt = yield* gov.readHalt
-        // **枠は2つある。** 対話は claude-max、作業と調査は chatgpt-rmod。片方だけ見ていると
+        // 枠は2つある。対話は claude-max、作業と調査は chatgpt-rmod。片方だけ見ていると
         // 「開いている」と出したまま取り込みが全部落ちる、が起こる。
         const nowMs = Date.now()
         const pools: string[] = []
@@ -208,7 +208,7 @@ const program = (argv: readonly string[]) =>
         const dc = yield* discord.where()
         const last = yield* db.meta("tick:last")
         const lastActive = yield* db.meta("tick:last_active")
-        // 記録が溜まっているか。**仕組みがあることと中身があることは別**で、
+        // 記録が溜まっているか。仕組みがあることと中身があることは別で、
         // ここを出さないと「静かなのは用が無いからか、何も知らないからか」がユーザーに分からない。
         const mem = yield* db.get(
           `SELECT COUNT(*)n,
@@ -221,7 +221,7 @@ const program = (argv: readonly string[]) =>
           `${t.day}: run ${t.runs} 回(うち自走 ${Number(a?.n ?? 0)}/${BUDGET.autonomousRuns})` +
             ` / 入力 ${fmtTok(t.inTok)} 出力 ${fmtTok(t.outTok)}` +
             ` / 実費 $${t.usd.toFixed(4)}${t.unpriced > 0 ? ` / 単価未登録 ${t.unpriced} 件` : ""}`,
-          // tick は黙って死ぬ。**最後に呼ばれた時刻**を出しておかないと、
+          // tick は黙って死ぬ。最後に呼ばれた時刻を出しておかないと、
           // 「静かなのは用が無いからか、止まっているからか」がユーザーに区別できない。
           last
             ? `tick: 最終 ${last}(最後に実際に動いたのは ${lastActive ?? "まだ無い"})`
@@ -229,11 +229,11 @@ const program = (argv: readonly string[]) =>
           `DB: ${Number(mem?.n ?? 0)} 件(うち取り込み ${Number(mem?.imported ?? 0)} セッション)`,
           `承認待ち: ${pending.length} 件`,
           // 宛先が無いことは実行時に何も起こさない(黙って何もしない)ので、ここで出さないと
-          // 「静かなのは用が無いからか、宛先が空だからか」が分からない。**行き来はこの1本だけ。**
+          // 「静かなのは用が無いからか、宛先が空だからか」が分からない。行き来はこの1本だけ。
           discord.configured()
             ? `Discord: 会話 ${place(dc.talk, dc.dm)} / 下書き ${place(dc.draft, dc.dm)} — リアクションも自由文も受けられる`
             : "Discord: 宛先が無い(.env の OPEN_ZERO_DISCORD_TOKEN が空)",
-          // **進み具合は落とす先を持たない**(docs/adr/0030)。指していなければ出ないので、
+          // 進み具合は落とす先を持たない(docs/adr/0030)。指していなければ出ないので、
           // ここで言わないと「動いていないのか、出す先が無いのか」が分からない。
           dc.log
             ? `進み具合: チャンネル ${dc.log} に1回1行(呼びかけなし)`
@@ -272,7 +272,7 @@ const program = (argv: readonly string[]) =>
       }
 
       /**
-       * **`attention` が「これから何を見るか」で、こちらは「実際に何をしたか」。**
+       * `attention` が「これから何を見るか」で、こちらは「実際に何をしたか」。
        * 自分で書いた報告(`言った`)だけでは進み具合を確かめられないので、
        * 呼んだ道具の並びと、窓の中に増えた行数を別の欄に置く(docs/adr/0030)。
        */
@@ -284,7 +284,7 @@ const program = (argv: readonly string[]) =>
       /**
        * tick が見ているものを、ユーザーの側から置く/畳む4本。
        *
-       * 問いも watch も、**増やす経路はエージェントの道具にしかなく、減らす経路は答えるときしか無かった**。
+       * 問いも watch も、増やす経路はエージェントの道具にしかなく、減らす経路は答えるときしか無かった。
        * 片方向しかない置き場は必ず溜まる。溜まった側は `openQuestions` の上限を埋めて、
        * 新しく立った問いを tick から押し出す(実測: open 38 件のうち tick が見ていたのは 20 件)。
        */
@@ -292,7 +292,7 @@ const program = (argv: readonly string[]) =>
         const a = idAndText(rest)
         if (!a) return yield* Effect.fail(new Error("id と答えが要る: oz answer <id> <答え>"))
         const att = yield* Attention
-        // ユーザーが打った答えは一次情報。**この経路だけは確認済みとして入れてよい。**
+        // ユーザーが打った答えは一次情報。この経路だけは確認済みとして入れてよい。
         const q = yield* att.answer(a.id, a.text, { confirmed: true })
         return `答えた: ${short(q.id)} ${q.question}\n  → ${q.answer}`
       }
@@ -371,7 +371,7 @@ const program = (argv: readonly string[]) =>
       }
 
       /**
-       * 事実の変遷を見る/書き換える。**上書きではなく区間を継ぐ**ので、
+       * 事実の変遷を見る/書き換える。上書きではなく区間を継ぐので、
        * 「今なんなのか」と「あのとき何だったか」が両方残る。
        *   oz belief <slot>                    … 今の値と変遷
        *   oz belief <slot> <値> [--from ISO]  … 新しい値を確定(前の区間はそこで閉じる)
@@ -405,7 +405,7 @@ const program = (argv: readonly string[]) =>
           `  ${localStamp(now.validFrom)} から(DB が知ったのは ${localStamp(now.updatedAt, false)})`,
           "",
           `変遷(${hist.length} 件)`,
-          // **閉じた区間も消さずに出す。**「あのとき何だったか」に答えられるのがこの形の値打ち。
+          // 閉じた区間も消さずに出す。「あのとき何だったか」に答えられるのがこの形の要点。
           ...hist.map((h) => {
             const span = h.validUntil === null ? "いまも" : `〜 ${localStamp(h.validUntil, false)}`
             const why = h.invalidatedReason === null ? "" : `  ← ${h.invalidatedReason}`
@@ -415,14 +415,14 @@ const program = (argv: readonly string[]) =>
       }
 
       case "dream": {
-        // 何日ぶんかをまとめて見直す。**--dry は枠を使わない**ので、既定の確認手段はこちら。
+        // 何日ぶんかをまとめて見直す。--dry は枠を使わないので、既定の確認手段はこちら。
         const dry = rest.includes("--dry")
         const days = Number(rest.find((a) => /^\d+$/.test(a)) ?? DREAM_DAYS)
         return yield* dream({ days, ...(dry ? { dry: true } : {}) })
       }
 
       case "cleanup": {
-        // **消すほうは取り消せない**ので、既定の確認手段は --dry。
+        // 消すほうは取り消せないので、既定の確認手段は --dry。
         const dry = rest.includes("--dry")
         const days = Number(rest.find((a) => /^\d+$/.test(a)) ?? CLEANUP_DAYS)
         return yield* cleanup({ days, ...(dry ? { dry: true } : {}) })
@@ -434,7 +434,7 @@ const program = (argv: readonly string[]) =>
       }
 
       case "selfdev": {
-        // **中でゲートが通るところまでやる。** clone を置いただけの状態を「できた」と出すと、
+        // 中でゲートが通るところまでやる。clone を置いただけの状態を「できた」と出すと、
         // 次の tick が依存の取得で持ち時間を全部使って、そこで切られる。
         return yield* selfdev(rest.includes("--fresh") ? { fresh: true } : {})
       }
@@ -445,7 +445,7 @@ const program = (argv: readonly string[]) =>
         const n = Number(rest.find((a) => /^\d+$/.test(a)) ?? (dry ? 100 : 10))
         const refs = yield* intake.scan(n)
 
-        // ── 選別だけ。**枠を1回も使わずに効き目が測れる**ので、既定の確認手段はこちら。
+        // 選別だけ。枠を1回も使わずに効き目が測れるので、既定の確認手段はこちら。
         if (dry) {
           if (refs.length === 0) return "取り込むものは無い(全部済んでいる)"
           let raw = 0
@@ -479,7 +479,7 @@ const program = (argv: readonly string[]) =>
         const done: string[] = []
         let stopped = ""
         for (const ref of refs) {
-          // 途中で枠が閉じたら**そこで止めて、済んだぶんは残す**。
+          // 途中で枠が閉じたら、そこで止めて済んだぶんは残す。
           // 全体を1トランザクションにすると、最後の1件の枠切れでそれまで取り込んだぶんまで消える。
           const r = yield* intake.ingest(ref).pipe(
             Effect.catchAll((e) => {
@@ -509,7 +509,7 @@ function describe(e: unknown): string {
   const err = e as { _tag?: string; message?: string; reason?: string; id?: string; what?: string }
   switch (err?._tag) {
     // 何を引いて外したかは失敗側が持っている。ここで「提案」と決め打つと、
-    // 問いや watch を引いたときに**当たらなかった相手を偽って**報せることになる。
+    // 問いや watch を引いたときに、当たらなかった相手を偽って報せることになる。
     case "NotFound":
       return `そんな${err.what}は無い: ${err.id}`
     case "Conflict":
@@ -526,7 +526,7 @@ const main = async (): Promise<void> => {
   const rt = runtime()
   try {
     // runPromise は失敗を FiberFailure で包んで投げてくる(message が "An error has occurred" になる)。
-    // Exit で受けて cause を潰し、**元の失敗値そのもの**を見て文言を選ぶ。
+    // Exit で受けて cause を潰し、元の失敗値そのものを見て文言を選ぶ。
     const exit = await rt.runPromise(Effect.exit(program(process.argv.slice(2))))
     if (Exit.isSuccess(exit)) {
       console.log(exit.value)

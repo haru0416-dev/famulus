@@ -1,18 +1,18 @@
 /**
- * モデル呼び出しに統治を掛ける層。**モデルの実体とは別に置く。**
+ * モデル呼び出しに統治を掛ける層。モデルの実体とは別に置く。
  *
  * 掛けるのは3つ:
  *   1. 呼ぶ前のゲート(halt / 枠クールダウン / 日次 run 数)
  *   2. 枠シグナルの計上(閉じた窓を毎ターン叩かないため)
  *   3. 会計(ledger。日次 run 数の歯止めがこれを数える)
  *
- * **フックではなく middleware に置くのが要点。** 道具ループは1回の submission で何度も
+ * フックではなく middleware に置く。道具ループは1回の submission で何度も
  * モデルを呼ぶので、「開始時に1回」の位置に置くと検査は最初の1回きりになる。
  * 枠を実際に消費するのは1回1回の呼び出しなので、ゲートを通さずにモデルへ届く道を作らないには
  * `wrapGenerate` の位置しかない。
  *
  * src/model/Runner.ts が同じ順序(precheck → 実行 → 枠 → 会計)を Effect で持っている。
- * こちらは AI SDK の道具ループから呼ばれる側で、**同じ DB の同じ表に載る**。
+ * こちらは AI SDK の道具ループから呼ばれる側で、同じ DB の同じ表に載る。
  */
 
 import type { LanguageModelV4, LanguageModelV4Middleware } from "@ai-sdk/provider"
@@ -28,11 +28,11 @@ import { claudeCliModel, PROVIDER_META } from "./language-model.ts"
 import { traceOf } from "./trace.ts"
 
 /**
- * この経路がどちらの枠を食うか。**プロセス単位で決まる**。
- * tick(src/tick.ts)は systemd から別プロセスで起きるので、環境変数で仕切るのが素直で嘘が無い
- * (1プロセスの中で対話と自走が混ざることがない、という事実をそのまま型ではなく配置で表している)。
+ * この経路がどちらの枠を食うか。プロセス単位で決まる。
+ * tick(src/tick.ts)は systemd から別プロセスで起きるので、環境変数で仕切る
+ * (1プロセスの中で対話と自走が混ざることがない、という事実をそのまま配置で表している)。
  *
- * **読み込み時ではなく呼び出し時に見る。** const にすると import の順序が意味を持ってしまい、
+ * 読み込み時ではなく呼び出し時に見る。const にすると import の順序が意味を持ってしまい、
  * 「tick.ts が env を立てる前に評価されていたので対話枠を食っていた」が起きる。
  */
 export const lane = (): Lane => (process.env.OPEN_ZERO_LANE === "autonomous" ? "autonomous" : "interactive")
@@ -47,7 +47,7 @@ async function gate(model: string): Promise<void> {
       const gov = yield* Governance
       yield* gov.precheck({
         meter: "quota",
-        // **pool はモデルで決まる**(GPT を回しても Claude の窓は閉じない、逆も)。
+        // pool はモデルで決まる(GPT を回しても Claude の窓は閉じない、逆も)。
         pool: poolForModel(model),
         model,
         at: nowIso(),
@@ -78,7 +78,7 @@ function readQuota(meta: unknown): QuotaSignal | undefined {
 }
 
 /**
- * 会計と枠の計上。**この経路と Runner 経路が同じ DB に載る**ようにしてある。
+ * 会計と枠の計上。この経路と Runner 経路が同じ DB に載るようにしてある。
  * ここを飛ばすと ledger が空のままになり、日次 run 数の歯止め(ledger を数える)が永久に効かない。
  * 記録の失敗で応答そのものを落とすのは割に合わないので、失敗は握って進む。
  */
@@ -122,7 +122,7 @@ async function noteFailure(e: unknown): Promise<void> {
   )
 }
 
-/** ゲート → 実行 → 枠 → 会計。**この順以外でモデルへ届く道を作らない。** */
+/** ゲート → 実行 → 枠 → 会計。この順以外でモデルへ届く道を作らない。 */
 export function governance(): LanguageModelV4Middleware {
   return {
     specificationVersion: "v4",
@@ -155,7 +155,7 @@ export function governance(): LanguageModelV4Middleware {
 }
 
 /**
- * 統治つきのモデル。**エージェントに差すのはこれだけ**。
+ * 統治つきのモデル。エージェントに差すのはこれだけ。
  * 素の `claudeCliModel` を直接使う経路を作らない — ゲートを通らずに枠が減る。
  */
 export function claudeMax(modelId: string): LanguageModelV4 {

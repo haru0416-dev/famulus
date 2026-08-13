@@ -1,5 +1,5 @@
 /**
- * 記録。全 run を1行残す。**単価不明を黙って 0 円にしない**(`unpriced=1` で立てる)。
+ * 記録。全 run を1行残す。単価不明を黙って 0 円にしない(`unpriced=1` で立てる)。
  *
  * 定額枠(meter="quota")の run は `usd=0` かつ `unpriced=0` で入れる。
  * ここが従量経路との決定的な違いで、「値段が分からないから0」ではなく「限界費用が本当に0」。
@@ -16,7 +16,7 @@ import { Db } from "./Db.ts"
 import type { Meter } from "./Governance.ts"
 
 /**
- * **入力は3つに割れる。** `inTok` はキャッシュに載らなかった分だけで、system やスキーマ定義は
+ * 入力は3つに割れる。`inTok` はキャッシュに載らなかった分だけで、system やスキーマ定義は
  * `cacheWrite`(初回)か `cacheRead`(2回目以降)に入る。
  * どれか1つを「入力」として読むと桁が変わるので、見るときは必ず3つ足す。
  */
@@ -79,7 +79,7 @@ export class Ledger extends Effect.Service<Ledger>()("Ledger", {
     /** 今日の使用状況。CLI と朝会が同じ数字を見るための1点。 */
     const today = (at: string = nowIso()) =>
       Effect.gen(function* () {
-        // 見出しも集計も**ユーザーの1日**で切る(core/time.ts)。
+        // 見出しも集計もユーザーの1日で切る(core/time.ts)。
         const day = dayRange(at)
         const month = monthRange(at)
         const r = yield* db.get(

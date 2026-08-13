@@ -1,26 +1,26 @@
 /**
- * 検索。**`fetch` は URL を1つ開く道具で、こちらは「まだ URL を知らない」ときの道具。**
+ * 検索。`fetch` は URL を1つ開く道具で、こちらは URL をまだ知らないとき。
  *
- * 叩く先を選ぶ線引きは **「相手がプログラム向けに出している API を使う」** の一本。
+ * 叩く先は「相手がプログラム向けに出している API を使う」で選ぶ。
  * robots の `Disallow`・CAPTCHA・`access denied` で断られている入口は使わない。
  * 一般の web を引く API は買うと鍵が要る(Bing Search API は 2025-08-11 に終了、
  * Google Custom Search JSON API は 2027-01-01 終了)ので、`~/Project/searxng` に SearXNG を立てて
  * 127.0.0.1:8888 に縛ってある。エンジンの選定理由は `~/Project/searxng/config/settings.yml`。
  *
  * X はこの線引きで本文の取れる API が全部落ちたので、`x` の先だけは取りに行かず、
- * SearXNG に `site:x.com` を投げて**検索エンジンが既に作った索引の要約を読む**。
+ * SearXNG に `site:x.com` を投げて検索エンジンが既に作った索引の要約を読む。
  *
  * 回数制限のある先(Qiita 無認証 60回/時、GitHub 検索 無認証 10回/分)は、当たったら
- * 解除時刻まで叩かない(`restingUntil`)。鍵を入れれば枠は増えるが、**鍵を置く場所と
- * ユーザーの同意が先**なので今は入れていない。
+ * 解除時刻まで叩かない(`restingUntil`)。鍵を入れれば枠は増えるが、置き場所とユーザーの
+ * 同意が先なので今は入れていない。
  *
  * 先を指定しなければ `wide` の先へ同時に出る。`where` で名指しもできる。
- * 返すのは題・URL・書き手・日付・数字だけ。**本文は持ってこない** — 読むかどうかは見てから決める。
+ * 返すのは題・URL・書き手・日付・数字だけ。本文は持ってこない。
  */
 import { localStamp } from "../core/time.ts"
 import { fetchRaw } from "./Web.ts"
 
-/** 1件。**本文は入れない。** 開くかどうかを決めるのに要るものだけ。 */
+/** 1件。本文は入れない。開くかどうかを決めるのに要るものだけ。 */
 export interface Hit {
   readonly title: string
   readonly url: string
@@ -28,7 +28,7 @@ export interface Hit {
   readonly by?: string
   /** 日付。ISO のまま持ち、見せるときにユーザーの時計へ直す。 */
   readonly at?: string
-  /** 星の数・いいね・点数・要約など、**その先でしか分からない目印**。 */
+  /** 星の数・いいね・点数・要約など、その先でしか分からない目印。 */
   readonly note?: string
 }
 
@@ -44,19 +44,19 @@ interface Source {
   /** 何が引ける先か。道具の説明文に出す。 */
   readonly what: string
   /**
-   * 結果の読み方。件数の見出しの下に1行出す。**他の先と読み方が違う先にだけ書く。**
-   * 道具の説明に一度書くのでは足りない — 読む側が判断するのは結果を見た瞬間で、そこに要る。
+   * 結果の読み方。件数の見出しの下に1行出す。他の先と読み方が違う先にだけ書く。
+   * 読む側が判断するのは結果を見た瞬間なので、道具の説明に一度書くのでは足りない。
    */
   readonly reading?: string
   /**
-   * 叩く先。**複数返すと、まとめて叩いて1つの先として返す。**
+   * 叩く先。複数返すと、まとめて叩いて1つの先として返す。
    * `site:` を1媒体ずつ投げないと当たらない先があるので、そこで要る(`job` を参照)。
    */
   readonly url: (q: string, n: number) => string | readonly string[]
   /**
-   * 0件だったときにもう一度だけ試す形。**絞り込みを外す用**で、別の問いを投げるためではない。
-   * `undefined` を返せば2回目を出さない — **最初から絞っていない語では、同じ問いをもう一度
-   * 投げることになるだけ**なので、そこで枠を使わない(`qiita` を参照)。
+   * 0件だったときにもう一度だけ試す形。絞り込みを外す用で、別の問いを投げるためではない。
+   * `undefined` を返せば2回目を出さない。最初から絞っていない語では同じ問いをもう一度
+   * 投げるだけになるので、そこで枠を使わない(`qiita` を参照)。
    */
   readonly broaden?: (q: string, n: number) => string | readonly string[] | undefined
   readonly parse: (body: string) => readonly Hit[]
@@ -72,15 +72,14 @@ interface Source {
   readonly qualifiers?: boolean
   /**
    * 自分で立てたサーバなら、その origin。`Web.ts` の内側判定をここだけ免除する。
-   * **文字列は実装が持つ** — 問い合わせ文から組み立てられる余地を作らない。
+   * 文字列は実装が持つ — 問い合わせ文から組み立てられる余地を作らない。
    */
   readonly ownOrigin?: () => string
 }
 
 /**
- * 検索エンジンの構文を落とす。**API は `site:` を解さない。**
- * GitHub は不正な絞り込みとして 422 で断り、Zenn と HN はただの語として読むので 0 件になる。
- * 先を絞りたいときは `where` で名指しする側が正しい道。
+ * 検索エンジンの構文を落とす。API は `site:` を解さない — GitHub は不正な絞り込みとして
+ * 422 で断り、Zenn と HN はただの語として読むので 0 件になる。先を絞るなら `where` で名指しする。
  *
  * 絞り込みしか書かれていなかったときは、値のほうを語として残す(戻り値は空文字にならない)。
  */
@@ -99,7 +98,7 @@ export function plainQuery(q: string): string {
 
 /**
  * 自前の SearXNG の在り処。既定は `~/Project/searxng/docker-compose.yml` が縛っている先。
- * **空にすると `web` の先が既定から外れる** — 容器を落として使わない日のための逃げ道。
+ * 空にすると `web` の先が既定から外れる(コンテナを落として使わない日のため)。
  */
 const searxngBase = (): string => (process.env.OPEN_ZERO_SEARXNG ?? "http://127.0.0.1:8888").trim()
 
@@ -115,12 +114,12 @@ const rows = (v: unknown): readonly Record<string, unknown>[] =>
 const strs = (v: unknown): readonly string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "") : []
 /**
- * 途中で切れた JSON の配列から、**閉じている項だけ**を拾う。
+ * 途中で切れた JSON の配列から、閉じている項だけを拾う。
  *
  * Qiita の API は記事本文を丸ごと返すので、読み取り上限に当たって末尾が欠けることがある。
  * `JSON.parse` はそこで丸ごと失敗し、揃っている手前の項まで道連れになる。
  * 括弧の深さを数えて、閉じたところまでを配列に組み直す(文字列の中の括弧は数えない)。
- * 1件も閉じていなければ空配列。**例外は投げない。**
+ * 1件も閉じていなければ空配列を返す。例外は投げない。
  */
 function partialArray(body: string): readonly Record<string, unknown>[] {
   try {
@@ -162,8 +161,8 @@ function partialArray(body: string): readonly Record<string, unknown>[] {
 }
 
 /**
- * 語を上限まで切る。**語の途中では切らない** — 空白があればそこまでで止める。
- * 半端な語尾(`migrat`)を投げても当たらないので、1語まるごと落とすほうを取る。
+ * 語を上限まで切る。語の途中では切らず、空白があればそこまでで止める。
+ * 半端な語尾(`migrat`)を投げても当たらないので、1語まるごと落とす。
  */
 function clip(q: string, max: number): string {
   const chars = [...q]
@@ -174,13 +173,13 @@ function clip(q: string, max: number): string {
 }
 
 /**
- * 検索語に日本語(かな・漢字)が混ざっているか。**日本語の先に絞りを掛けるかの判断に使う。**
- * カタカナ語だけの片仮名(「ランタイム」)も日本語として拾う。ローマ字表記の日本語は拾えないが、
+ * 検索語に日本語(かな・漢字)が混ざっているか。日本語の先に絞りを掛けるかの判断に使う。
+ * 片仮名だけの語(「ランタイム」)も日本語として拾う。ローマ字表記の日本語は拾えないが、
  * 検索語としてはまず出てこない形なので見ない。
  */
 const hasJa = (q: string): boolean => /[぀-ヿ㐀-鿿]/u.test(q)
 
-/** 副業の募集を引く先。**個別の募集ページが索引に入っている媒体だけ**(`job` の注)。 */
+/** 副業の募集を引く先。個別の募集ページが索引に入っている媒体だけ(`job` の注)。 */
 const JOB_SITES = [
   "crowdworks.jp/public/jobs",
   "lancers.jp/work/detail",
@@ -194,14 +193,14 @@ const JOB_PATHS: Record<string, RegExp> = {
 }
 
 /**
- * 索引が投稿ではなく**ログイン前の画面**を拾ったときに要約へ出る文言。
+ * 索引が投稿ではなくログイン前の画面を拾ったときに要約へ出る文言。
  * ここに当たった要約は投稿の中身ではないので落とす。
  */
 const X_SHELL =
   /JavaScript is (?:disabled|not available)|The latest posts from|Something went wrong|site owner hides|Log in to X/i
 
 /**
- * X を引く語を組む。`from:名前` か `@名前` が混ざっていたら**その人の投稿だけ**に絞る。
+ * X を引く語を組む。`from:名前` か `@名前` が混ざっていたらその人の投稿だけに絞る。
  * 絞りは `site:x.com/名前` の形で掛ける — `from:` や `@` を語として渡すより本人以外が混ざらない。
  */
 function xQuery(q: string): string {
@@ -214,8 +213,8 @@ function xQuery(q: string): string {
  * `web` 宛ての語が X を狙っているかを見て、狙っているなら `x` へ渡す形に直す。
  * `site:x.com/youyuxi Vite` → `from:youyuxi Vite`。狙っていなければ `undefined`。
  *
- * **`site:x.com` だけを見て、他の `site:` は見ない。** 2つ書いてあるなら
- * (`site:x.com OR site:zenn.dev` のような書き方)X に寄せるのは行き過ぎなので、そのまま `web` に流す。
+ * 見るのは `site:x.com` だけ。`site:` が2つ書いてあるなら(`site:x.com OR site:zenn.dev`)
+ * X に寄せるのは行き過ぎなので、そのまま `web` に流す。
  */
 function toXTerm(q: string): string | undefined {
   const m = /(?:^|\s)site:(?:www\.)?(?:x|twitter)\.com(?:\/([A-Za-z0-9_]{1,15}))?(?=\s|$)/i.exec(q)
@@ -230,8 +229,8 @@ function toXTerm(q: string): string | undefined {
  * 狙っていなければ `undefined`。語が「Show HN」だけだったときは空文字を返す
  * (Algolia は語なし+`tags=show_hn` で点数順の上位を返すので、それで成り立つ)。
  *
- * **語ではなくタグで絞るために落とす。** 「Show HN」を語として残すと近接ランキングがその2語に
- * 引かれて、題が話題語で始まるだけの新しい項が上に来る。**残りの語の引用符は外さない**
+ * 語ではなくタグで絞るために落とす。「Show HN」を語として残すと近接ランキングがその2語に
+ * 引かれて、題が話題語で始まるだけの新しい項が上に来る。残りの語の引用符は外さない
  * (Algolia は句として読む)が、`Show HN` を括っている引用符は前後とも含めて拾う。
  */
 function toShowHnTerm(q: string): string | undefined {
@@ -264,8 +263,8 @@ const searxngHits = (b: string, content?: (c: string) => string | undefined): re
     const url = str(r.url)
     const title = str(r.title)
     if (!url || !title) return []
-    // **いくつの索引が同じページを拾ったか**を出す。SearXNG が並べ替えに使っている根拠そのもので、
-    // 「1つの索引だけが出してきたページ」と「9 中 5 つが揃って出したページ」を読む側が見分けられる。
+    // いくつの索引が同じページを拾ったかを出す。SearXNG が並べ替えに使っている値で、
+    // 1つの索引だけが出したページと、9 中 5 つが揃って出したページを読む側が見分けられる。
     const n = strs(r.engines).length
     const raw = str(r.content)
     const c = raw === undefined ? undefined : (content?.(raw) ?? (content ? undefined : raw))
@@ -316,7 +315,7 @@ const SOURCES: readonly Source[] = [
     what: "一般の web(自前の SearXNG が 9 の索引をまとめて引く)。上の先で当たらない話題はここ",
     // 唯一「一般の web」を引ける先で、他が全部専門の索引なので、既定に必ず入れる。
     wide: true,
-    // 検索エンジンの構文が通る唯一の先。**ここだけは `site:` を落とさずにそのまま渡す。**
+    // 検索エンジンの構文が通る唯一の先。ここだけは `site:` を落とさずにそのまま渡す。
     qualifiers: true,
     ownOrigin: searxngBase,
     unavailable: () =>
@@ -328,27 +327,26 @@ const SOURCES: readonly Source[] = [
   {
     name: "x",
     what: "X(旧 Twitter)の投稿。作者本人の発表や、記事にならない短い話。**要約が投稿の本文そのもの**。語に `from:名前` を混ぜるとその人の投稿だけになる",
-    // **他の先と読み方が逆になるので、結果の側にも書く。**
-    // 道具の説明にある「要約を事実として書かない」をそのまま当てると、取れている投稿本文を
-    // 捨てることになる — X の要約はページの紹介文ではなく、投稿の文字そのものだから。
+    // 他の先と読み方が逆になるので、結果の側にも書く。道具の説明にある
+    // 「要約を事実として書かない」を当てると、取れている投稿本文を捨てることになる。
     reading:
       "**ここの要約は投稿の本文そのもの**(索引が写した逐語の断片)で、ページの紹介文ではない。" +
       "そのまま引用してよい。ただし**頭からとは限らず、途中から始まって切れている**ので、" +
       "引くときは断片だと書く。x.com は開けない(robots)ので、全文はこれ以上取れない。",
-    // **X 本体は叩かない。** `x.com/robots.txt` が `User-agent: * / Disallow: /` で、
+    // X 本体は叩かない。`x.com/robots.txt` が `User-agent: * / Disallow: /` で、
     // 本文の取れる API(`cdn.syndication.twimg.com`・`publish.x.com/oembed`)も robots で断られている。
-    // 代わりに **既に索引された結果を読む** — 取りに行ったのは検索エンジンで、こちらは
-    // SearXNG に問い合わせるだけ。時系列で追う道は作れない。**語で引く先。**
+    // 代わりに既に索引された結果を読む — 取りに行ったのは検索エンジンで、こちらは
+    // SearXNG に問い合わせるだけ。時系列で追う道は作れないので、語で引く先になる。
     wide: false,
     ownOrigin: searxngBase,
     unavailable: () =>
       searxngBase() ? undefined : "OPEN_ZERO_SEARXNG が空にされている(SearXNG を使わない設定)",
-    // `site:` は**こちらが付ける**(`xQuery`)。呼ぶ側が書いた `site:` は `plainQuery` が落としてから
+    // `site:` はこちらが付ける(`xQuery`)。呼ぶ側が書いた `site:` は `plainQuery` が落としてから
     // 来るので(`qualifiers` を立てていない)、`site:zenn.dev` と競合して 0 件になることがない。
     url: (q) => `${searxngBase()}/search?q=${enc(xQuery(q))}&format=json`,
-    // **`site:x.com` を守らない索引が混ざる**(vite.dev や wikipedia が返る)ので、
-    // 投稿の永久リンクだけ残す。要約のほうにも殻(ログイン前の画面)が混ざるが、
-    // **項ごとは落とさない** — 題のほうに中身が残っていることがある。要約だけ外して題は出す。
+    // `site:x.com` を守らない索引が混ざる(vite.dev や wikipedia が返る)ので、
+    // 投稿の永久リンクだけ残す。要約にログイン前の画面が混ざったときは項ごと落とさず、
+    // 要約だけ外して題は出す(題のほうに中身が残っていることがある)。
     parse: (b) => {
       const seen = new Set<string>()
       return searxngHits(b, (c) => (X_SHELL.test(c) ? undefined : c)).flatMap((h) => {
@@ -361,8 +359,8 @@ const SOURCES: readonly Source[] = [
         if (!/^(?:www\.)?(?:x|twitter)\.com$/.test(u.hostname)) return []
         const id = /\/status\/(\d+)/.exec(u.pathname)?.[1]
         if (!id) return []
-        // 同じ投稿が別の URL で二重に出ることがある(`?lang=ca` 付きや、旧い口座名のまま索引された物)。
-        // **投稿は id で1つに決まる**ので id で見る。
+        // 同じ投稿が別の URL で二重に出ることがある(`?lang=ca` 付きや、旧い名前のまま索引された物)。
+        // 投稿は id で1つに決まるので id で見る。
         if (seen.has(id)) return []
         seen.add(id)
         // 題まで「mizchi on X」で終わっていて要約も落ちたなら、残しても開く先が無い
@@ -375,7 +373,7 @@ const SOURCES: readonly Source[] = [
   {
     name: "wikipedia",
     what: "日本語版 Wikipedia。**語そのものを引くとき**に名指しで使う",
-    // **既定から外した。** 全文一致なので、概念で引くと本文にその語が出るだけの記事が並ぶ。
+    // 既定から外した。全文一致なので、概念で引くと本文にその語が出るだけの記事が並ぶ。
     // 語を1つ渡せば当たる先なので、混ぜるのではなく名指しで呼ぶ。
     wide: false,
     url: (q, n) =>
@@ -400,7 +398,7 @@ const SOURCES: readonly Source[] = [
     name: "zenn",
     what: "Zenn の記事(日本語の技術記事)",
     wide: true,
-    // **語は 100 文字まで。** 101 文字目から 400 が返る(バイト数ではなく文字数)。
+    // 語は 100 文字まで。101 文字目から 400 が返る(バイト数ではなく文字数)。
     url: (q) => `https://zenn.dev/api/search?q=${enc(clip(q, 100))}&source=articles&order=alltime`,
     parse: (b) =>
       rows(obj(JSON.parse(b)).articles).flatMap((r) => {
@@ -423,16 +421,16 @@ const SOURCES: readonly Source[] = [
     name: "qiita",
     what: "Qiita の記事(日本語の技術記事)",
     wide: true,
-    // **`per_page` を上げない。** 本文が丸ごと入るので、10 件で読む上限 1.5MB を超えて
-    // JSON の途中で切れる。5 件に抑えたうえで、切れたときは `partialArray` で閉じている項だけ拾う。
+    // `per_page` を上げない。本文が丸ごと入るので、10 件で読む上限 1.5MB を超えて JSON が途中で切れる。
+    // 5 件に抑えたうえで、切れたときは `partialArray` で閉じている項だけ拾う。
     //
-    // **並びは新着順で、変えられない**(`sort=rel` は無視される)。そのままだと当日投稿の ♡0 が並ぶので、
+    // 並びは新着順で変えられない(`sort=rel` は無視される)。そのままだと当日投稿の ♡0 が並ぶので、
     // 検索語の側で `stocks:>10` と絞る。ただし狭い話題は丸ごと消えるので、0件のときだけ外して引き直す。
     //
-    // **その絞りを、日本語が入っている語にだけ掛ける。** ここは1時間 60回の硬い枠を持つ唯一の先で、
-    // 0件→引き直しが続くと1問で使い切る。ASCII だけの語(英語の識別子)は `stocks:>10` とまず当たらない
-    // — Qiita の記事は日本語で、ストックの多い記事ほど一般的な話題に寄るから。
-    // 日本語が入っていない語では最初から絞らず、`broaden` も出さない。**1検索 1リクエストになる。**
+    // その絞りは日本語が入っている語にだけ掛ける。ここは1時間 60回の硬い枠を持つ唯一の先で、
+    // 0件→引き直しが続くと1問で使い切る。Qiita の記事は日本語なので、ASCII だけの語
+    // (英語の識別子)は `stocks:>10` とまず当たらない。
+    // 日本語が入っていない語では最初から絞らず、`broaden` も出さない(1検索 1リクエスト)。
     url: (q, n) =>
       `https://qiita.com/api/v2/items?query=${enc(hasJa(q) ? `${q} stocks:>10` : q)}&per_page=${Math.min(n, 5)}`,
     broaden: (q, n) =>
@@ -494,11 +492,10 @@ const SOURCES: readonly Source[] = [
   {
     name: "showhn",
     what: "Show HN。**個人が作って出した物**そのもの。記事ではなく動く物を探すとき",
-    // `hn` と同じ Algolia の API に `tags=show_hn` を足すだけ。**追加の枠も鍵も要らない。**
+    // `hn` と同じ Algolia の API に `tags=show_hn` を足すだけ。追加の枠も鍵も要らない。
     //
-    // **新着順(`search_by_date`)は採らない。** 並べ替えを変えると語がほとんど当たらなくなり、
-    // その日の投稿が点数に関係なく上に来る。**問いに答える先としては関連順。**
-    // 新着を流し読みする道は塞がっているのではなく、**この道具が語で引く形しか持っていない**。
+    // 新着順(`search_by_date`)は採らない。並べ替えを変えると語がほとんど当たらなくなり、
+    // その日の投稿が点数に関係なく上に来る。この道具は語で引く形しか持っていないので関連順。
     wide: false,
     url: (q, n) => `https://hn.algolia.com/api/v1/search?query=${enc(q)}&tags=show_hn&hitsPerPage=${n}`,
     parse: hnHits,
@@ -512,13 +509,13 @@ const SOURCES: readonly Source[] = [
       "**募集の終わったものが混ざる。**索引を読んでいるため。媒体ごとに新しい順で並べてあり、" +
       "**上に出たものほど生きている**が、上でも4件に1件は終わっている。" +
       "**報酬・掲載日・応募期限は募集ページを開けば載っている。**勧める前に開いて、期限と中身を確かめる。",
-    // **問い合わせを媒体ごとに分けている。** `(site:a OR site:b)` と書くと索引が潰して募集ページがほとんど返らない。
+    // 問い合わせを媒体ごとに分ける。`(site:a OR site:b)` と書くと索引が潰して募集ページがほとんど返らない。
     // `Source.url` が配列を返せるのはこのため。媒体が3つなのは、`site:` で引いて
-    // **個別の募集ページが索引に入っている**ものだけ残した結果(Findy Freelance は案件が login の内側、
+    // 個別の募集ページが索引に入っているものだけ残した結果(Findy Freelance は案件が login の内側、
     // ココナラと Offers は分類ページと記事しか出てこない)。
     //
-    // **期間では絞らない。** `time_range` を付けると期間の条件が語の一致より強く働いて、
-    // 技術も職種も違う募集が上位を埋める。鮮度は `parse` の並べ替えだけで持たせている。
+    // 期間では絞らない。`time_range` を付けると期間の条件が語の一致より強く働いて、
+    // 技術も職種も違う募集が上位を埋める。新しい順は `parse` の並べ替えだけで作る。
     wide: false,
     ownOrigin: searxngBase,
     unavailable: () =>
@@ -527,15 +524,15 @@ const SOURCES: readonly Source[] = [
     parse: (b) => {
       // 媒体ごとに新しい順。募集 ID が掲載時刻の代わりになる。
       // 媒体をまたいで ID を比べても意味が無いので、先ごとに束ねてから並べ替える。
-      // **鮮度を保つのはこの並べ替えだけ**で、生き死には保証しない(`reading` で開かせている)。
+      // 募集が生きているかまでは分からない(`reading` で開かせている)。
       const 束 = new Map<string, { hit: Hit; id: number }[]>()
       for (const h of searxngHits(b)) {
         const u = new URL(h.url)
         const host = u.hostname.replace(/^(?:www|en-jp)\./, "")
         const m = JOB_PATHS[host]?.exec(u.pathname)
         if (!m) continue
-        // **題が URL のままの項は落とす。**索引が題を取れていないページで、語とは無関係に
-        // 同じ URL が返ってくる(索引の常連)。ID が大きいので放っておくと先頭に来る。
+        // 題が URL のままの項は落とす。索引が題を取れていないページで、語とは無関係に
+        // 同じ URL が返ってくる。ID が大きいので放っておくと先頭に来る。
         if (h.title.replace(/^https?:\/\/(?:www\.)?/, "") === h.url.replace(/^https?:\/\/(?:www\.)?/, ""))
           continue
         const 列 = 束.get(host) ?? []
@@ -611,7 +608,7 @@ const SOURCES: readonly Source[] = [
     wide: false,
     url: (q, n) => `https://export.arxiv.org/api/query?search_query=all:${enc(q)}&max_results=${n}`,
     accept: "application/atom+xml,application/xml;q=0.9",
-    // Atom を素で読む。**`toText` の feed 整形には通さない** — 著者が複数あり、要約が長いので、
+    // Atom を素で読む。`toText` の feed 整形には通さない — 著者が複数あり要約が長いので、
     // ここで欄ごとに取ったほうが落ちない。
     parse: (b) =>
       [...b.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].flatMap((m) => {
@@ -641,7 +638,7 @@ const X_SOURCE = SOURCES.find((s) => s.name === "x")
 const SHOWHN_SOURCE = SOURCES.find((s) => s.name === "showhn")
 const JOB_SOURCE = SOURCES.find((s) => s.name === "job")
 /**
- * 仕事を探している語。**「副業」だけでは足りない** — 税や確定申告の話でも出る語なので、
+ * 仕事を探している語。「副業」は税や確定申告の話でも出るので足りない。
  * 探す側の語(案件・募集・稼働・業務委託)と並べて、どれか1つでも入っていたら `job` も出す。
  * 外れたときの損は SearXNG への3回だけ。
  */
@@ -649,7 +646,7 @@ const JOB_WORDS =
   /副業|複業|業務委託|準委任|フリーランス|案件|求人|募集|稼働|freelance|side ?job|contract work/i
 
 /**
- * `job` に渡す前に落とす語。**媒体の名前と、媒体を選ぶときの語。**
+ * `job` に渡す前に落とす語。媒体の名前と、媒体を選ぶときの語。
  *
  * モデルは「副業を探したい」を媒体選びの調査として解くので、`job` に届く語は
  * 「ITプロパートナーズ React 週1 リモート 案件」の形になる。クラウドワークスの索引に
@@ -660,9 +657,9 @@ const JOB_NOISE =
   /^(?:offers\??|workship|goworkship|findy|freelance|レバテック(?:フリーランス)?|levtech|itプロパートナーズ|シューマツワーカー|youtrust|anycrew|複業クラウド|lotsful|sokudan|flexy|クラウドワークス|ランサーズ|crowdworks|lancers|wantedly|ココナラ|coconala|エージェント|サービス|サイト|公式|手数料|審査|登録|スカウト|案件紹介|評判|口コミ|比較|おすすめ|まとめ|とは|\d{4}年?)$/i
 
 /**
- * 募集を引くに足る語。**技術名か職種が1つも残らなかったら `job` は出さない。**
- * 「Offers 手数料 審査 スカウト 応募 公式 副業」から媒体名と調査語を落とすと「副業」だけになる。
- * それで引くと媒体をまたいで無関係な募集が返るので、そのときは黙って引かない。
+ * 募集を引くに足る語。技術名か職種が1つも残らなかったら `job` は出さない。
+ * 「Offers 手数料 審査 スカウト 応募 公式 副業」から媒体名と調査語を落とすと「副業」だけになり、
+ * それで引くと媒体をまたいで無関係な募集が返る。
  */
 const JOB_SKILL =
   /react|vue|next|nuxt|svelte|angular|typescript|javascript|node|python|go|rust|php|ruby|java|swift|kotlin|flutter|unity|aws|gcp|sql|フロントエンド|バックエンド|インフラ|デザイン|ライティング|動画編集|エンジニア|開発|制作|コーディング|翻訳|データ入力/i
@@ -687,18 +684,16 @@ export const SOURCE_MENU: readonly { name: string; what: string; wide: boolean }
 }))
 
 /**
- * 先を指定しなかったときに出る先。**使えない先は最初から混ぜない** —
- * 毎回「SearXNG が無い」と1行返しても、読む側にできることは無い。
- *
+ * 先を指定しなかったときに出る先。使えない先は最初から混ぜない。
  * 呼ぶたびに環境変数を見る(定数にしない)。道具の説明文もここから作るので、
- * **説明に並ぶ先と実際に叩く先が食い違わない**。
+ * 説明に並ぶ先と実際に叩く先が食い違わない。
  */
 export const defaultSources = (): readonly string[] =>
   SOURCES.filter((s) => s.wide && !s.unavailable?.()).map((s) => s.name)
 
 /**
- * 先ごとの読み取りだけを取り出す。**検査から呼ぶための関数** — 外へ出ずに、
- * 保存しておいた応答で読み取りを確かめられるようにしてある。知らない先なら `undefined`。
+ * 先ごとの読み取りだけを取り出す。検査から呼ぶための関数で、外へ出ずに保存しておいた応答で
+ * 読み取りを確かめられる。知らない先なら `undefined`。
  */
 export function parseFrom(source: string, body: string): readonly Hit[] | undefined {
   return SOURCES.find((s) => s.name === source.toLowerCase())?.parse(body)
@@ -711,14 +706,13 @@ export function parseFrom(source: string, body: string): readonly Hit[] | undefi
 const SOURCE_TIMEOUT_MS = 8_000
 
 /**
- * 回数制限に当たった先を、解けるまで叩かない。**先の名前 → いつまで休むか(ms)**。
- *
- * **待てば戻る先を、待たずに叩き続けても枠が減るだけ**なので、相手が言ってきた解除時刻まで
- * 黙って外す。過程に持つので走らせ直せば消える。それでよい — 枠は時間で戻る。
+ * 回数制限に当たった先を、解けるまで叩かない。先の名前 → いつまで休むか(ms)。
+ * 待たずに叩き続けても枠が減るだけなので、相手が言ってきた解除時刻まで外す。
+ * プロセスの中に持つので走らせ直せば消えるが、枠は時間で戻るのでそれでよい。
  */
 const restingUntil = new Map<string, number>()
 
-/** 一時的な上限か、断られたのか。**同じ 403 でも意味が違う** ので言い分けにする。 */
+/** 一時的な上限か、断られたのか。同じ 403 でも意味が違うので言い分けにする。 */
 const RATE_LIMITED = /rate.?limit|too many requests|回数制限/i
 
 function whyFailed(status: number, body: string, until: number | undefined): string {
@@ -743,7 +737,7 @@ export interface SearchOptions {
 }
 
 /**
- * 検索する。**先が1つ落ちても他は返す** — 落ちた先は理由付きで並べる。
+ * 検索する。先が1つ落ちても他は返し、落ちた先は理由付きで並べる。
  * 相手ごとに `Promise.all` で同時に出す(別ホストなので `pace` の1秒は互いに掛からない)。
  * 語が空なら空配列。知らない先を名指しされたら、それも1つの `failed` として返す。
  */
@@ -753,11 +747,9 @@ export async function searchWeb(query: string, opts: SearchOptions = {}): Promis
   const perSource = Math.min(Math.max(opts.perSource ?? 8, 1), 20)
   const names = opts.where?.length ? opts.where : defaultSources()
   // `web` に `site:x.com` と書かれたら、`x` の先で受ける。
-  //
-  // **道具の説明では直らなかった。** `where: ["x"]` と書くよう足しても、モデルは `web` に
-  // `site:x.com/名前 ...` と書いてくる。説明を強めるより、**その書き方を受ける**。
-  // 同じ SearXNG を叩くので外向きの回数は変わらず、変わるのは読み取りだけ —
-  // `site:` を守らない索引の結果と、殻を拾った要約が落ちる。
+  // `where: ["x"]` と書くよう説明に足してもモデルは `web` に `site:x.com/名前 ...` と書いてくるので、
+  // 説明を強めるのではなくその書き方を受ける。同じ SearXNG を叩くので外向きの回数は変わらず、
+  // 変わるのは読み取りだけ(`site:` を守らない索引の結果と、ログイン前の画面を拾った要約が落ちる)。
   const xTerm = toXTerm(q)
   // `hn` に「Show HN」と書かれたら、`showhn` の先で受ける。同じ理由で、モデルは
   // `where: ["showhn"]` ではなく `hn` に `query=Show HN ...` と書いてくる。
@@ -770,14 +762,13 @@ export async function searchWeb(query: string, opts: SearchOptions = {}): Promis
     if (s.name === "hn" && showTerm !== undefined && SHOWHN_SOURCE) return [SHOWHN_SOURCE]
     return [s]
   })
-  // 仕事を探す語が入っていたら、`web` と**並べて** `job` も出す。
+  // 仕事を探す語が入っていたら、`web` と並べて `job` も出す。ここだけ置き換えではなく追加。
+  // X と Show HN は同じ問いをより当たる先へ回すが、こちらは問いが2つに割れる —
+  // 媒体選びと相場の調査(`web` が答える)と、募集そのもの探し。
+  // `web` に「React 副業 案件」と書いても返るのは SEO 記事だけなので、両方出す。
+  // 増えるのは SearXNG への3回。
   //
-  // **ここだけ置き換えではなく追加。** X と Show HN は「同じ問いを、より当たる先へ回す」だが、
-  // こちらは問いが2つに割れる — 媒体選びと相場の調査(`web` が答える)と、募集そのもの探し。
-  // `web` に「React 副業 案件」と書いても返るのは SEO 記事だけで募集ページが出ないので、
-  // 片方を捨てるのではなく両方出す。増えるのは SearXNG への3回。
-  //
-  // **語はそのまま渡さない**(`toJobTerm`)。媒体名と調査語を落として、
+  // 語はそのまま渡さない(`toJobTerm`)。媒体名と調査語を落として、
   // 技術も職種も残らなければ `job` は出さない。
   const jobTerm = toJobTerm(q)
   if (
@@ -837,8 +828,8 @@ export async function searchWeb(query: string, opts: SearchOptions = {}): Promis
         }
       }
       /**
-       * 先が複数あるときは同時に叩いて混ぜる。**1つでも読めれば返す** —
-       * 3媒体のうち1つが落ちたときに、残り2つを道連れにしない。全部落ちたときだけ理由を投げる。
+       * 先が複数あるときは同時に叩いて混ぜる。1つでも読めれば返す
+       * (3媒体のうち1つが落ちても残り2つは出す)。全部落ちたときだけ理由を投げる。
        */
       const call = async (u: string | readonly string[]) => {
         if (typeof u === "string") return one(u)
@@ -846,7 +837,7 @@ export async function searchWeb(query: string, opts: SearchOptions = {}): Promis
         const ok = rs.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []))
         if (ok.length === 0)
           throw new Error(rs.map((r) => String((r as PromiseRejectedResult).reason)).join(" / "))
-        // **先ごとに1件ずつ取る。** 先頭から詰めると、最初の先だけで枠が埋まる。
+        // 先ごとに1件ずつ取る。先頭から詰めると、最初の先だけで枠が埋まる。
         const merged: Hit[] = []
         const seen = new Set<string>()
         for (let i = 0; merged.length < perSource && ok.some((h) => i < h.length); i++) {
@@ -885,12 +876,12 @@ export async function searchWeb(query: string, opts: SearchOptions = {}): Promis
 }
 
 /**
- * 読ませる形にする。**先ごとに分けたまま出す** — 混ぜて並べ直すと、
- * どの索引が拾ったのかが消えて「web にそう書いてある」に見えてしまう。
+ * 読ませる形にする。先ごとに分けたまま出す — 混ぜて並べ直すと、
+ * どの索引が拾ったのかが消えて「web にそう書いてある」に見える。
  *
  * 同じ URL が複数の先に出たときは最初の1つだけ残し、残りは先の名前を添えるだけにする
- * (別々の索引が同じページを拾ったことは、それ自体が目印になる)。
- * 日付は **ユーザーの時計**(`localStamp`)。UTC のまま出すと夜中の記事が前日として読まれる。
+ * (別々の索引が同じページを拾ったこと自体が目印になる)。
+ * 日付はユーザーの時計(`localStamp`)。UTC のまま出すと夜中の記事が前日として読まれる。
  */
 export function renderHits(results: readonly SourceResult[]): string {
   const seen = new Map<string, string>()

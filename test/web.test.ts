@@ -1,9 +1,9 @@
 /**
- * 外を読む道の検査。**通す条件ではなく、止める条件を並べる。**
+ * 外を読む道の検査。通す条件ではなく、止める条件を並べる。
  *
  * ここで見ているのは「一次資料が読めること」ではない(それは実際に外へ出て確かめた)。
  * 検査したいのは、モデルが書いた URL がこのホストの内側へ向いたときに止まるかどうか。
- * 名前解決を伴う判定は外に依存するので、ここでは**解決を要らない形の判定だけ**を対象にする。
+ * 名前解決を伴う判定は外に依存するので、ここでは解決を要らない形の判定だけを対象にする。
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
@@ -20,7 +20,7 @@ import {
   toText,
 } from "../src/services/Web.ts"
 
-// 同じホストへの間隔は既定 1 秒。**ここは fetch を差し替えてあるので誰も叩いていない** —
+// 同じホストへの間隔は既定 1 秒。ここは fetch を差し替えてあるので誰も叩いていない —
 // 待つぶんがそのままゲートの所要になるので 0 にする(src/services/Web.ts の hostIntervalMs)。
 process.env.OPEN_ZERO_HOST_INTERVAL_MS = "0"
 test("内側のアドレスは数値で弾く(前方一致では取り違える)", () => {
@@ -153,7 +153,7 @@ test("main も article も無いページは class/id で本文を選ぶ", () =>
   const unclosed = `<html><body><div class="content">${"閉じない本文。".repeat(200)}</body></html>`
   assert.ok(toText(unclosed, "text/html").includes("閉じない本文。"))
 
-  // **一般語だけで選ぶ。** サイト固有語を足すと、そのページでしか当たらない規則が増える。
+  // 一般語だけで選ぶ。サイト固有語を足すと、そのページでしか当たらない規則が増える。
   const specific = `<html><body><div class="hotentry">${"独自の語。".repeat(200)}</div></body></html>`
   assert.ok(toText(specific, "text/html").includes("独自の語。"), "選べなくてもページごと返せば本文は残る")
 })
@@ -175,7 +175,7 @@ test("本文だけ切り出しても、どのページかは残す", () => {
 
 test("詰まる先には回り道を返す(実測した先だけ)", () => {
   assert.match(detour("https://www.npmjs.com/package/effect") ?? "", /registry\.npmjs\.org\/effect\/latest/)
-  // X は「別を当たれ」で終わらせない。**投稿の中身は search の `x` から読める**ので、そこへ送る。
+  // X は「別を当たれ」で終わらせない。投稿の中身は search の `x` から読めるので、そこへ送る。
   const x = detour("https://x.com/youyuxi/status/1904855853037215958") ?? ""
   assert.match(x, /robots/, "断られている先だと言っていない")
   assert.match(x, /where: \["x"\]/, "読める道を示していない")
@@ -226,7 +226,7 @@ test("詰まる先には回り道を返す(実測した先だけ)", () => {
     /youtube\.com\/oembed\?url=.+dQw4w9WgXcQ/,
   )
 
-  // **回り道の中身が古びていないか。** 前は「README は HTML に入っていない」と案内していたが、
+  // 回り道の中身が古びていないか。前は「README は HTML に入っていない」と案内していたが、
   // それは閉じない `<script>` を落とし切れていなかった頃の誤診だった。測り直すと README は入っている
   // (Effect-TS/effect 1,131字・sindresorhus/got 6,045字・vercel/next.js 2,148字)。
   // 入っていないのはファイル一覧のほうなので、案内先もそちらに変える。
@@ -242,7 +242,7 @@ test("詰まる先には回り道を返す(実測した先だけ)", () => {
     detour("https://github.com/Effect-TS/effect/tree/main/packages") ?? "",
     /api\.github\.com\/repos\/Effect-TS\/effect\/contents\/packages\?ref=main/,
   )
-  // コード検索は API が 401(Requires authentication)。**行けない先は行けないと書く。**
+  // コード検索は API が 401(Requires authentication)。行けない先は行けないと書く。
   const code = detour("https://github.com/search?q=effect&type=code") ?? ""
   assert.match(code, /401|鍵が要る/)
   assert.doesNotMatch(code, /https:\/\/api\.github\.com\/search\/code/, "401 が返る先へ案内しない")
@@ -285,7 +285,7 @@ test("そっくりなホスト名を本物と取り違えない", () => {
 test("切れた script を本文として渡さない", () => {
   // 実測、YouTube の視聴ページ: 400KB で切ると `<script>` の開き13に対し閉じ12。
   // 閉じない1つの中身がそのまま本文になり、返った 12,000字はすべて `ytcfg.set({...` の JS だった。
-  // 上限は 1.5MB にしたので**このページでは**起きなくなったが、それを超えるページでは今も起きる。
+  // 上限は 1.5MB にしたのでこのページでは起きなくなったが、それを超えるページでは今も起きる。
   const html = `<html><body><main>${"本文である。".repeat(60)}</main><script>var a = {"k":"${"x".repeat(500)}"`
   const text = toText(html, "text/html")
   assert.ok(text.includes("本文である。"))
@@ -308,7 +308,7 @@ test("本文が組み上がらないページでも、meta の題と説明は返
   // 同じ文が og: と description の両方に入っているページが多い。二重に並べない。
   assert.equal(text.match(/ニコニコ動画の「総合」/g)?.length, 1)
 
-  // **本文が取れているページでは触らない。** 拾った説明は本文の要約なので、並べると同じ話が二重になる。
+  // 本文が取れているページでは触らない。拾った説明は本文の要約なので、並べると同じ話が二重になる。
   const rich = `<html><head><meta name="description" content="これは要約です">
     </head><body><main>${"本文がある。".repeat(60)}</main></body></html>`
   assert.ok(!toText(rich, "text/html").includes("これは要約です"))
@@ -364,7 +364,7 @@ test("実体参照は名前でも数値でも戻す", () => {
   assert.equal(t("A &amp; B"), "A & B")
   assert.equal(t("3 &times; 4 &ne; 11"), "3 × 4 ≠ 11")
 
-  // 戻せないものは壊さずそのまま置く。**知らない実体を勝手に消さない**(語が繋がって別の語になる)。
+  // 戻せないものは壊さずそのまま置く。知らない実体を勝手に消さない(語が繋がって別の語になる)。
   assert.equal(t("&zwnj;&notareal;x"), "&zwnj;&notareal;x")
   // 範囲外・サロゲート単独・制御文字は戻さない(String.fromCodePoint が投げるか壊れた1字になる)。
   assert.equal(t("&#1114112;"), "&#1114112;")
@@ -453,7 +453,7 @@ test("同じ URL を続けて開いたら取りに行かず「さっき開いた
     assert.match(b.note ?? "", /3 秒前にも開いた/)
     assert.equal(a.note, undefined, "1回目には付けない")
 
-    // 期限が切れたら取り直す。**古いページを永遠に返し続けない。**
+    // 期限が切れたら取り直す。古いページを永遠に返し続けない。
     const c = await fetchPage(url, { nowMs: t0 + 6 * 60_000 })
     assert.equal(hits, 2)
     assert.equal(c.note, undefined)
@@ -517,7 +517,7 @@ test("大きいページは窓で少しずつ読まず、語で当てる", () =>
   assert.match(hit.text, /2026-07-30T04:29:21\.637Z/)
   assert.ok(hit.text.length < 12_000)
 
-  // 無ければ 0。**無いものを窓で探し直させない**ための返り値。
+  // 無ければ 0。無いものを窓で探し直させないための返り値。
   assert.equal(findIn(full, "4.0.0").count, 0)
   assert.equal(findIn(full, "4.0.0").text, "")
 
@@ -584,7 +584,7 @@ test("本文が頭 400KB より後ろにあるページも読む", async () => {
 })
 
 test("上限で切ったときは、切ったと分かる言い方をする", async () => {
-  // **切ったのか、そもそも入っていないのかを言い分ける。** 診断を間違えると、
+  // 切ったのか、そもそも入っていないのかを言い分ける。診断を間違えると、
   // 読み手は取れるはずのものを諦める。上限の数字は定数から作るので、上げたら文面も変わる。
   const originalFetch = globalThis.fetch
   const body = `<html><head><script>${"var y=2;".repeat(200_000)}</script></head><body><main>ここまで届かない</main></body></html>`

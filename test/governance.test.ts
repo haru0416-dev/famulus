@@ -1,5 +1,5 @@
 /**
- * 統治の検査。**ここが通らないなら移植は失敗**という性質だけを並べる。
+ * 統治の検査。ここが通らないなら移植は失敗という性質だけを並べる。
  *
  * とくに「quota の run が USD 上限を飛ばす」は、飛ばさない実装でもテストは書けてしまうので
  * 意図的に「今日の USD が上限を超えている状態」を作った上で quota が通ることを見ている。
@@ -140,7 +140,7 @@ test("日次 run 数の上限は効くが、halt は立てない(翌日には自
     assert.equal((e as { _tag: string })._tag, "DailyRunLimit")
     assert.equal((e as { count: number }).count, 2)
 
-    // **halt を残さない。** 元実装は残していたが、それは1回ごとに課金される前提での判断。
+    // halt を残さない。元実装は残していたが、それは1回ごとに課金される前提での判断。
     // 定額枠では上限に当たること自体が異常の合図ではないので、翌日に自動で戻るべきもので、
     // ここで halt を立てると人が `oz resume` を打つまで対話まで含めて全停止する。
     const halt = await h.run(
@@ -179,7 +179,7 @@ test("自走が枠を使い切っても対話は止まらない(仕切りであ�
     assert.equal((e as { _tag: string })._tag, "DailyRunLimit")
     assert.equal((e as { limit: number }).limit, 2)
 
-    // 対話は同じ状態で通る。**halt も立っていない** — 翌日には自然に戻る種類の枯れ方。
+    // 対話は同じ状態で通る。halt も立っていない — 翌日には自然に戻る種類の枯れ方。
     await h.run(
       Effect.gen(function* () {
         const gov = yield* Governance

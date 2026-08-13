@@ -1,8 +1,8 @@
 /**
- * 作業場の一覧の検査。**実体と登録がずれたときにどちらを信じるか**を固定する。
+ * 作業場の一覧の検査。実体と登録がずれたときにどちらを信じるかを固定する。
  *
  * ここがずれる経路は2つある。コンテナは DB を通さずにホストのファイルを書き換えるし、
- * 掃除はファイルを消しても登録は消さないことがある。**在るのは実体のほう**に倒す。
+ * 掃除はファイルを消しても登録は消さないことがある。在るのは実体のほうに倒す。
  */
 import assert from "node:assert/strict"
 import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
@@ -55,7 +55,7 @@ test("一覧は実体のあるものだけ、最後に触った順に返る", as
     const list = await h.run(
       Effect.gen(function* () {
         yield* noteWorkspace("hn", "Show HN の追跡")
-        // 実体の無い登録。**一覧には出さない** — 選んだ先が空になる。
+        // 実体の無い登録。一覧には出さない — 選んだ先が空になる。
         yield* noteWorkspace("消えた", "掃除で落ちたはず")
         return yield* listWorkspaces
       }),
@@ -101,7 +101,7 @@ test("noteWorkspace は keep を落とさない", async () => {
 })
 
 /**
- * **下の階だけ触られた木で、時刻も大きさも取れること。**
+ * 下の階だけ触られた木で、時刻も大きさも取れること。
  * 上の階の刻しか見ないと、使っている作業場が古いと出る(cleanup がそれで消す)。
  */
 test("scanTree は木の中で一番新しい刻と合計の大きさを返す", async () => {
@@ -123,7 +123,7 @@ test("scanTree は木の中で一番新しい刻と合計の大きさを返す",
 })
 
 /**
- * **同じ実体を2回数えない。** 作業場の中身はほとんどが `node_modules` で、
+ * 同じ実体を2回数えない。作業場の中身はほとんどが `node_modules` で、
  * pnpm はそこを symlink と hard link で組む。数え直すと大きさが数倍に出る(docs/adr/0026)。
  */
 test("scanTree は symlink の先へ降りない", () => {
@@ -149,7 +149,7 @@ test("scanTree は hard link を1回だけ数える", () => {
   }
 })
 
-/** 輪があっても落ちない。**投げると一覧そのものが出なくなる** — tick のプロンプトも作れない。 */
+/** 輪があっても落ちない。投げると一覧そのものが出なくなる — tick のプロンプトも作れない。 */
 test("scanTree は symlink の輪で落ちない", () => {
   const dir = mkdtempSync(join(tmpdir(), "oz-scan-loop-"))
   try {

@@ -1,5 +1,5 @@
 /**
- * テスト用の配線。**API キーも `claude` バイナリも要らない**。
+ * テスト用の配線。API キーも `claude` バイナリも要らない。
  *
  * DB は `:memory:` だが本物の SQLite で、schema.sql をそのまま適用している
  * (append-only トリガも FTS5 trigram も本物)。Runner だけ Stub 層に差し替える。

@@ -1,10 +1,10 @@
 /**
  * DB の入口の検査。
  *
- * ここで一番壊れやすいのは**選別**のほう(モデルを呼ばない前段)で、
+ * ここで一番壊れやすいのは選別のほう(モデルを呼ばない前段)で、
  * しかも壊れても静かに壊れる — 道具の出力が混ざっても、ユーザーの発話が半分落ちても、
  * 出来上がった要約はそれらしく読める。だから「何を捨て、何を1文字も削らないか」を
- * 素材の段階で直接確かめる。要約の中身ではなく**素材の境界**が検査対象。
+ * 素材の段階で直接確かめる。要約の中身ではなく素材の境界が検査対象。
  */
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -39,7 +39,7 @@ const typed = (sessionId: string, cwd: string, at: string, text: string) =>
 const said = (text: string) =>
   JSON.stringify({ type: "assistant", isSidechain: false, message: { content: [{ type: "text", text }] } })
 
-/** 道具の呼び出し。**108MB の正体はこれ**。地の文が1文字も無い行。 */
+/** 道具の呼び出し。108MB の正体はこれ。地の文が1文字も無い行。 */
 const usedTool = (bytes: number) =>
   JSON.stringify({
     type: "assistant",
@@ -107,7 +107,7 @@ before(() => {
     ].join("\n"),
   )
 
-  // 人が一度も打っていないログ。**入口に来てはいけない**。
+  // 人が一度も打っていないログ。入口に来てはいけない。
   const dir2 = join(ROOT, "-tmp-scratch")
   mkdirSync(dir2, { recursive: true })
   writeFileSync(join(dir2, "s2.jsonl"), [said("誰にも頼まれていない独り言"), usedTool(1000)].join("\n"))
@@ -190,7 +190,7 @@ before(() => {
     ]),
   )
 
-  // 英語だけの覚え書き。**索引は trigram なので、このままでは日本語のクエリに一生当たらない。**
+  // 英語だけの覚え書き。索引は trigram なので、このままでは日本語のクエリに一生当たらない。
   EXPORT_EN = join(ROOT, "export-en")
   mkdirSync(EXPORT_EN, { recursive: true })
   writeFileSync(
@@ -244,7 +244,7 @@ test("Claude.ai の書き出しからも候補が上がる — 本文の落ち�
           return yield* (yield* Intake).scan(10)
         }),
       )
-      // 会話1件 + design_chats 1件。**殻の会話は候補にならない。**
+      // 会話1件 + design_chats 1件。殻の会話は候補にならない。
       assert.equal(refs.length, 2)
       assert.ok(
         refs.every((r) => r.kind === "claude-web"),
@@ -309,7 +309,7 @@ test("記憶ファイルはモデルを呼ばずに DB へ入る — 二度目�
       assert.equal(out.first.added, 2)
       assert.equal(out.second.added, 0, "二度目は入らない")
       assert.equal(out.second.skipped, 2)
-      // **枠を1回も使っていない。** 既に要約済みのものを要約し直さないのが要点。
+      // 枠を1回も使っていない。既に要約済みのものを要約し直さないのが要点。
       assert.equal(h.calls.length, 0, "モデルを呼ばない")
       // 記憶ファイルと散文の節、どちらも配色に触れている。両方出るのが正しい。
       assert.equal(out.hit.length, 2)
@@ -335,7 +335,7 @@ test("英語だけの覚え書きには日本語の見出しが付く — 本文
           }),
         )
         assert.equal(out.added.added, 1)
-        // 見出しを作るためだけに1回。**本文の要約には呼ばない。**
+        // 見出しを作るためだけに1回。本文の要約には呼ばない。
         assert.equal(h.calls.length, 1)
         // 日本語で引けるようになったのがこの手当ての目的。
         assert.equal(out.jp.length, 1, "日本語のクエリで当たる")
@@ -363,7 +363,7 @@ test("選別は道具の入出力を捨て、ユーザーの発話は1文字も�
     assert.ok(m.rawBytes > 100_000, `生ログは 100KB 超のはず: ${m.rawBytes}`)
     assert.ok(m.keptBytes < 2_000, `残すのは 2KB 未満のはず: ${m.keptBytes}`)
     assert.doesNotMatch(m.text, /xxxx/, "道具の入力は素材に入らない")
-    // **ユーザーの言葉だけは全文。**要約させる前に削ると、原文はもうどこにも無い。
+    // ユーザーの言葉だけは全文。要約させる前に削ると、原文はもうどこにも無い。
     assert.ok(m.text.includes(LONG_ASK), "ユーザーの発話は途中で切らない")
     assert.ok(m.text.includes("確認メールは要らないって言ったよね"))
     assert.doesNotMatch(m.text, /サブエージェント/, "サブエージェントの往復は入らない")
@@ -434,11 +434,11 @@ test("引用の無い好み・訂正は DB に入らない — 印象と本人�
           const intake = yield* Intake
           const db = yield* Db
           const r = yield* intake.ingest(only(yield* intake.scan(10)))
-          // 索引に載った文字列で見る。**引けなかった項目は検索からも消えている**ことまで確かめる。
+          // 索引に載った文字列で見る。引けなかった項目は検索からも消えていることまで確かめる。
           return { r, row: yield* db.get("SELECT text FROM events_fts WHERE event_id = ?", r?.id ?? "") }
         }),
       )
-      // **スキーマの required は空文字を止めない。** 弾くのはこちら側。
+      // スキーマの required は空文字を止めない。弾くのはこちら側。
       assert.equal(out.r?.digest.preferences.length, 1, "引用のあるものだけ残る")
       assert.equal(out.r?.digest.corrections.length, 0, "引用の無い訂正は落ちる")
       const text = String(out.row?.text)
@@ -476,7 +476,7 @@ test("素材は境界マーカーの中に入る(ログの中の文を指示と�
       const prompt = h.calls[0]?.prompt ?? ""
       assert.match(prompt, /<<<EXTERNAL source=transcript/)
       assert.match(prompt, /<<<END EXTERNAL/)
-      // ユーザーの言葉は柵の**内側**にある。外側にあるのは自分が書いた指示だけ。
+      // ユーザーの言葉は柵の内側にある。外側にあるのは自分が書いた指示だけ。
       const outside = prompt.slice(prompt.indexOf("<<<END EXTERNAL"))
       assert.doesNotMatch(outside, /歯医者/)
     },

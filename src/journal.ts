@@ -1,19 +1,19 @@
 /**
  * 1回ごとの進み具合を、外から確かめられる形にする(docs/adr/0030)。
  *
- * tick は自分で起きて自分で終わる。人が見ているのは締めの1文だけで、その文は**自分で書いた報告**
+ * tick は自分で起きて自分で終わる。人が見ているのは締めの1文だけで、その文は自分で書いた報告
  * なので、やったと書いてあることとやったことがずれても外からは分からない。
  * ここが読むのは3つの別々の記録で、どれも報告文とは独立に残っている:
  *
- *   1. **呼ばれた道具の並び**(`content.tools`)…AI SDK の `onStepFinish` が数えた実際の呼び出し
- *   2. **その回の窓に残ったもの**…提案・下書き・通知・コンテナ実行・確定した事実の行数
- *   3. **焼いた量**(`ledger`)…run 数と実費
+ *   1. 呼ばれた道具の並び(`content.tools`)…AI SDK の `onStepFinish` が数えた実際の呼び出し
+ *   2. その回の窓に残ったもの…提案・下書き・通知・コンテナ実行・確定した事実の行数
+ *   3. 焼いた量(`ledger`)…run 数と実費
  *
  * 窓は `[content.tick, event.at]`。前者は digest を取った時刻、後者は記録を書いた時刻で、
- * その間がこの回の実働そのもの。**窓の外で起きたことは数えない** — 数えると、
- * 15分前の poll が入れたユーザー発言まで「この回の成果」として並ぶ。
+ * その間がこの回の実働。窓の外で起きたことは数えない — 数えると、15分前の poll が入れた
+ * ユーザー発言まで「この回の成果」として並ぶ。
  *
- * 1と2はずれてよい。**ずれ方が読めることが目的**で、一致させることではない
+ * 1と2はずれてよい。一致させるためではなく、ずれ方を読むために並べている
  * (道具を呼んでも中身が残らない回はある。propose せずに終えた回、shell が失敗した回)。
  */
 import * as Effect from "effect/Effect"
@@ -21,26 +21,26 @@ import type { DbFailed } from "./core/errors.ts"
 import { localStamp } from "./core/time.ts"
 import { Db } from "./services/Db.ts"
 
-/** 1回ぶん。**`said` と、それ以外を混ぜない。** */
+/** 1回ぶん。`said` と、それ以外を混ぜない。 */
 export interface Entry {
   /** digest を取った時刻(この回の起点)。 */
   readonly at: string
   /** 起きた理由。digest が付けた文言そのまま。 */
   readonly reasons: readonly string[]
-  /** 呼ばれた道具の並び。**古い回は記録が無い**ので undefined。 */
+  /** 呼ばれた道具の並び。古い回は記録が無いので undefined。 */
   readonly tools?: readonly string[]
   readonly steps?: number
   readonly ms?: number
   /** 止まった理由。最後まで書けていれば undefined。 */
   readonly cutOff?: string
-  /** 自分で書いた締めの文。**これは報告であって記録ではない。** */
+  /** 自分で書いた締めの文。報告であって記録ではない。 */
   readonly said: string
   /** この回の窓に残ったもの。数えたのは行数で、報告文とは関係が無い。 */
   readonly left: Left
   /** 焼いた量。 */
   readonly runs: number
   /**
-   * 出したトークン。**実費より先に出す。**
+   * 出したトークン。実費より先に出す。
    *
    * いま走っているモデルは定額の枠で、`usd` は 0 のまま入る(単価表に載らないので `unpriced` も
    * 立たない)。0 だけを見せると、10手動いた回と1手で終えた回が同じ顔になる。
@@ -50,7 +50,7 @@ export interface Entry {
   readonly usd: number
 }
 
-/** 窓の中に増えた行。**0 は 0 と書く** — 「何も残らなかった回」が読めるのがこの欄の値打ち。 */
+/** 窓の中に増えた行。0 も 0 と書く — 「何も残らなかった回」を読めるようにするため。 */
 export interface Left {
   readonly proposals: number
   readonly drafts: number
@@ -67,7 +67,7 @@ const num = (v: unknown): number | undefined => (typeof v === "number" && Number
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined)
 
 /**
- * 直近 n 回。**実際に動いた回だけ**返す(idle の回は tick の記録を書かない)。
+ * 直近 n 回。実際に動いた回だけ返す(idle の回は tick の記録を書かない)。
  *
  * 窓ごとに数える問い合わせを投げるので、n を大きくすると SQL の本数がそのぶん増える。
  * 読むのは人なので、既定は画面に収まる程度にしてある。
@@ -93,8 +93,8 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
         continue
       }
       const at = str(c.tick) ?? wroteAt
-      // 窓の終わりは記録を書いた時刻。**書く前に出したものまで入れる**ため、
-      // 起点だけで切って「以降ぜんぶ」にはしない — 次の回のぶんが混ざる。
+      // 窓の終わりは記録を書いた時刻。書く前に出したものまで入れる。
+      // 起点だけで切って「以降ぜんぶ」にすると、次の回のぶんが混ざる。
       const left = yield* countLeft(at, wroteAt)
       const burn = yield* db.get(
         `SELECT COUNT(*)runs, COALESCE(SUM(usd), 0)usd, COALESCE(SUM(out_tok), 0)out_tok
@@ -124,10 +124,10 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
   })
 
 /**
- * 窓の中に増えた行を数える。**tick の報告を読まずに数える**のがここの役目。
+ * 窓の中に増えた行を数える。tick の報告は読まない。
  *
  * `ran`(watch を回した記録)だけは events に残らず watchlist の1行を上書きするので、
- * 後の回に上書きされたぶんは数から消える。**消えることを承知で数えている** —
+ * 後の回に上書きされたぶんは数から消える。消えることを承知で数えている —
  * 呼んだかどうかは道具の並びに残っているので、そちらと突き合わせれば読める。
  */
 const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed, Db> =>
@@ -170,9 +170,9 @@ const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed
   })
 
 /**
- * `shell shell ran shell` → `shell×2 · ran`。**並びを捨てて数だけにする。**
+ * `shell shell ran shell` → `shell×2 · ran`。並びを捨てて数だけにする。
  *
- * Discord に出す側で使う。**幅が狭い場所では並びを持たせられない** — 15手ぶんの並びは
+ * Discord に出す側で使う。幅が狭い場所では並びを持たせられない — 15手ぶんの並びは
  * 92桁になり、スマホの幅で3行に折れて、折り返した先は何の行だったか読めなくなる。
  * 「10回呼んで0本残っていない」というずれは数だけでも見えるので、そちらを取った。
  * 順番は `runs()` が持っていて、`oz journal` から読める。
@@ -186,7 +186,7 @@ export const tally = (tools: readonly string[]): string => {
     .join(" · ")
 }
 
-/** `shell shell ran shell` → `shell×2 → ran → shell`。**並びは崩さない** — 何の後に何を呼んだかが読める。 */
+/** `shell shell ran shell` → `shell×2 → ran → shell`。並びは崩さない — 何の後に何を呼んだかが読める。 */
 export const runs = (tools: readonly string[]): string =>
   tools
     .reduce<{ name: string; n: number }[]>((acc, t) => {
@@ -199,11 +199,11 @@ export const runs = (tools: readonly string[]): string =>
     .join(" → ")
 
 /**
- * 残ったものを言葉にする。**0 の欄は並べない。**
+ * 残ったものを言葉にする。0 の欄は並べない。
  *
  * 前は6つの数を 0 も含めて全部横に並べていた。数の列は読む側が目で走査することになり、
  * 「この回は何も残らなかった」という一番読ませたい状態が、0 が6つ並んだ形でしか出なかった。
- * ここでは**その状態だけを文にする** — 残ったものがあるときは、あるものだけを書く。
+ * いまはその状態だけを文にする。残ったものがあるときは、あるものだけを書く。
  */
 const leftLine = (l: Left, none = "何も残らなかった"): string => {
   const parts = [
@@ -218,7 +218,7 @@ const leftLine = (l: Left, none = "何も残らなかった"): string => {
   return got.length === 0 ? none : got.join(" / ")
 }
 
-/** 時刻だけ取り出す。**読めない値は切らずに返す** — `localStamp` は解釈できない文字列をそのまま返す。 */
+/** 時刻だけ取り出す。読めない値は切らずに返す — `localStamp` は解釈できない文字列をそのまま返す。 */
 const clock = (atIso: string): string => {
   const s = localStamp(atIso)
   return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s) ? s.slice(11) : s
@@ -233,18 +233,18 @@ const took = (ms: number): string => {
   return s < 60 ? `${s}秒` : `${Math.floor(s / 60)}分${String(s % 60).padStart(2, "0")}秒`
 }
 
-/** 実働の数。**手数と時間は記録が無い回がある**(記録を足す前の回)ので、0 とは書かない。 */
+/** 実働の数。手数と時間は記録が無い回がある(記録を足す前の回)ので、0 とは書かない。 */
 const workLine = (e: Entry): string =>
   [
     e.steps === undefined ? "手数の記録なし" : `${e.steps}手`,
     ...(e.ms === undefined ? [] : [took(e.ms)]),
     `${e.runs}run 出力${tok(e.outTok)}`,
-    // **$0 は書かない。** 定額の枠で走った回に「$0.000」と出すと、無料で済んだように読める。
+    // $0 は書かない。定額の枠で走った回に「$0.000」と出すと、無料で済んだように読める。
     ...(e.usd > 0 ? [`$${e.usd.toFixed(3)}`] : []),
     ...(e.cutOff ? [`**止まった: ${e.cutOff}**`] : []),
   ].join(" / ")
 
-/** 報告文を1行に畳む。**文の途中では切らない** — 途中で切れた文は言っていないことを言わせる。 */
+/** 報告文を1行に畳む。文の途中では切らない — 途中で切れた文は、言っていないことを言わせる。 */
 const saidLine = (said: string, max = 140): string => {
   const flat = said.replace(/\s+/g, " ").trim()
   if (flat === "") return "(何も書かなかった)"
@@ -255,10 +255,10 @@ const saidLine = (said: string, max = 140): string => {
 }
 
 /**
- * 1回ぶんを Discord に出す形(docs/adr/0030)。**幅の狭い画面を先に見て決めた。**
+ * 1回ぶんを Discord に出す形(docs/adr/0030)。幅の狭い画面を先に見て決めた。
  *
  * 読むのはたいてい携帯で、本文に使える幅はおよそ 40 桁(全角20文字)しかない。
- * 前は全角空白で桁を揃えて4行に並べていたが、**揃えた桁は1行が折り返した時点で消える**
+ * 前は全角空白で桁を揃えて4行に並べていたが、揃えた桁は1行が折り返した時点で消える
  * — 折り返した2行目は左端から始まるので、ラベルと中身の対応が読めなくなる。
  *
  * いまは `- ` のリスト項目にしている。リストは折り返しても中身の側にぶら下がるので、
@@ -270,7 +270,7 @@ const saidLine = (said: string, max = 140): string => {
 export const logPost = (e: Entry): string =>
   [
     `### ${clock(e.at)} に起きた`,
-    // 止まった回はここに出す。**下に置くと、上だけ読んで終わった回と見分けが付かない。**
+    // 止まった回はここに出す。下に置くと、上だけ読んで終わった回と見分けが付かない。
     ...(e.cutOff ? [`- **止まった** ${e.cutOff}`] : []),
     `- 理由 ${e.reasons.join(" / ") || "記録なし"}`,
     `- 実働 ${e.steps === undefined ? "手数の記録なし" : `${e.steps}手`}${e.ms === undefined ? "" : ` / ${took(e.ms)}`}`,
@@ -280,8 +280,8 @@ export const logPost = (e: Entry): string =>
   ].join("\n")
 
 /**
- * 人が読む形に。**自己申告(`言った`)を最後に置く。**
- * 上に置くと、そこだけ読んで「やった」と受け取れてしまう — 数えた欄より先に来させない。
+ * 人が読む形に。自己申告(`言った`)を最後に置く。
+ * 上に置くと、そこだけ読んで「やった」と受け取れてしまう。数えた欄より先には来させない。
  */
 export const renderJournal = (entries: readonly Entry[]): string => {
   if (entries.length === 0) return "実働の記録がまだ無い(tick が一度も動いていないか、記録より前)"

@@ -1,18 +1,18 @@
 /**
- * 回の終わりに、確かめられた値を確定へ上げる役。**「何も残さない回」を正常としない。**
+ * 回の終わりに、確かめられた値を確定へ上げる役。「何も残さない回」を正常としない。
  *
  * DB には2つの層がある。`import`(過去の会話から起こした要約)は「その日時点でそう書かれていた」
  * という記録でしかなく、今の事実として使ってよいのは `belief` で確定した値だけ — recall の
  * 読み方がそう書いてある。ところが確定へ上げる経路は道具(`remember` の `slot`)しか無く、
- * **ユーザーが話した回にモデルがそれを呼ぶかどうかに全部かかっていた。** 呼ばれないまま流れると、
+ * ユーザーが話した回にモデルがそれを呼ぶかどうかに全部かかっていた。呼ばれないまま流れると、
  * 行は増えるのに引ける値は増えない。実際にそうなっていた(docs/adr/0014)。
  *
- * だから道具として置かず、**回の締めに必ず1回通る経路**にしてある。Hermes Agent の
+ * だから道具として置かず、回の締めに必ず1回通る経路にしてある。Hermes Agent の
  * memory nudge(一定ターンごとに、制限した道具立ての fork で記憶を見直させる)と同じ位置付けで、
  * あちらの効いている一文 — *A pass that does nothing is a missed learning opportunity,
  * not a neutral outcome* — をそのまま持ってきている。
  *
- * **材料はユーザーの入力だけ。** 外から来たもの(web / gmail)は確定に上げない。
+ * 材料はユーザーの入力だけ。外から来たもの(web / gmail)は確定に上げない。
  * 確定値は「今の事実」として後の回に無検査で使われるので、ここを外に開くと、
  * 拾ってきた文が事実として DB に入る道ができる。引用がコード側で照合できるのも、
  * 材料をユーザーの入力に限っているから成り立つ。
@@ -22,7 +22,7 @@ import { causeReason } from "../core/errors.ts"
 import { Runner } from "../model/Runner.ts"
 import { Memory } from "../services/Memory.ts"
 
-/** 1回で確定に上げてよい数。**多いほど良いのではない** — 上げたものは無検査で使われる。 */
+/** 1回で確定に上げてよい数。上げたものは無検査で使われるので、多いほど良いのではない。 */
 const KEEP_MAX = 3
 
 /** この役に許す時間。締めの経路なので、待たせるくらいなら次の回に回す。 */
@@ -100,10 +100,10 @@ export interface KeptValue {
 const bare = (s: string): string => s.replace(/\s/g, "")
 
 /**
- * 材料に無い引用を付けたものを落とす。**指示ではなくコードが弾く。**
+ * 材料に無い引用を付けたものを落とす。指示ではなくコードが弾く。
  *
  * 「ユーザーが言ったことだけ」は書いておけば守られる類の制約ではない。守られなかったときに
- * 残るのが**確定値**(後の回が今の事実として無検査で使う)なので、通してから気づく形にしない。
+ * 残るのが確定値(後の回が今の事実として無検査で使う)なので、通してから気づく形にしない。
  */
 export const keepGrounded = (values: readonly KeptValue[] | undefined, material: string): KeptValue[] => {
   const hay = bare(material)
@@ -122,7 +122,7 @@ export const keepGrounded = (values: readonly KeptValue[] | undefined, material:
 }
 
 /**
- * 締めの keeper を1回通す。**失敗しても回そのものは落とさない。**
+ * 締めの keeper を1回通す。失敗しても回そのものは落とさない。
  *
  * 戻り値は DB に残す1行。呼び出し側はこれを tick の記録に添えるだけで、経路の分岐には使わない
  * — keeper が転んだせいで返信や既読位置が変わると、直す場所が分からなくなる。
@@ -144,7 +144,7 @@ export const keep = (opts: {
     const tag = opts.label ?? "keeper"
     if (bare(opts.material).length === 0) return `${tag}: 材料が無い(ユーザーの発言がこの回に無い)`
 
-    // 既存の slot を見せる。**別名を作らせないため** — 同じ事柄が2つの名前で入ると、
+    // 既存の slot を見せる。別名を作らせないため — 同じ事柄が2つの名前で入ると、
     // どちらを引いても片方しか出てこない DB になる。
     const slots = yield* mem.currentBeliefs(40)
     const known =
@@ -152,7 +152,7 @@ export const keep = (opts: {
         ? "(まだ1つも無い)"
         : slots.map((s) => `- ${s.slot} = ${JSON.stringify(s.value)}`).join("\n")
 
-    // **この回で既に確定した slot には触らない。** keeper は取りこぼしを拾う網であって、
+    // この回で既に確定した slot には触らない。keeper は取りこぼしを拾う側であって、
     // 二人目の書き手ではない。触ると、本体が書いた値を数十秒で言い換えた区間が上に乗り、
     // 履歴が寿命1分未満の行で埋まる(実際にそうなった)。
     const since = opts.since
@@ -185,7 +185,7 @@ export const keep = (opts: {
     }
     const head = kept.length === 0 ? `${tag}: 上げるものは無かった` : `${tag}: ${kept.length} 件を確定へ`
     const body = kept.map((v) => `${v.slot}=${v.value}`).join(" / ")
-    // **落とした数も残す。** 引用が写せずに落ちたのと、本体が先に書いていたのと、
+    // 落とした数も残す。引用が写せずに落ちたのと、本体が先に書いていたのと、
     // そもそも上げるものが無かったのは全部別の話。混ぜると、どれが起きているか読めない。
     const tail = [
       dropped > 0 ? `(引用が材料に無く ${dropped} 件を落とした)` : "",

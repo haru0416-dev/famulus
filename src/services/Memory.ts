@@ -1,10 +1,10 @@
 /**
  * memory サービス。正本は append-only の `events`、`belief_slots` と `events_fts` は projection。
  *
- * **消せないことを SQL 側で強制する。** 忘却は DELETE ではなく `forget` イベントの追記、
+ * 消せないことは SQL 側で強制する。忘却は DELETE ではなく `forget` イベントの追記、
  * 抹消は `content := NULL` の UPDATE だけ(それ以外の UPDATE はトリガが ABORT する)。
  *
- * `remember` は引数を最小・既定値を厚くしてある。**仕組みがあっても記録が溜まらなければ DB は無いのと同じ**で、
+ * `remember` は引数を最小・既定値を厚くしてある。仕組みがあっても記録が溜まらなければ DB は無いのと同じで、
  * 溜まらない原因が API の摩擦なら、それは設計の側で消せる。
  */
 import { randomUUID } from "node:crypto"
@@ -49,7 +49,7 @@ export interface EventRow {
   readonly content: string | null
   /** FTS に入れた素のテキスト(JSON の殻を剥いだもの)。読ませるのはこちら。 */
   readonly text: string | null
-  /** belief のとき、その slot の**今の値**か(0 なら上書き済みの旧版)。 */
+  /** belief のとき、その slot の今の値か(0 なら上書き済みの旧版)。 */
   readonly is_current: number
 }
 
@@ -57,25 +57,25 @@ export interface EventRow {
  * この belief イベントが、その slot の今の値か。
  *
  * `believe()` は追記なので、同じ slot を2回確定すると belief イベントが2本残る。
- * 両方を「確定」として並べると、読む側は**古い値と新しい値を区別できないまま**受け取る。
+ * 両方を「確定」として並べると、読む側は古い値と新しい値を区別できないまま受け取る。
  * どちらが今なのかは projection(`belief_slots`)だけが知っている。
  *
- * **区間が閉じているかまで見る。** `resolved_from` の一致だけで判定していると、
+ * 区間が閉じているかまで見る。`resolved_from` の一致だけで判定していると、
  * 「転職活動中」を確定した行は上書きされた後も一致し続け、検索の最上位に居座る。
  */
 const IS_CURRENT =
   "EXISTS (SELECT 1 FROM belief_slots b WHERE b.resolved_from = e.id AND b.valid_until IS NULL)"
 
 /**
- * 層の重み。bm25 は「小さいほど関連が強い」負の値なので、**引くと前に出る**。
+ * 層の重み。bm25 は「小さいほど関連が強い」負の値なので、引くと前に出る。
  *
  * DB は平らに1本だが、読む価値は平らではない。確定した事実(belief)はユーザーに確かめた1行、
  * `source='system'` は自分が書いた記録。同じ語を含んでいても、探しものとして役に立つ度合いが違う。
  *
- * **`kind` と `source` は別の問いに答えている**。source は誰が書いたか、kind はどんな記録か。
+ * `kind` と `source` は別の問いに答えている。source は誰が書いたか、kind はどんな記録か。
  * 取り込み(`import`)は自分が書くので source は system だが、中身はユーザーの判断の要約であって
  * 独り言ではない。source だけで下げると、入口から入れたものが全部検索の底に沈む。
- * だから `import` を `source='system'` より**先に**判定する。順序がそのまま意味になっている。
+ * だから `import` を `source='system'` より先に判定する。順序がそのまま意味になっている。
  */
 const LAYER_BIAS = `CASE
     WHEN e.kind = 'belief' AND ${IS_CURRENT} THEN -2.5
@@ -86,14 +86,14 @@ const LAYER_BIAS = `CASE
   END`
 
 /**
- * 検索結果を**読ませる形**にする。呼ぶ側(CLI / recall ツール)で揃えたいのでここに置く。
+ * 検索結果を読ませる形にする。呼ぶ側(CLI / recall ツール)で揃えたいのでここに置く。
  *
  * 生の `content` をそのまま出すと `{"said":"…` という JSON の殻がモデルにも人にも見える。
  * 殻は保存の都合であって中身ではない。索引に入れた素のテキストのほうを見せる。
- * 併せて**どの層の1行なのか**を頭に付ける — 確定した事実と自分の独り言を、
+ * 併せてどの層の1行なのかを頭に付ける — 確定した事実と自分の独り言を、
  * 読む側が区別できないまま並べない。
  *
- * 時刻は**ユーザーの時計**で出す(`localStamp`)。UTC のまま帯なしで渡すと、
+ * 時刻はユーザーの時計で出す(`localStamp`)。UTC のまま帯なしで渡すと、
  * 夜中の記録が前日として読まれる。
  */
 export function renderRecall(rows: readonly EventRow[], perRow = 180): string {
@@ -212,14 +212,14 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
       })
 
     /**
-     * belief slot を確定する。**projection の直接上書きではなく、必ず belief event を経由**させる
+     * belief slot を確定する。projection を直接上書きせず、必ず belief event を経由させる
      * (`resolved_from` が NOT NULL の FK なので、根拠なしにスロットは立たない)。
      *
-     * 上書きしない。**今の区間に `valid_until` を打って閉じ、次の区間を隣に足す。**
+     * 上書きしない。今の区間に `valid_until` を打って閉じ、次の区間を隣に足す。
      * 上書きにすると「転職活動中」だった時期そのものが DB から消え、
      * 過去形の問い(「去年の今ごろ何をしていたか」)に答えられなくなる。
      *
-     * `validFrom` は**その事実がいつ真になったか**で、記録時刻とは別物。
+     * `validFrom` はその事実がいつ真になったかで、記録時刻とは別物。
      * 「6月に終わっていたと8月に知った」なら validFrom は6月、updated_at は8月。
      * 分からなければ記録時刻に落ちる — 推測で埋めるより「遅くともこの時点」のほうが正しい。
      */
@@ -296,14 +296,14 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
     const SLOT_COLS =
       "value, exposure, resolved_from, updated_at, valid_from, valid_until, invalidated_reason"
 
-    /** 今の値。**閉じていない区間は slot ごとに高々1本**(部分 UNIQUE が保証している)。 */
+    /** 今の値。閉じていない区間は slot ごとに高々1本(部分 UNIQUE が保証している)。 */
     const belief = (slot: string) =>
       db
         .get(`SELECT ${SLOT_COLS} FROM belief_slots WHERE slot = ?AND valid_until IS NULL`, slot)
         .pipe(Effect.map((r) => view(slot, r)))
 
     /**
-     * **その時点での値**。過去形の問いはここを通る。
+     * その時点での値。過去形の問いはここを通る。
      * 半開区間 `[valid_from, valid_until)` — 隣り合う区間が同じ瞬間を二重に主張しない。
      */
     const beliefAsOf = (slot: string, at: string) =>
@@ -324,7 +324,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
         .pipe(Effect.map((rows) => rows.map((r) => view(slot, r)).filter((v) => v !== undefined)))
 
     /**
-     * **確かめてから時間が経った事実**。転職が終わったのに DB が知らない、を見つける唯一の手段。
+     * 確かめてから時間が経った事実。転職が終わったのに DB が知らない、を見つける唯一の手段。
      *
      * 陳腐化は検索では絶対に見つからない。古い値も新しい値と同じくらい自然に検索に当たるから。
      * 「最後に真だと確かめたのがいつか」を持っている側から引くしかない。
@@ -341,7 +341,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
         .pipe(Effect.map((rows) => rows.map((r) => view(String(r.slot), r)).filter((v) => v !== undefined)))
 
     /**
-     * いま閉じていない区間の全部。**新しい値を上げる前に、既にある名前を見せるための一覧。**
+     * いま閉じていない区間の全部。新しい値を上げる前に、既にある名前を見せるための一覧。
      *
      * 同じ事柄に別名の slot を作られると、どちらを引いても片方しか出てこない DB になる。
      * 検索では防げない — 別名は別名として素直に当たるので、書く側に既存の名前を見せるしかない。
@@ -358,28 +358,27 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
     /**
      * 全文検索。trigram なので部分一致する。
      *
-     * **2文字以下は FTS では引けない**(trigram は3文字窓)。日本語は「会議」「予定」「金額」のように
+     * 2文字以下は FTS では引けない(trigram は3文字窓)。日本語は「会議」「予定」「金額」のように
      * 常用語の多くが2文字なので、ここで空を返すと「無いのか引けないのか分からない」状態になる。
      * その帯だけ LIKE の素朴な走査に落とす(events は個人の DB 規模で、走査しても実用上問題ない)。
      *
-     * 並びは **bm25 の関連度**。`at DESC` にすると「一致した中の新着順」でしかなくなり、
+     * 並びは bm25 の関連度。`at DESC` にすると「一致した中の新着順」でしかなくなり、
      * tick が毎回書く長い自己言及が"新しい"というだけで上位を占めて、探している事実を押し下げる。
      *
-     * 併せて層で重みを付ける。**同じ語を含むだけの独り言より、確定した1行のほうが常に役に立つ。**
-     * DB は平らだが、読む価値は平らではない。
+     * 併せて層で重みを付ける。同じ語を含むだけの独り言より、確定した1行のほうが常に役に立つ。
      */
     /**
-     * @param exclude 検索から外す event id。**今のターンの入力そのものを渡す**。
+     * @param exclude 検索から外す event id。今のターンの入力そのものを渡す。
      *
      * 入力は モデルを呼ぶ前に DB へ落ちる(assistant.ts の useAgentStart)ので、これが無いと
-     * 自分が今受け取ったばかりの発言が検索に当たり、**過去の記録として読まれる**
+     * 自分が今受け取ったばかりの発言が検索に当たり、過去の記録として読まれる
      * (「さっき言われたこと」を「前にも言っていた」と言い出す)。
      * 自走側は `text: ""` で索引に入れないことで同じ穴を塞いでいるが、対話の入力は索引に要る
      * (溜まらないと引けるようにならない)ので、除外は検索の側でやる。
      */
     const recall = (query: string, limit = 10, exclude?: string) =>
       Effect.gen(function* () {
-        // **空白は語の区切りとして扱う**。1本のフレーズとして投げると空白ごと含む行しか当たらず、
+        // 空白は語の区切りとして扱う。1本のフレーズとして投げると空白ごと含む行しか当たらず、
         // 「エージェント メモリ」のような絞り込みが該当なしになる。
         const terms = sanitizeFts(query)
           .split(/\s+/)
@@ -388,7 +387,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
         // 同じことを繰り返し言われた行が枠を食い潰さないよう、多めに取って本文で畳む。
         const wide = Math.max(limit * 3, 30)
         // trigram は3文字窓なので、2文字以下の語は索引では引けない(日本語の常用語の多くがこれ)。
-        // その語だけ本文への LIKE に落とし、索引で引ける語と **AND で重ねる**。
+        // その語だけ本文への LIKE に落とし、索引で引ける語と AND で重ねる。
         const indexed = terms.filter((t) => t.length >= FTS_MIN_QUERY)
         const short = terms.filter((t) => t.length < FTS_MIN_QUERY)
         // LIKE のワイルドカードはリテラルとして扱う(検索語をクエリ構文にしない)。
@@ -399,7 +398,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
 
         const rows =
           indexed.length === 0
-            ? // **内部結合**なのが要る: 索引を持たない行(tick が自分に出したプロンプトなど)は
+            ? // 内部結合にする: 索引を持たない行(tick が自分に出したプロンプトなど)は
               // DB には残すが検索には出さない。`text: ""` の意味を両経路で揃える。
               yield* db.all(
                 `SELECT e.*, f.text AS text, ${IS_CURRENT} AS is_current FROM events e

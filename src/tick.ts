@@ -1,19 +1,18 @@
 #!/usr/bin/env bun
 /**
- * tick。**話しかけられなくても動くための唯一の入口**。
+ * tick。話しかけられなくても動くための唯一の入口。
  *
  * ここまでの構造は全部「人が口を開いたら動く」形だった(`pnpm agent` も `oz` も人が叩く)。
- * 自走にするというのは、起動の理由を人の発話から**DB の状態**に移すこと。
+ * 自走にするというのは、起動の理由を人の発話から DB の状態に移すこと。
  * このファイルがその置き換えで、systemd のタイマーから定期的に呼ばれる。
  *
- *   1. Attention.digest() …SQL だけで「起きる理由があるか」を決める。**ここでモデルは呼ばない**。
+ *   1. Attention.digest() …SQL だけで「起きる理由があるか」を決める。ここでモデルは呼ばない。
  *   2. 理由が無ければ何もせず終わる(枠を1回も食わない)。定期実行の大半はこの経路を通る。
  *   3. 理由があるときだけエージェントを組み立て、1回だけ投げる。
  *   4. 返ってきたものを system イベントとして DB に残し、既読位置を進める。
  *
- * **2 が本体**。tick を作るときに一番やってはいけないのが「15分ごとに推論を1回回す」で、
- * それは自走ではなく空回りする浪費装置になる。起こす条件は Attention 側に全部あり、
- * ここは「起こす/起こさない」を実行するだけにしてある。
+ * 2 が本体。「15分ごとに推論を1回回す」形にすると、自走ではなく空回りしながら枠を食うだけになる。
+ * 起こす条件は Attention 側に全部あり、ここは「起こす/起こさない」を実行するだけにしてある。
  *
  * 枠は `OPEN_ZERO_LANE=autonomous` で自走側に付け替える。日次 run 数の内訳が対話と分かれ、
  * tick が暴れても対話の取り分は残る(Governance.BUDGET.autonomousRuns)。
@@ -37,15 +36,15 @@ import { Discord } from "./services/Discord.ts"
 import { buildFencedPrompt, Governance, type UntrustedBlock } from "./services/Governance.ts"
 import { Memory } from "./services/Memory.ts"
 
-// **モジュール直下の設定より先に読む。** 下の const は評価時に env を見るので、順番が意味を持つ。
+// モジュール直下の設定より先に読む。下の const は評価時に env を見るので、順番が意味を持つ。
 loadEnv()
 
 /**
- * 1回の tick に許す時間。**上限を付けないと無限に待つ。**
+ * 1回の tick に許す時間。上限を付けないと無限に待つ。
  *
  * 300 秒では下書きの日が入り切らない(docs/adr/0012)。書いて精査に出して直してもう一度出す形になり、
  * 実測した回は 270 秒の時点でまだ3稿目を書いていた。unit の `TimeoutStartSec` は 600 秒なので、
- * **その内側**に収まる範囲で伸ばす。コンテナの上限(180 秒)との差は広がる方向なので ADR 0002 は保たれる。
+ * その内側に収まる範囲で伸ばす。コンテナの上限(180 秒)との差は広がる方向なので ADR 0002 は保たれる。
  */
 const TIMEOUT_MS = Number(process.env.OPEN_ZERO_TICK_TIMEOUT_MS ?? 420_000)
 
@@ -67,7 +66,7 @@ function renderEvent(e: ObservedEvent): string {
 }
 
 /**
- * tick のプロンプト。**「何もしない」を正解として明示する**のが要点。
+ * tick のプロンプト。「何もしない」を正解として明示するのが要点。
  * 起こされた以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を出す。
  * 起きた理由と材料だけ渡して、動かす必要が無ければ一行で終えてよいと書く。
  */
@@ -101,7 +100,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
     sections.push(
       [
         "## 動いていない watch",
-        // 前回の結果を一緒に渡す。**これが無いと毎回まっさらな状態で同じ一覧を読み直す**ことになり、
+        // 前回の結果を一緒に渡す。無いと毎回まっさらな状態で同じ一覧を読み直すことになり、
         // 先週を踏まえた文が一度も出ない。実際に AI追跡の watch がそうなっていた。
         ...d.stalled.map((w) => {
           const head = `- ${short(w.id)} ${w.subject}(最後の動きから ${w.stalledDays} 日 / 次に動くのは ${w.next_move_owner}`
@@ -110,7 +109,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
           return `${head}${runs})${prev}`
         }),
         "",
-        // 残りの件数だけ出す。**中身は出さない** — 出すと結局全部読むことになり、絞った意味が消える。
+        // 残りの件数だけ出す。中身は出さない — 出すと結局全部読むことになり、絞った意味が消える。
         ...(d.stalledHeld > 0
           ? [
               `他に ${d.stalledHeld} 件が冷却明けで待っているが、**この回は上の ${d.stalled.length} 件だけ見る。**`,
@@ -163,7 +162,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
     )
   }
 
-  // 在る作業場は毎回載せる。**引ける道具(`workspaces`)を置いただけでは引かれない** —
+  // 在る作業場は毎回載せる。道具(`workspaces`)を置いただけでは引かれない —
   // 引くかどうかを判断するには、まず在ることを知っていなければならない。数行で済む。
   if (workspaces.length > 0) {
     sections.push(
@@ -177,7 +176,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
     )
   }
 
-  // 下書きの規律は**出す日にだけ載せる**。毎回渡すと、書かない回のぶんだけ枠を食う。
+  // 下書きの規律は出す日にだけ載せる。毎回渡すと、書かない回のぶんだけ枠を食う。
   if (d.draftDue) {
     sections.push(
       [
@@ -226,11 +225,11 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
       "  落ちたものを名指せない物差しは何でも通すので、通ったことが証拠にならない。",
       "- 材料が揃ったらそこで打ち切って、`tell` なり `remember` なりで形にして終える。",
       "",
-      // 「何もしないでよい」は**載せるものが無い回にだけ**言う。無条件に書くと、冷却の明けた
+      // 「何もしないでよい」は載せるものが無い回にだけ言う。無条件に書くと、冷却の明けた
       // watch を並べておきながら同じ文で「動かなくてよい」と言うことになる。実測(直近40回の実働)では
       // watch で起きた9回のうち7回が道具呼び出し4回以下だった。逆に「必ず何かやれ」と書くと
-      // 用の無い watch と提案が増える。**分けるのは件数ではなく、載っているかどうか。**
-      // **この分岐そのものの効き目は測れていない**(前後1回ずつでは差が出なかった。docs/adr/0028)。
+      // 用の無い watch と提案が増える。分けるのは件数ではなく、載っているかどうか。
+      // この分岐そのものの効き目は測れていない(前後1回ずつでは差が出なかった。docs/adr/0028)。
       ...(spokenTo
         ? [
             "**訊き返してよい。** 相手はいま画面の前にいる。分岐が決められないなら、",
@@ -254,8 +253,8 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
 }
 
 /**
- * 起こす前に通れない状態を見る。**実際にモデル呼び出しを守っているのと同じ precheck を呼ぶ**
- * — ここで独自の条件を書くと、Flue を起こしてから provider のゲートに弾かれる二度手間になり、
+ * 起こす前に通れない状態を見る。モデル呼び出しを守っているのと同じ precheck を呼ぶ。
+ * ここで独自の条件を書くと、Flue を起こしてから provider のゲートに弾かれる二度手間になり、
  * かつ「見送った理由」が二種類の文言で出てくる。停止・枠クールダウン・日次 run 数・自走枠が全部ここで出る。
  */
 const blocked = Effect.gen(function* () {
@@ -287,7 +286,7 @@ const bumpCount = (key: string) =>
 async function tick(): Promise<string> {
   const d = await run(
     Effect.gen(function* () {
-      // **digest より先に読む** — 届いていた文がそのまま未読の入力になり、「ユーザーから
+      // digest より先に読む — 届いていた文がそのまま未読の入力になり、「ユーザーから
       // 言われた」ことが起きる理由になる。ここが後だと、返事は次の tick まで読まれない。
       // poll が先に取り込んでいれば0件で通り、DB に残っているぶんが digest に出る。
       const arrived = yield* drainInbox
@@ -297,10 +296,10 @@ async function tick(): Promise<string> {
     }),
   )
 
-  // ── 起きる理由が無い。**ここで終わるのが正常**。モデルは1回も呼ばない。
+  // ── 起きる理由が無い。ここで終わるのが正常。モデルは1回も呼ばない。
   if (d.idle) {
     // ただし1日1回だけ、何日ぶんかの見直しをここで回す(docs/adr/0018)。
-    // **idle の回に置く理由は、返信を待たせないため。** 見直しは Luna で 30 秒前後かかるので、
+    // idle の回に置く理由は、返信を待たせないため。見直しは Luna で 30 秒前後かかるので、
     // 話しかけられた回に挟むとその秒数だけ返事が遅れる。起きる理由が無い回なら誰も待っていない。
     // その日に idle の回が一度も来なければ翌日へ回る — 窓は 7 日あり、`dream:through` が
     // 進んだところを覚えているので、飛ばした日ぶんの材料は次の回にそのまま出てくる。
@@ -308,7 +307,7 @@ async function tick(): Promise<string> {
       ? await run(dream()).catch((e: unknown) => `dream: 落ちた(${causeReason(e)})`)
       : undefined
     if (dreamed) log(dreamed)
-    // 落とすほうも1日1回(docs/adr/0019)。**印は別に持つ** — 見直しが落ちた日に
+    // 落とすほうも1日1回(docs/adr/0019)。印は別に持つ — 見直しが落ちた日に
     // 掃除まで止まると、増える側だけが進む。こちらはモデルを呼ばないので枠にも関係しない。
     const swept = (await run(cleanupDue(d.at)))
       ? await run(cleanup()).catch((e: unknown) => `cleanup: 落ちた(${causeReason(e)})`)
@@ -348,12 +347,12 @@ async function tick(): Promise<string> {
   const stop = await run(blocked)
   if (stop) return `見送った: ${stop}`
 
-  // **話しかけられて起きたのか、自分の都合で起きたのか。** ここで返信の宛先が決まる。
+  // 話しかけられて起きたのか、自分の都合で起きたのか。ここで返信の宛先が決まる。
   // owner の未読があるなら、この回の最後の文は DB ではなくユーザーの画面へ出す。
   const spokenTo = d.newEvents.some((e) => e.source === "owner")
   log("起きる:", d.reasons.join(" / "), spokenTo ? "(返信)" : "")
 
-  // 自走枠であることを **エージェントを組み立てる前に** 立てる。
+  // 自走枠であることを、エージェントを組み立てる前に立てる。
   // lane() は呼び出し時評価なのでこれだけで足りるが、モデル id は createAssistant() の
   // 時点で確定するので、差し替えるならこの順序でなければ効かない。
   process.env.OPEN_ZERO_LANE = "autonomous"
@@ -363,15 +362,15 @@ async function tick(): Promise<string> {
 
   try {
     const assistant = createAssistant({ model: tickModel() })
-    // 道具に締切を見せる。**プロンプトに書くだけでは足りない** — 起動時の文は、9回目を
+    // 道具に締切を見せる。プロンプトに書くだけでは足りない — 起動時の文は、9回目を
     // 走らせるかどうかを決める時点では過去の話になっている(src/core/deadline.ts)。
     startDeadline(TIMEOUT_MS)
-    // **切られてもここで受け止める。** 投げ返すと commit に辿り着かないので冷却の起点が進まず、
+    // 切られてもここで受け止める。投げ返すと commit に辿り着かないので冷却の起点が進まず、
     // 次のタイマーが同じ理由で起きて同じだけ焼いて同じように落ちる。落ちた回も1回動いた回として
     // 締める — 実際にモデルは走り、道具も動いて、その跡は DB に残っている。
     const deadline = AbortSignal.timeout(TIMEOUT_MS)
     const prompt = buildPrompt(d, spokenTo, await run(listWorkspaces))
-    // **「載せた」を記録するのはここ**。digest の中ではない — digest は起きる理由が無い回にも
+    // 「載せた」を記録するのはここ。digest の中ではない — digest は起きる理由が無い回にも
     // 走るので、そこで印を付けると誰も読んでいない一覧を載せたことにして順番だけが進む。
     // 切られた回でも記録は残す。載ったことは事実で、次は他のものに順番を渡す(docs/adr/0028)。
     if (d.stalled.length > 0) {
@@ -385,7 +384,7 @@ async function tick(): Promise<string> {
     const began = Date.now()
     const turn = await assistant.respond(prompt, { signal: deadline })
     const ms = Date.now() - began
-    // **時間切れと、それ以外の止まり方を混ぜない。** 混ぜると「420秒で切られた」だけが DB に残り、
+    // 時間切れと、それ以外の止まり方を混ぜない。混ぜると「420秒で切られた」だけが DB に残り、
     // 自走枠の使い切りもモデル側の落ちも同じ顔になる。次の回で何を直せばいいか読めなくなる。
     const cutOff = turn.cutOff
       ? deadline.aborted
@@ -394,11 +393,11 @@ async function tick(): Promise<string> {
       : undefined
     if (cutOff) log("止まった:", cutOff, `/ ${turn.steps} 手まで`)
 
-    // 切られた回でも、そこまでに書けた文は捨てない。**道具ループの途中の文が残っている**
+    // 切られた回でも、そこまでに書けた文は捨てない。道具ループの途中の文が残っている
     // ことがあり、それが「9回走らせて何が分かったか」の唯一の記録になる。
     const text = (turn.text || (cutOff ? `(${cutOff}。この回の締めの文は書けていない)` : "")).trim()
 
-    // ── 締めの keeper。**ユーザーが話した回にだけ通る**(docs/adr/0014)。
+    // ── 締めの keeper。ユーザーが話した回にだけ通る(docs/adr/0014)。
     // 材料はユーザーの発言そのもので、外から来たものは渡さない。切られた回は通さない —
     // 途中で止まった回のやり取りは、確かめられたかどうかが判断できる形になっていない。
     let kept: string | undefined
@@ -420,17 +419,17 @@ async function tick(): Promise<string> {
         const att = yield* Attention
         const db = yield* Db
         const discord = yield* Discord
-        // **返信は DB より先に出す。** ユーザーは待っている側なので、記録に手間取って
+        // 返信は DB より先に出す。ユーザーは待っている側なので、記録に手間取って
         // 返事が遅れる順序にしない。出せなくても DB には残るので、失っては困るものは無い。
-        // 切られた回の穴埋め文は出さない。**待っている側に届けてよいのは、書かれた返事だけ。**
+        // 切られた回の穴埋め文は出さない。届けてよいのは、書かれた返事だけ。
         if (spokenTo && text && !cutOff) yield* discord.post({ text })
         yield* mem.remember({
           kind: "observe",
           source: "system",
-          // **やったことと、やったと書いたことを別の欄に置く。** `said` は自分で書いた報告なので、
+          // やったことと、やったと書いたことを別の欄に置く。`said` は自分で書いた報告なので、
           // それだけでは外から進み具合を確かめられない(docs/adr/0030)。`tools` は実際に呼ばれた
           // 道具の並び、`steps` は手数、`ms` は掛かった時間 — どれも呼び出し側で数えた値。
-          // 切られた回は `cutOff` も残す。**止まったことが `said` に書かれるとは限らない。**
+          // 切られた回は `cutOff` も残す。止まったことが `said` に書かれるとは限らない。
           content: {
             tick: d.at,
             reasons: d.reasons,
@@ -441,31 +440,31 @@ async function tick(): Promise<string> {
             ...(cutOff ? { cutOff } : {}),
             ...(kept ? { kept } : {}),
           },
-          // 索引に入れるのは**言ったことだけ**。`deriveText` に任せると封筒(起動時刻・起きた理由)まで
+          // 索引に入れるのは言ったことだけ。`deriveText` に任せると封筒(起動時刻・起きた理由)まで
           // 平らに潰して混ぜてしまい、「ユーザーの入力が未読」のような定型句が毎回の記録に紛れて、
           // 何を検索してもそれが当たるようになる。封筒は DB に残す、索引には入れない。
           text,
           at: nowIso(),
         })
         yield* bumpCount("tick:active_count")
-        // **書けたかどうかに関わらず、その日は1回で打ち切る。** `draft` を呼ばなかった=材料が無かった
+        // 書けたかどうかに関わらず、その日は1回で打ち切る。`draft` を呼ばなかった=材料が無かった
         // ということで、同じ材料のまま15分ごとに書かせ直しても出てくるものは変わらない。
         // ただし切られた回は数えない — 書かないと決めたのではなく、決める前に止められている。
         if (d.draftDue && !cutOff) yield* db.setMeta("daily:draft", dayRange(d.at).key)
-        // **active を立てるのはここだけ**。次の tick はこの時刻から冷却時間を数える。
+        // active を立てるのはここだけ。次の tick はこの時刻から冷却時間を数える。
         // reasonKey を渡すと、同じ組み合わせで起きるたびに次の冷却が倍になる(回し続けない)。
-        // **進めるのは digest に載った行までにする。** 走っている間に届いたぶんは未読のまま残り、
+        // 進めるのは digest に載った行まで。走っている間に届いたぶんは未読のまま残り、
         // 30秒ごとの poll(poll.ts)が次の起動で拾い直す。ここを最大 rowid にすると黙って落ちる。
         yield* att.commit({
           active: true,
           reasonKey: d.reasonKey,
           upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
         })
-        // ── 進み具合を1行だけ出す(docs/adr/0030)。**呼びかけない。**
+        // ── 進み具合を1行だけ出す(docs/adr/0030)。呼びかけない。
         // 動くたびに出るものなので、名指しを付けると通知が鳴り続けて、鳴っても見なくなる。
         // 出す先が指してなければ何も起きない(`Desk` の "log" は DM に落ちない)。
         //
-        // **書いた記録をそのまま読み直して出す。** ここで数え直すと、画面で見る値と
+        // 書いた記録をそのまま読み直して出す。ここで数え直すと、画面で見る値と
         // `oz journal` の値が別々に育って、食い違ったときにどちらが本当か決められなくなる。
         // 最後に置いてあるのは、外へ出すのに失敗しても commit まで済んでいるようにするため。
         const [entry] = yield* readJournal(1)

@@ -1,5 +1,5 @@
 /**
- * Discord の検査。**押されたことをどう見分けるか**を主に見る。
+ * Discord の検査。押されたことをどう見分けるかを主に見る。
  *
  * リアクションは自分で先に付けるので、絵文字の数は最初から 1 ある。そこを引かずに数えると、
  * 誰も押していない通知が全部「押された」になり、tick が勝手に進む。
@@ -109,7 +109,7 @@ const post = (p: Post) =>
     return yield* d.post(p)
   })
 
-/** 読んで、読んだことを記録するところまで。**呼ぶ側と同じ順**(src/inbox.ts)。 */
+/** 読んで、読んだことを記録するところまで。呼ぶ側と同じ順(src/inbox.ts)。 */
 const inbox = Effect.gen(function* () {
   const d = yield* Discord
   const batch = yield* d.inbox()
@@ -257,10 +257,10 @@ test("記録し終える前に落ちた回のぶんは、次の回にもう一�
     await withHarness(async (h) => {
       await h.run(inbox)
       dc.msgs.unshift({ id: "71", content: "歯医者を来週にずらして", author: { id: OWNER } })
-      // 読んだが `seen` を呼ばずに終えた回。**位置は進んでいない。**
+      // 読んだが `seen` を呼ばずに終えた回。位置は進んでいない。
       const first = await h.run(peek)
       assert.deepEqual([...first.items], [{ id: "71", text: "歯医者を来週にずらして" }])
-      // **二度覚えるのは直せるが、位置の向こう側に取り残されたものは取りに行けない。**
+      // 二度覚えるのは直せるが、位置の向こう側に取り残されたものは取りに行けない。
       assert.deepEqual(await h.run(inbox), [{ id: "71", text: "歯医者を来週にずらして" }])
       // 記録し終えた後は返らない。
       assert.deepEqual(await h.run(inbox), [])
@@ -324,7 +324,7 @@ const TALK = "7001"
 const DRAFT = "7002"
 
 /**
- * 分ける理由は**ミュートの単位**。下書きと会話が同じ場所に出ると、
+ * 分ける理由はミュートの単位。下書きと会話が同じ場所に出ると、
  * 「読まなくていいものをミュートする」と「返事が要るもの」も一緒に届かなくなる。
  */
 test("下書きは下書きの場所へ、会話は会話の場所へ出る", async () => {
@@ -339,7 +339,7 @@ test("下書きは下書きの場所へ、会話は会話の場所へ出る", as
         sent.map((x) => x.path),
         [`/channels/${TALK}/messages`, `/channels/${DRAFT}/messages`],
       )
-      // DM は開きにも行かない。**分けた先が指してあるなら DM は関係ない。**
+      // DM は開きにも行かない。分けた先が指してあるなら DM は関係ない。
       assert.equal(
         dc.hits.some((x) => x.path === "/users/@me/channels"),
         false,
@@ -497,7 +497,7 @@ test("呼びかけはチャンネルにだけ付く — DM では字が増える
 })
 
 /**
- * リアクションは「どれに」までしか言えない。**「直す」の中身は自由文でしか来ない**が、
+ * リアクションは「どれに」までしか言えない。「直す」の中身は自由文でしか来ないが、
  * スレッド外に書かれた自由文はどの1件への返事か分からない。スレッドなら場所そのものが宛先になる。
  */
 test("スレッドの名前を渡すと、出した1通からスレッドが立つ", async () => {
@@ -516,7 +516,7 @@ test("スレッドの名前を渡すと、出した1通からスレッドが立�
   }
 })
 
-/** 生やした場所は位置を持たない。**規則をそのまま当てると、最初の1通が黙って消える。** */
+/** 生やした場所は位置を持たない。規則をそのまま当てると、最初の1通が黙って消える。 */
 test("スレッドに書かれた1通目から拾う — 立てた時点で位置を置く", async () => {
   const dc = await fakeDiscord()
   wire(dc.url, { talk: TALK, draft: DRAFT })
@@ -525,7 +525,7 @@ test("スレッドに書かれた1通目から拾う — 立てた時点で位�
       const id = await h.run(post({ text: "下書き本文", to: "draft", thread: "題名" }))
       dc.at(String(id)).unshift({ id: "900", content: "ここの数字を直して", author: { id: OWNER } })
       assert.deepEqual(await h.run(inbox), [{ id: "900", text: "ここの数字を直して" }])
-      // **返事はスレッドの中に返る。**スレッド外に返すと、どれへの返事か読む側が探すことになる。
+      // 返事はスレッドの中に返る。スレッド外に返すと、どれへの返事か読む側が探すことになる。
       await h.run(post({ text: "直した" }))
       assert.equal(dc.at(String(id))[0]?.content, "直した")
     })
@@ -564,7 +564,7 @@ test("聞き続けるスレッドには上限がある — 古いものから落
 const LOG = "7003"
 
 /**
- * 進み具合は1回動くたびに1行出る。**落とす先を持たせると、会話か DM がそれで埋まる**
+ * 進み具合は1回動くたびに1行出る。落とす先を持たせると、会話か DM がそれで埋まる
  * — 埋まった場所は読み飛ばす場所になるので、指していない間は出さない(docs/adr/0030)。
  */
 test("進み具合は指した場所にしか出ない — 指していなければ DM にも会話にも落ちない", async () => {
@@ -594,7 +594,7 @@ test("進み具合の場所を指すとそこへ出る — 呼びかけは付け
     await withHarness(async (h) => {
       await h.run(post({ text: "3手 41秒", to: "log" }))
       assert.equal(dc.at(LOG)[0]?.content, "3手 41秒")
-      // 会話には出ない。**混ざった瞬間に、返事の要るものが流れる。**
+      // 会話には出ない。混ざった瞬間に、返事の要るものが流れる。
       assert.deepEqual(dc.at(TALK), [])
     })
   } finally {

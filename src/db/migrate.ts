@@ -1,12 +1,12 @@
 /**
  * 既に中身のある DB を新しいスキーマに合わせる。
  *
- * `schema.sql` は全部 `CREATE TABLE IF NOT EXISTS` なので、**既存のテーブルには一切効かない**。
- * 形を変えたければここで明示的に作り直すしかない。schema.sql を適用する**前**に呼ぶ:
+ * `schema.sql` は全部 `CREATE TABLE IF NOT EXISTS` なので、既存のテーブルには効かない。
+ * 形を変えたければここで明示的に作り直すしかない。schema.sql を適用する前に呼ぶ:
  * 先に旧い形を新しい形へ寄せておけば、あとは `IF NOT EXISTS` が素通りするだけで済む。
  *
  * どれも冪等。掛かっていなければ掛け、掛かっていれば何もしない。
- * **正本(`events`)には触らない。** ここで作り直すのは projection だけで、
+ * 正本(`events`)には触らない。ここで作り直すのは projection だけで、
  * 万一壊しても events から引き直せる、という前提を崩さない。
  */
 import type { Sqlite } from "./sqlite.ts"
@@ -20,10 +20,10 @@ const columns = (d: Sqlite, table: string): string[] => {
 }
 
 /**
- * その表を作った `CREATE TABLE` の**文そのもの**。無ければ空文字。
+ * その表を作った `CREATE TABLE` の文そのもの。無ければ空文字。
  *
  * SQLite は作られた時の文字列をそのまま保つ。列の増減は `PRAGMA table_info` で分かるが、
- * **CHECK 制約の中身はここにしか出ない**。狭めた制約が掛かっているかはこれで見る。
+ * CHECK 制約の中身はここにしか出ない。狭めた制約が掛かっているかはこれで見る。
  */
 const ddl = (d: Sqlite, table: string): string => {
   try {
@@ -48,7 +48,7 @@ const countWhere = (d: Sqlite, sql: string): number => {
 /**
  * belief_slots を bitemporal にする(slot ごと1行 → slot ごとに区間の並び)。
  *
- * 旧い行は「いつから真だったか」を持っていない。**そこを推測で埋めない。**
+ * 旧い行は「いつから真だったか」を持っていない。そこを推測で埋めない。
  * DB が知った時刻(`updated_at`)をそのまま `valid_from` に置く — これは
  * 「いつからかは分からないが、遅くともこの時点では真だった」という、記録として正しい読み。
  */
@@ -83,7 +83,7 @@ function bitemporalBeliefSlots(d: Sqlite): boolean {
  * 入力トークンは3つに割れて返るのに、DB は2つしか持っていなかった。落ちていたのは
  * `cache_creation_input_tokens` で、ここが素の `input_tokens` を桁で上回る。
  * これが無いと `in_tok` を「入力」として読んだ人が実際よりはるかに小さい値を見る。
- * 既存行は当時の値が復元できないので 0 のまま置く(**推測で埋めない**)。
+ * 既存行は当時の値が復元できないので 0 のまま置く(推測で埋めない)。
  * 0 と「本当に 0 だった」の区別が要るなら at で切る。
  */
 function ledgerCacheWrite(d: Sqlite): boolean {
@@ -96,7 +96,7 @@ function ledgerCacheWrite(d: Sqlite): boolean {
 /**
  * watchlist に発火の記録を足す(docs/adr/0013)。
  *
- * 既存行の `last_run_at` は NULL のまま置く。**「まだ一度も回していない」と読むのが記録として正しい**
+ * 既存行の `last_run_at` は NULL のまま置く。「まだ一度も回していない」と読むのが記録として正しい
  * — 回した跡はどこにも残っていないので、`opened_at` や `last_activity_at` で埋めると
  * 回していないものを回したことにする。NULL は最初の tick で1回だけプロンプトに載り、そこから冷却が始まる。
  */
@@ -118,7 +118,7 @@ function watchlistFiring(d: Sqlite): boolean {
  * 「回した」と「載せた」は別の出来事なので、列も別に持つ — 回さずに終えた watch を
  * 後ろへ回すには、載せたことだけを記録できなければならない。
  *
- * 既存行は NULL のまま置く。**「まだ一度も載せていない」と読むのが記録として正しい**
+ * 既存行は NULL のまま置く。「まだ一度も載せていない」と読むのが記録として正しい
  * — 載せた跡はどこにも残っていない。NULL は先頭に並ぶので、最初の数回で一巡する。
  */
 function watchlistShown(d: Sqlite): boolean {
@@ -133,7 +133,7 @@ function watchlistShown(d: Sqlite): boolean {
  *
  * 承認はユーザーしか出せないので、期限が近い提案で起きた tick は毎回「あなた待ちです」で終わる。
  * 実測(2026-08-13 / 直近40回の実働)では、期限が近い承認待ちで起きた回が4回あり、
- * **4回とも道具呼び出し4回以下**で終わっていた。中身は全部 `.example` 宛の試験データで、
+ * 4回とも道具呼び出し4回以下で終わっていた。中身は全部 `.example` 宛の試験データで、
  * 決着のしようが最初から無い。結論を1回書ける場所が無いので、同じ結論を書き直し続けていた。
  *
  * 既存行は NULL。「まだ何も言っていない」と読む — 言った跡はどこにも残っていない。
@@ -150,7 +150,7 @@ function proposalsSettled(d: Sqlite): boolean {
  * 外した経路が残した印を落とす(docs/adr/0029)。
  *
  * ntfy を読む側はもう無い。`ntfy:in_cursor` を残しておくと、`schema_meta` を読んだ人が
- * 「まだその経路がある」と読む。**テーブルを落とすのと同じ理由で、印も落とす。**
+ * 「まだその経路がある」と読む。テーブルを落とすのと同じ理由で、印も落とす。
  * 値そのものは ntfy 側のメッセージ id で、こちらから使い道が無い。
  */
 function dropNtfyCursor(d: Sqlite): boolean {
@@ -164,13 +164,13 @@ function dropNtfyCursor(d: Sqlite): boolean {
 }
 
 /**
- * 制約の文面を入れ替えるために表を作り直す。**列は変えない。**
+ * 制約の文面を入れ替えるために表を作り直す。列は変えない。
  *
- * **古いほうを `RENAME` してはいけない。** SQLite 3.25 以降の `ALTER TABLE ... RENAME` は
+ * 古いほうを `RENAME` してはいけない。SQLite 3.25 以降の `ALTER TABLE ... RENAME` は
  * 他の表の `REFERENCES` を追いかけて書き換える。`proposals` を `proposals_v1` に改名すると、
  * それを指している `approvals` `decisions` `ledger` の3つが `proposals_v1` を指すようになり、
  * 用済みの `proposals_v1` を落とした時点で参照先が消える。
- * **実物のコピーで踏んで気付いた** — 参照する表が無い検査用の DB では通っていた。
+ * 実物のコピーで踏んで気付いた — 参照する表が無い検査用の DB では通っていた。
  *
  * 通る順は、新しい名前で作る → 写す → 古いほうを落とす → 新しいほうを改名する。
  * 改名で追いかけられるのは `<表>_new` への参照だけで、そんな参照は誰も持っていない。
@@ -205,14 +205,14 @@ const rebuild = (d: Sqlite, table: string, createNew: string, cols: string): voi
  * `status` の `executing`/`executed`/`failed` は、承認しても実行する仕組みが無いので誰も書けない。
  * `watchlist.next_move_owner` の `counterparty`(第三者)は実データ0件。
  *
- * **作り直すのは制約の文面のため**。列は1つも変わらない。生きている DB の `CREATE TABLE` は
+ * 作り直すのは制約の文面のためで、列は1つも変わらない。生きている DB の `CREATE TABLE` は
  * 作られた時の文字列のままなので、`.schema` を読んだ側には7種の kind と3つの実行状態が見え続ける。
  * 見えるものが在るものだと読まれる、というのがこれを落とす理由なので、文面ごと入れ替える。
  *
- * **中身が新しい制約に収まらないときは触らない。** 収まらない行があるなら、想定していない経路が
+ * 中身が新しい制約に収まらないときは触らない。収まらない行があるなら、想定していない経路が
  * 書いたということで、ここで潰してよいものではない。`counterparty` だけは寄せ先がある —
  * 発火の判定は `famulus` かどうかしか見ておらず(src/services/Attention.ts)、
- * `human` と `counterparty` は同じ経路を通る。**振る舞いを変えずに寄せられるのはこれだけ。**
+ * `human` と `counterparty` は同じ経路を通る。振る舞いを変えずに寄せられるのはこれだけ。
  */
 function narrowInheritedChecks(d: Sqlite): string[] {
   const done: string[] = []
@@ -258,7 +258,7 @@ function narrowInheritedChecks(d: Sqlite): string[] {
   }
 
   if (/'counterparty'/.test(ddl(d, "watchlist"))) {
-    // 寄せてから作り直す。**寄せる前に作ると CHECK で弾かれて、掛からないまま次回も同じ所へ来る。**
+    // 寄せてから作り直す。寄せる前に作ると CHECK で弾かれて、掛からないまま次回も同じ所へ来る。
     d.exec("UPDATE watchlist SET next_move_owner = 'human' WHERE next_move_owner = 'counterparty'")
     rebuild(
       d,
@@ -292,7 +292,7 @@ function narrowInheritedChecks(d: Sqlite): string[] {
  * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、テーブルは残り続ける。
  * 残ると `.schema` を読んだ側が「その仕組みが在る」と読む — 消したい理由がそれなので、実物も落とす。
  *
- * **空のときだけ落とす。** 行があるなら、それは想定と違うことが起きている兆候で、
+ * 空のときだけ落とす。行があるなら、それは想定と違うことが起きている兆候で、
  * ここで消してよいものではない。名前を返さないので、残ったことは表に出ない。
  */
 const DROPPED = [
@@ -325,7 +325,7 @@ export function migrate(d: Sqlite): string[] {
   if (watchlistShown(d)) applied.push("watchlist:shown")
   if (proposalsSettled(d)) applied.push("proposals:settled")
   if (dropNtfyCursor(d)) applied.push("drop:ntfy_cursor")
-  // **列を足す側より後。** 作り直す文面に、上で足したばかりの列が入っている。
+  // 列を足す側より後。作り直す文面に、上で足したばかりの列が入っている。
   for (const n of narrowInheritedChecks(d)) applied.push(`narrow:${n}`)
   for (const t of dropUnusedTables(d)) applied.push(`drop:${t}`)
   return applied

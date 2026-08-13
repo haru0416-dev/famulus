@@ -1,13 +1,13 @@
 /**
  * governance サービス。モデルを呼ぶ前の検査を層に分けて順に見る。
  *
- * 拒否は `{ ok: false, layer, detail }` のような直和ではなく**拒否ごとに別タグの失敗**にしてある。
+ * 拒否は `{ ok: false, layer, detail }` のような直和ではなく、拒否ごとに別タグの失敗にしてある。
  * 直和だと呼び出し側が拒否を無視しても型が通るが、失敗チャネルに載っていれば
  * 握り潰すのに `catchAll` を明示的に書くしかなくなる(Effect に載せた唯一の理由)。
  *
  * 層の順序:
  *   halt → 枠クールダウン → 日次 run 数 → (USD 会計のときだけ) 単価未登録 → 日次/月次 USD
- * `meter === "quota"` の run は限界費用 0 なので USD 層を**飛ばす**。ここを飛ばさないと
+ * `meter === "quota"` の run は限界費用 0 なので USD 層を飛ばす。ここを飛ばさないと
  * 「窓が空いているのに金額で止まる」= サブスクを買った意味を捨てることになる。
  */
 import * as Effect from "effect/Effect"
@@ -37,7 +37,7 @@ export interface QuotaState {
 export interface BudgetConfig {
   readonly dailyRuns: number
   /**
-   * そのうち自走(tick)に使ってよい上限。**対話を飢えさせないための仕切り**。
+   * そのうち自走(tick)に使ってよい上限。対話の取り分を残すための仕切り。
    * 自走を入れると走行回数を決めるのが人間ではなくタイマーになるので、
    * 全体上限だけだと「気づいたら tick が枠を食い切っていて、話しかけたら止まっている」が起きる。
    */
@@ -54,9 +54,9 @@ const envInt = (key: string, fallback: number): number => {
 /**
  * 既定値。
  *
- * **`dailyRuns` は予算ではなく暴走の歯止め**。1回ごとに課金されるなら run 数が金額の代理になるが、
+ * `dailyRuns` は予算ではなく、繰り返しの歯止め。1回ごとに課金されるなら run 数が金額の代理になるが、
  * 定額枠ではならない(USD 上限が無意味なのと同じ理由 — precheck の 4 番を見よ)。
- * 定額枠でも無料ではなく、消えているのは金ではなく**ユーザー自身の Claude の枠**で、
+ * 定額枠でも無料ではなく、消えているのは金ではなくユーザー自身の Claude の枠で、
  * それを測るのは run 数ではなく `quotaCooldown`(実際の使用率)。run 数は
  * 「同じことを無限に繰り返している」を止めるための上限として、実運用より十分高く置く。
  */
@@ -97,8 +97,8 @@ export interface UntrustedBlock {
 }
 
 /**
- * 不信データを構造的に隔離する。**フレーズ検知ではなく境界マーカーで分離**する
- * — 文字列フィルタは書き換えられた言い回しで破られる。
+ * 不信データを境界マーカーで分離する。フレーズ検知にしない —
+ * 文字列フィルタは書き換えられた言い回しで破られる。
  * 純粋関数なのでサービスに入れない — Effect に載せる意味が無いものは載せない。
  */
 export function buildFencedPrompt(ownerInstruction: string, blocks: readonly UntrustedBlock[]): string {
@@ -183,7 +183,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
       })
 
     /**
-     * run 前のゲート。**失敗チャネルに拒否を載せて返す**。
+     * run 前のゲート。拒否は失敗チャネルに載せて返す。
      * 成功したときだけ run に進める、というのを型で強制するのがここの目的。
      */
     const precheck = (opts: PrecheckOptions, config: BudgetConfig = BUDGET) =>
@@ -200,13 +200,13 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
           )
         }
 
-        // 3. 日次 run 数 — 暴走の歯止め。境界は**ユーザーの1日**(core/time.ts)。
+        // 3. 日次 run 数 — 繰り返しの歯止め。境界はユーザーの1日(core/time.ts)。
         // UTC で切ると日本時間の朝9時に枠が戻る。
         //
-        // **halt は立てない。** 1回ごとに課金される前提なら上限に当たること自体が
+        // halt は立てない。1回ごとに課金される前提なら上限に当たること自体が
         // 「金が漏れている」の合図になるが、定額枠ではそうではない。
         // ここで halt を立てると、翌日には自動で戻るはずの上限が、人が `oz resume` を打つまで
-        // **対話まで含めた全停止**として残る(3b の自走枠で halt を立てないのと同じ判断)。
+        // 対話まで含めた全停止として残る(3b の自走枠で halt を立てないのと同じ判断)。
         const day = dayRange(opts.at)
         const row = yield* db.get(
           "SELECT COUNT(*)n FROM ledger WHERE role IS NOT NULL AND at >= ?AND at < ?",
@@ -219,7 +219,7 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
         }
 
         // 3b. 自走枠 — tick が対話の取り分まで食べないように仕切る。
-        // **ここでは halt を立てない**。自走が枠を使い切っただけで人との対話まで止めるのは行き過ぎで、
+        // ここでは halt を立てない。自走が枠を使い切っただけで人との対話まで止めるのは行き過ぎで、
         // 翌日には自動で戻るべきもの(halt は人が解除するまで明けない)。
         if (opts.lane === "autonomous") {
           const a = yield* db.get(

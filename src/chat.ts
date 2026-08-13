@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * 対話の入口。**人が口を開いて動かす側**(自走は src/tick.ts)。
+ * 対話の入口。人が打って動かす側(自走は src/tick.ts)。
  *
  * 前はフレームワークが持っていた REPL を使っていた。それが無くなったので、要るものだけを置く:
  * 1行読んで1ターン答え、既読位置を進める。それだけ。
@@ -9,7 +9,7 @@
  *   /reset                … 会話を捨てて次から新しく始める
  *   /q(または Ctrl-D)   … 終わる
  *
- * **枠は対話側**(`OPEN_ZERO_LANE` を立てない)。自走とは日次 run 数の内訳が分かれる。
+ * 枠は対話側(`OPEN_ZERO_LANE` を立てない)。自走とは日次 run 数の内訳が分かれる。
  * 締切は付けない — 待っているのは人で、切る判断はその人がする(Ctrl-C)。
  */
 import { createInterface } from "node:readline/promises"
@@ -26,10 +26,10 @@ const assistant = createAssistant()
 const rl = createInterface({ input: process.stdin, output: process.stdout })
 
 /**
- * **入力の終わり(Ctrl-D / パイプの尽き)を2通りとも受ける。**
+ * 入力の終わり(Ctrl-D / パイプの尽き)を2通りとも受ける。
  *
  * 待っている最中に閉じると `question` の約束は解決も棄却もされず、そのまま止まる。
- * 閉じた後に呼ぶと**同期で**投げる(`ERR_USE_AFTER_CLOSE`)ので `.catch()` では捕まらない。
+ * 閉じた後に呼ぶと同期で投げる(`ERR_USE_AFTER_CLOSE`)ので `.catch()` では捕まらない。
  * 前者を signal で棄却に変え、後者を try で受ける。どちらも「終わる」1本に落とす。
  */
 const closed = new AbortController()
@@ -54,7 +54,7 @@ try {
       continue
     }
 
-    // **切るのは人。** Ctrl-C を1回押したらこのターンだけ止め、REPL は残す。
+    // 切るのは人。Ctrl-C を1回押したらこのターンだけ止め、REPL は残す。
     const stop = new AbortController()
     const onSigint = () => stop.abort(new Error("Ctrl-C で止めた"))
     process.on("SIGINT", onSigint)
@@ -68,7 +68,7 @@ try {
     if (turn.text) console.log(`\n${turn.text}\n`)
     if (turn.cutOff) console.log(`(止まった: ${turn.cutOff})\n`)
 
-    // **既読位置はターンごとに進める。** 進めないと、いま自分で答えた入力が
+    // 既読位置はターンごとに進める。進めないと、いま自分で答えた入力が
     // 次の tick で「まだ見ていない入力」として上がり、同じ話にもう一度起きる。
     await run(
       Effect.gen(function* () {

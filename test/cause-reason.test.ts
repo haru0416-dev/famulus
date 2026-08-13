@@ -1,9 +1,9 @@
 /**
- * 止まった理由が**そのまま DB に残るか**を見る。
+ * 止まった理由がそのまま DB に残るかを見る。
  *
  * 元の実装は `agent.read` の失敗を全部「300秒で切られた」として記録していた。
  * 実際に自走枠を使い切って 211 秒で止まった回も、DB には時間切れとして残っていて、
- * **記録を読んでも何を直せばいいか分からなかった**(docs/adr/0011)。
+ * 記録を読んでも何を直せばいいか分からなかった(docs/adr/0011)。
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
@@ -22,7 +22,7 @@ test("包まれた理由を取り出す", () => {
 })
 
 /**
- * **`Error: ` を頭に付けない。** いまゲートが投げるのは素の `Error` で、
+ * `Error: ` を頭に付けない。いまゲートが投げるのは素の `Error` で、
  * `String(e)` のまま記録すると「止まった: Error: 停止中(halt): …」になる。
  */
 test("meta が無ければ一番内側の message を返す", () => {
@@ -33,7 +33,7 @@ test("meta が無ければ一番内側の message を返す", () => {
   )
 })
 
-/** message も meta も無いものは埋めない。**分からないことを分かったように書かない。** */
+/** message も meta も無いものは埋めない。分からないことを分かったように書かない。 */
 test("取り出せるものが無ければ元の文字列を返す", () => {
   assert.equal(causeReason("ただの文字列"), "ただの文字列")
   assert.equal(causeReason(undefined), "undefined")

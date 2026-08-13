@@ -2,12 +2,12 @@
  * 拒否の型付きチャネル(Effect の error channel に載せる)。
  *
  * `{ ok: false, reason: string }` で返すと型としては全部同じ形になり、
- * **呼び出し側が「どの拒否を握り潰したか」をコンパイラに問われない**。
+ * 呼び出し側が「どの拒否を握り潰したか」をコンパイラに問われない。
  * 拒否ごとに別タグを持たせて `Effect.catchTag` で個別に扱わせる。
  *
  * 区別:
  *   - `Halt`          … 人間が明示解除するまで自動で明けない。全停止。
- *   - `QuotaCooldown` … 窓が明ければ自動で戻る。**その枠だけ**避ける。朝会を殺さないため halt にしない。
+ *   - `QuotaCooldown` … 窓が明ければ自動で戻る。その枠だけ避ける。朝会を止めないため halt にしない。
  * この2つを同じ `Error` にすると、フォールバック実装がうっかり halt をリトライしてしまう。
  */
 import * as Data from "effect/Data"
@@ -18,7 +18,7 @@ export class Halt extends Data.TaggedError("Halt")<{
   readonly at: string
 }> {}
 
-/** サブスク枠のクールダウン。`untilMs` まで**この枠だけ**避ける(他の枠は使える)。 */
+/** サブスク枠のクールダウン。`untilMs` までこの枠だけ避ける(他の枠は使える)。 */
 export class QuotaCooldown extends Data.TaggedError("QuotaCooldown")<{
   readonly pool: string
   readonly window: string
@@ -57,7 +57,7 @@ export class RunnerFailed extends Data.TaggedError("RunnerFailed")<{
 /**
  * 指定した行が無い。CLI の打ち間違い(id 前方一致で当たらない)もここ。
  *
- * `what` は何の DB を引いたか(「提案」「問い」「watch」)。**必須にしてある** —
+ * `what` は何の DB を引いたか(「提案」「問い」「watch」)。必須にしてある —
  * 省けるようにすると、提案の文言が問いにも watch にも流用されて
  * 「そんな提案は無い」と言いながら問いを探している、が起きる。
  */
@@ -68,7 +68,7 @@ export class NotFound extends Data.TaggedError("NotFound")<{
 
 /**
  * 行の状態が操作と噛み合わない(承認済みを再承認、id 前方一致が複数など)。
- * **曖昧なまま承認を通さない**ための失敗で、拒否(Refusal)とは別物 — 統治が止めたのではない。
+ * 曖昧なまま承認を通さないための失敗で、拒否(Refusal)とは別物 — 統治が止めたのではない。
  */
 export class Conflict extends Data.TaggedError("Conflict")<{
   readonly what: string
@@ -86,14 +86,14 @@ export class DbFailed extends Data.TaggedError("DbFailed")<{
 export type Refusal = Halt | QuotaCooldown | DailyRunLimit | UnpricedModel | EgressDenied | DeliveryRejected
 
 /**
- * 包まれた失敗から**本当の理由**を一行で取り出す。ここで返した文字列がそのまま
+ * 包まれた失敗から、いちばん内側の理由を一行で取り出す。ここで返した文字列がそのまま
  * 「止まった: …」として DB に残り、ユーザーが読む1行になる。
  *
  * 元は枠(Flue)が dispatch の失敗を `Agent run failed (submission sub_…)` にまとめてしまい、
  * 表に出た文字列だけを記録すると自走枠の使い切りも provider の落ちも同じ顔になっていた
  * (docs/adr/0011)。実際の理由は内側の `meta.reason` にあった。
  *
- * **枠が無くなっても包まれ方は残る。** いまゲートが投げるのは素の `Error` で、道具ループが
+ * 枠が無くなっても包まれ方は残る。いまゲートが投げるのは素の `Error` で、道具ループが
  * それをさらに包むことがある。だから `cause` を辿り、いちばん内側の `message` を返す —
  * 実測では halt 中の1ターンが `Error: 停止中(halt): …` として出ていて、
  * `String(e)` のままだと先頭に `Error: ` が付いたまま記録される。

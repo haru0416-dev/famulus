@@ -1,7 +1,7 @@
 /**
- * `.data/` を落とすほうの検査。**消しすぎないこと**を固定する。
+ * `.data/` を落とすほうの検査。消しすぎないことを固定する。
  *
- * こちらはモデルを呼ばない代わりに、**取り消せない操作**をする。
+ * こちらはモデルを呼ばない代わりに、取り消せない操作をする。
  * 見るのは「残すべきものが残るか」で、消えるほうは1件ずつ数える。
  */
 import assert from "node:assert/strict"
@@ -28,7 +28,7 @@ const age = (path: string, daysAgo: number): void => {
   utimesSync(path, t, t)
 }
 
-/** コンテナを数える手の差し替え。**検査からホストの docker には触らない。** */
+/** コンテナを数える手の差し替え。検査からホストの docker には触らない。 */
 const noOrphans = async (): Promise<{ removed: string[]; kept: string[] }> => ({ removed: [], kept: [] })
 
 const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): Promise<void> => {
@@ -36,7 +36,7 @@ const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): P
   const runs = process.env.OPEN_ZERO_RUNS
   const cache = process.env.OPEN_ZERO_RUN_CACHE
   process.env.OPEN_ZERO_RUNS = join(dir, "runs")
-  // **既定のままだと本物の `.data/run-cache` を見に行く。** 上限を超えていたら検査が消してしまう。
+  // 既定のままだと本物の `.data/run-cache` を見に行く。上限を超えていたら検査が消してしまう。
   process.env.OPEN_ZERO_RUN_CACHE = join(dir, "cache")
   try {
     await withHarness((h) => Promise.resolve(fn(dir, h)))
@@ -73,7 +73,7 @@ test("しばらく触られていない作業場だけ落ちる", async () => {
 })
 
 /**
- * **続きをやっている作業場を消さない。** 上の階の刻は中を書き換えても動かないので、
+ * 続きをやっている作業場を消さない。上の階の刻は中を書き換えても動かないので、
  * そこだけ見ると「10 日前から放置」に見える。木の中で一番新しい刻で判定する。
  */
 test("下の階だけ書き換えた作業場は残る", async () => {
@@ -102,7 +102,7 @@ test("作業場が1つも無くても落ちない", async () => {
 })
 
 /**
- * 共有キャッシュは**古さで切らない**。使い回すために置いてあるので、
+ * 共有キャッシュは古さで切らない。使い回すために置いてあるので、
  * 触られていないことは消してよい理由にならない。切るのは上限だけ。
  */
 test("共有キャッシュは上限を超えたときだけ落ちる", async () => {
@@ -116,7 +116,7 @@ test("共有キャッシュは上限を超えたときだけ落ちる", async ()
     assert.match(kept, /落とすものは無かった/)
     assert.equal(existsSync(blob), true, "上限内のキャッシュが古さで落ちた")
 
-    // 上限を跨いだときだけ落ちる。**古さでは動かない**ことを、同じ木で続けて見る。
+    // 上限を跨いだときだけ落ちる。古さでは動かないことを、同じ木で続けて見る。
     const line = await h.run(cleanup({ at: AT, days: DAYS, cacheMaxMb: 0, orphans: noOrphans }))
     assert.match(line, /共有キャッシュ/)
     assert.equal(existsSync(blob), false)
@@ -147,7 +147,7 @@ test("ユーザーの時計で早すぎる時刻には回さない", async () =>
 })
 
 /**
- * **時刻では決まらない作業場がある。** 自分のソース(`selfdev`)は何日か触らなくても
+ * 時刻では決まらない作業場がある。自分のソース(`selfdev`)は何日か触らなくても
  * 在り続けなければならない。触っていないことを理由に消すと、直したい日に限って無い。
  */
 test("keep を立てた作業場は古くても残る", async () => {

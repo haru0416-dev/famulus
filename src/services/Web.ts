@@ -1,34 +1,32 @@
 /**
- * 外を読むための1本道。**読むのは公開の web だけで、内側には向けさせない。**
+ * 外を読むための1本道。読むのは公開の web だけで、内側には向けさせない。
  *
- * コネクタ側の egress は allowlist(Governance の EGRESS_ALLOW)で足りる — 宛先が数えられるから。
- * 調査の読み取りは宛先を列挙できないので、逆に**形で拒否する**。止めたいのは外のページではなく、
- * このホストの内側だ: loopback・私設アドレス・link-local・CGNAT(Tailscale の 100.64/10 を含む)。
+ * コネクタ側の egress は allowlist(Governance の EGRESS_ALLOW)で足りる。宛先が数えられるから。
+ * 調査の読み取りは宛先を列挙できないので、形で拒否する。止めるのはこのホストの内側:
+ * loopback・私設アドレス・link-local・CGNAT(Tailscale の 100.64/10 を含む)。
  * ufw は受信だけを見ていて送信は素通しなので、ここを塞がないとモデルの書いた URL 一本で
  * `http://127.0.0.1:8080` も `http://100.72.193.4` も読める。
  *
  * 名前解決してから判定するが、実際に繋ぐときに再解決される(DNS rebinding は塞げていない)。
- * 公開ホストに見せかけて内側へ向ける攻撃までは防げない、という限界は残す。
+ * 公開ホストに見せかけて内側へ向ける攻撃までは防げない。
  */
 import { lookup } from "node:dns/promises"
 import { isIP } from "node:net"
 
 /**
- * 1回の取得で読む上限。
- *
- * **頭だけで足りるという前提は、JS で組み立てるページでは崩れる。** 頭にあるのは JS の塊で、
- * 人が読む文字はその後ろに置かれている(`<title>` が 68万バイト目にあるページがある)。
- * 低く切ると本文が1字も入らない。代償は転送時間だが、20秒の制限に対して払える。
+ * 1回の取得で読む上限。JS で組み立てるページは頭が JS の塊で、人が読む文字はその後ろにある
+ * (`<title>` が 68万バイト目にあるページがある)。低く切ると本文が1字も入らない。
+ * 代償は転送時間だが、20秒の制限に対して払える。
  */
 const MAX_BYTES = 1_500_000
 /** モデルに渡す上限。ここを超える資料は、そもそも1回で読む単位ではない。 */
 const MAX_CHARS = 12_000
 const TIMEOUT_MS = 20_000
 const MAX_HOPS = 3
-/** 名乗り。**素性と用途が分かる形で出す** — 相手が弾きたくなったときに弾ける名前にしておく。 */
+/** 名乗り。素性と用途が分かる形で出す — 相手が弾きたくなったときに弾ける名前にしておく。 */
 const UA = "open-zero/0.1 (personal research agent)"
 
-/** 内側を指すアドレスか。**判定は数値でやる** — 文字列の前方一致では 10.0.0.1 と 100.1.1.1 を取り違える。 */
+/** 内側を指すアドレスか。数値で見る — 文字列の前方一致では 10.0.0.1 と 100.1.1.1 を取り違える。 */
 export function isPrivateAddress(ip: string): boolean {
   const v = isIP(ip)
   if (v === 4) {
@@ -96,12 +94,12 @@ export async function denyReason(raw: string): Promise<string | undefined> {
 
 /**
  * `class`/`id` が本文らしい塊。Readability の `okMaybeItsACandidate` から採った。
- * **サイト固有の語(`hotentry` など)は入れない** — 一般語だけで同じだけ手前に来る。
+ * サイト固有の語(`hotentry` など)は入れない — 一般語だけで同じだけ手前に来る。
  */
 const LOOKS_LIKE_BODY = /\b(?:content|article|main|body|entry|post|story)\b/i
 
 /**
- * 開始タグの直後から、対応する終了タグまでを返す。**正規表現では入れ子を追えない**ので深さを数える。
+ * 開始タグの直後から、対応する終了タグまでを返す。正規表現では入れ子を追えないので深さを数える。
  * `div`/`section`/`ul`/`ol` は自己終了しないので、開きと閉じを数えれば足りる。
  */
 function blockAfter(html: string, from: number, tag: string): string {
@@ -128,12 +126,11 @@ function blockAfter(html: string, from: number, tag: string): string {
 }
 
 /**
- * 本文の周りを落とす。**巡回すると読むのはページの一部で、残りは毎回同じ飾り**。
- * 削らないと `MAX_CHARS` の窓をナビゲーションが食う。
+ * 本文の周りを落とす。削らないと `MAX_CHARS` の窓をナビゲーションが食う。
  * 塊を選ぶ順は `<main>`/`<article>` → `class`/`id` → ページごと。
  */
 function trimChrome(html: string): string {
-  // **最初の `<main>`/`<article>` を採ると外す。** GitHub や Qiita は先頭の article が
+  // 最初の `<main>`/`<article>` を採ると外す。GitHub や Qiita は先頭の article が
   // 読み込みエラーの差し込みで、本文はその後ろにある。長いほうを採る。
   let best = ""
   for (const m of html.matchAll(/<(?:main|article)\b[^>]*>([\s\S]*?)<\/(?:main|article)>/gi)) {
@@ -141,7 +138,7 @@ function trimChrome(html: string): string {
   }
   // 本文らしさの目安。全体の 15% にも満たない塊は「本文」ではなく部品。
   if (best.length < html.length * 0.15) {
-    // **`<main>`/`<article>` が無いページのほうが多い**(はてブ・価格.com は1つも持たない)。
+    // `<main>`/`<article>` が無いページのほうが多い(はてブ・価格.com は1つも持たない)。
     // ページごと使うと窓の頭が絞り込みメニューで尽きるので、Readability が本文を選ぶときの
     // class/id の入口だけ借りる。
     let byName = ""
@@ -154,7 +151,7 @@ function trimChrome(html: string): string {
   }
   const body = best.length >= html.length * 0.15 ? best : html
   // 常に落とす飾り。`object|embed|button|select|textarea` は Readability の常時削除リストから。
-  // **`figure` は入れない** — 論文のページで `Figure 1` ごと本文が消える。
+  // `figure` は入れない — 論文のページで `Figure 1` ごと本文が消える。
   return body
     .replace(
       /<(nav|header|footer|aside|form|svg|noscript|template|iframe|object|embed|button|select|textarea)\b[\s\S]*?<\/\1>/gi,
@@ -206,11 +203,8 @@ const NAMED: Readonly<Record<string, string>> = {
 
 /**
  * 実体参照を戻す。タグを剥がすより先にやると `&lt;script&gt;` が復活するので、必ず後。
- *
- * **数値の実体を戻さないと本文に `&#x27;` が生で残る。**
- * 読み手はそれを文字として読むので、引用すると壊れた綴りのまま DB に載る。
- *
- * `&amp;` は最後。先に戻すと `&amp;lt;` が `<` まで戻ってしまう。
+ * 数値の実体を戻さないと本文に `&#x27;` が生で残り、引用すると壊れた綴りのまま DB に載る。
+ * `&amp;` は最後。先に戻すと `&amp;lt;` が `<` まで戻る。
  */
 const decodeEntities = (s: string): string =>
   s
@@ -239,10 +233,8 @@ function pick(xml: string, tag: string): string | undefined {
 }
 
 /**
- * RSS / Atom は**1件ずつに割って返す**。
- *
- * 素通しでタグを剥がすと見出し・日付・本文が1本の帯になり、どの日付がどの記事のものか消える。
- * 巡回で最初に要るのが新着の並びなので、ここだけは構造を残す。
+ * RSS / Atom は1件ずつに割って返す。素通しでタグを剥がすと見出し・日付・本文が1本に繋がり、
+ * どの日付がどの記事のものか消える。
  * 判定に使うのは形だけ — `<item>` か `<entry>` があれば feed 扱いにする。無ければ `undefined`。
  */
 export function renderFeed(xml: string): string | undefined {
@@ -262,7 +254,7 @@ export function renderFeed(xml: string): string | undefined {
     // Atom の link は href 属性。RSS は要素の中身。
     const link = pick(body, "link") ?? /<link\b[^>]*href=["']([^"']+)/i.exec(body)?.[1]
     const desc = pick(body, "description") ?? pick(body, "summary")
-    // **書き手を落とさない。** 拾わないと、読み手は書き手が無いものと見て記事ページを余計に開く。
+    // 書き手を拾わないと、読み手は書き手が無いものと見て記事ページを余計に開く。
     // RSS は `<dc:creator>`、Atom は `<author><name>`。pick はタグを剥がすので同じ形で拾える。
     const by = pick(body, "dc:creator") ?? pick(body, "author") ?? pick(body, "creator")
     lines.push("")
@@ -276,21 +268,21 @@ export function renderFeed(xml: string): string | undefined {
 }
 
 /**
- * HTML を読める文にする。整形ではなく**減量**が目的。
+ * HTML を読める文にする。整形ではなく量を減らすのが目的。
  *
- * 減量をここで止めているのは、ここから先が**情報を消す側に倒れる**から:
+ * ここで止めているのは、これ以上削ると中身を消すから:
  * 重複 DOM の繰り返しを落とすには窓付きの除去が要り、正当に並ぶ表の行まで巻き込む。
- * 短い行の連続はナビの残骸ではなく、リンク集や分類一覧という**そのページの中身**であることが多い。
+ * 短い行の連続はナビの残骸ではなく、リンク集や分類一覧というページの中身であることが多い。
  * どちらも枠を食うだけで、間違った中身を渡す欠陥ではない。
  * JS で後から入る値(`読込中...` のまま届く値段など)は、この道からは取れない。
  */
 export function toText(raw: string, contentType: string): string {
   if (!/html|xml/i.test(contentType)) return raw
-  // **改行と空白の種類を先に揃える。** CRLF のページは行末に `\r` が残り、それだけの行が
+  // 改行と空白の種類を先に揃える。CRLF のページは行末に `\r` が残り、それだけの行が
   // 「空白だけの行」の畳み込みに当たらない。全角空白・NBSP・ゼロ幅も同じ理由で潰す
   // — 日本語のページでは整形にこれらが使われる。
   const html = raw.replace(/\r\n?/g, "\n").replace(/[ 　​﻿]/g, " ")
-  // feed かどうかは**根の要素で決める**。`xml` を含む種別なら何でも、にすると
+  // feed かどうかは根の要素で決める。`xml` を含む種別なら何でも、にすると
   // XHTML のページに `<item>` が1つあるだけで新着一覧として組み直してしまう。
   if (/rss|atom/i.test(contentType) || /<(rss|feed)\b/i.test(html.slice(0, 1_000))) {
     const feed = renderFeed(html)
@@ -298,15 +290,15 @@ export function toText(raw: string, contentType: string): string {
   }
   const body = decodeEntities(
     trimChrome(html)
-      // **閉じが無ければ末尾まで落とす。** `MAX_BYTES` で切ると最後の `<script>` が閉じないまま終わり、
+      // 閉じが無ければ末尾まで落とす。`MAX_BYTES` で切ると最後の `<script>` が閉じないまま終わり、
       // その中身が丸ごと本文になる(返る 12,000字が全部 JS になり、読み手はページの中身として読む)。
-      // **上限を上げても、それを超えるページでは同じことが起きる。**
+      // 上限を上げても、それを超えるページでは同じことが起きる。
       .replace(/<script[\s\S]*?(?:<\/script>|$)/gi, " ")
       .replace(/<style[\s\S]*?(?:<\/style>|$)/gi, " ")
       .replace(/<!--[\s\S]*?(?:-->|$)/g, " ")
       .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
       .replace(/<br\s*\/?>/gi, "\n")
-      // **属性値の中の `>` をタグの終わりと取り違えない。** Wikipedia の infobox のように
+      // 属性値の中の `>` をタグの終わりと取り違えない。Wikipedia の infobox のように
       // 属性に生の JSON を持つページでは、`<[^>]+>` が属性の途中で閉じたと見なして
       // その JSON が本文に混ざる。読み手はそれを記事本文として読む。
       // 引用符で囲まれた塊を1つの単位として飛ばす。分岐は先頭文字で決まるので後戻りしない。
@@ -315,19 +307,18 @@ export function toText(raw: string, contentType: string): string {
       .replace(/<[^>]+>/g, " "),
   )
     .replace(/[ \t]+/g, " ")
-    // **行頭・行末の空白を先に落とす。** これが無いと、タグを剥がした跡が空白1つだけの行として残り、
+    // 行頭・行末の空白を先に落とす。これが無いと、タグを剥がした跡が空白1つだけの行として残り、
     // `\n{3,}` の畳み込みに当たらない。`MAX_CHARS` の枠がその空白で埋まる。
     .replace(/[ \t]*\n[ \t]*/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-  // **本文だけを切り出すと、どのページを読んでいるのかが消える。** `trimChrome` が塊を選ぶと
-  // ページの題は本文の外なので落ちる。読み手は複数のページを並べて読むので、
-  // 見出しが無いとどれの話か取り違える。頭に戻す。
+  // `trimChrome` が塊を選ぶとページの題は本文の外なので落ちる。読み手は複数のページを並べて
+  // 読むので、見出しが無いとどれの話か取り違える。頭に戻す。
   const title = pick(html, "title")
   const headed = title && !body.slice(0, 200).includes(title) ? `${title}\n\n${body}` : body
-  // **本文が組み上がらないページでも、`<meta>` には題と説明が入っている**(YouTube・ニコニコ・
+  // 本文が組み上がらないページでも `<meta>` には題と説明が入っている(YouTube・ニコニコ・
   // note・Bluesky は `<title>` すら JS が後から入れるので、ここが無いと返る文字が 0 になる)。
-  // **本文が取れているページでは触らない** — 拾った説明は本文の要約で、並べると同じ話が二重になる。
+  // 本文が取れているページでは触らない — 拾った説明は本文の要約で、並べると同じ話が二重になる。
   return headed.length >= 300 ? headed : [metaSummary(html), headed].filter(Boolean).join("\n\n").trim()
 }
 
@@ -358,9 +349,7 @@ function metaSummary(html: string): string {
   return out.join("\n\n")
 }
 
-/**
- * 読める形式か。**PDF や画像を文字として渡さない** — 中身は何も伝わらないのに文脈だけ焼ける。
- */
+/** 読める形式か。PDF や画像を文字として渡さない — 中身は何も伝わらないのに文脈だけ食う。 */
 export function isReadableType(contentType: string): boolean {
   const t = contentType.toLowerCase().split(";")[0]?.trim() ?? ""
   if (t.startsWith("text/")) return true
@@ -368,10 +357,10 @@ export function isReadableType(contentType: string): boolean {
 }
 
 /**
- * バイト列を文字にする。**日本語のページは utf-8 とは限らない**(Shift_JIS のページを utf-8 で読むと
+ * バイト列を文字にする。日本語のページは utf-8 とは限らない(Shift_JIS のページを utf-8 で読むと
  * 本文の大半が置換文字になる)。優先順は Content-Type の charset → HTML の meta 宣言 → utf-8。
  *
- * **末尾が文字の途中で切れていたら、その分は捨てる。** 上限の打ち切りはバイト数で入れるので、
+ * 末尾が文字の途中で切れていたら、その分は捨てる。上限の打ち切りはバイト数で入れるので、
  * 日本語のページでは 3 バイト文字の途中で終わることがある。`stream: true` で復号すると、
  * 復号コンテナは不完全な列を出力せずに持ち越すので、そのまま捨てられる。
  */
@@ -406,26 +395,26 @@ export interface FetchedPage {
 }
 
 /**
- * ホスト名の一致。**`endsWith` だけで書くと `evilqiita.com` が `qiita.com` に当たる。**
+ * ホスト名の一致。`endsWith` だけで書くと `evilqiita.com` が `qiita.com` に当たる。
  * 前は3通りの書き方(完全一致・`endsWith`・`/(^|\.)x$/`)が混ざっていたので、ここに寄せた。
  */
 const isHost = (u: URL, domain: string): boolean => u.hostname === domain || u.hostname.endsWith(`.${domain}`)
 
 /**
- * **取りに行かずに断る先。** robots が明文で断っていて、なおかつ取っても本文が無い先だけ。
- * 「取れないから」だけなら普通の `detour`(取ってから言う)で足りる —
- * ここに入れるのは、**確かめに行くこと自体をしない**という判断が要る先。
+ * 取りに行かずに断る先。robots が明文で断っていて、なおかつ取っても本文が無い先だけ。
+ * 「取れないから」だけなら普通の `detour`(取ってから言う)で足りる。
+ * ここに入れるのは、確かめに行くこと自体をしないと決めた先。
  */
 export function refusedBeforeFetch(u: URL): boolean {
   return isHost(u, "x.com") || isHost(u, "twitter.com")
 }
 
 /**
- * 取れなかったときの回り道。**詰まると分かっている先だけ**を書く(一般化した規則ではない)。
+ * 取れなかったときの回り道。詰まると分かっている先だけを書く(一般化した規則ではない)。
  * 当たらなければ `undefined` — 呼ぶ側は普通に取りに行く。
  *
- * **回り道は書いた時点で正しくても古くなる。**「本文が JS で差し込まれる」に見えるものが、
- * こちらの読み取りの不具合であることがある。足すときは行き先だけでなく**元のページも**測り直す。
+ * 書いた時点で正しくても古くなる。「本文が JS で差し込まれる」に見えるものが、
+ * こちらの読み取りの不具合であることがある。足すときは行き先だけでなく元のページも測り直す。
  */
 export function detour(url: string): string | undefined {
   const u = new URL(url)
@@ -434,7 +423,7 @@ export function detour(url: string): string | undefined {
   if (isHost(u, "github.com")) return githubDetour(u, seg)
 
   if (isHost(u, "zenn.dev")) {
-    // **記事のページ(zenn.dev/x/articles/y)は素で読める**ので触らない。詰まるのは一覧のほう。
+    // 記事のページ(zenn.dev/x/articles/y)は素で読めるので触らない。詰まるのは一覧のほう。
     if (seg[0] === "topics" && seg[1] && seg.length === 2)
       return `一覧は JS で組み立てるので HTML には無い。https://zenn.dev/topics/${seg[1]}/feed を開く`
     if (seg[0] && seg.length === 1)
@@ -456,12 +445,12 @@ export function detour(url: string): string | undefined {
     return `npmjs.com は 403 で弾かれる。https://registry.npmjs.org/${pkg ?? "<パッケージ名>"}/latest を開く`
   }
   if (isHost(u, "x.com") || isHost(u, "twitter.com")) {
-    // **取りに行く前に断る**(`refusedBeforeFetch`)。理由は2つ。直に引いても JS の殻しか返らず、
+    // 取りに行く前に断る(`refusedBeforeFetch`)。理由は2つ。直に引いても JS の殻しか返らず、
     // かつ `x.com/robots.txt` が `Disallow: /` で本文の取れる API も全部断られている。
     // 投稿の中身は `search` の `x` から読む(索引の要約で、X を叩いていない)。
     const who = /^\/([A-Za-z0-9_]{1,15})\/status\/\d+/.exec(u.pathname)?.[1]
-    // **「取れない」で終わらせない。** そう書くと読み手はそこで諦めて、
-    // search に出ている投稿本文を使わずに終える。行き先まで言う。
+    // 「取れない」で終わらせると読み手はそこで諦めて、search に出ている投稿本文を
+    // 使わずに終える。行き先まで言う。
     return (
       "robots で断られていて、開いても JS の殻しか返らない。**ただし投稿の本文は search で読める** — " +
       `\`where: ["x"]\` で引くと、要約に投稿の文字そのものが入る` +
@@ -511,7 +500,7 @@ function githubDetour(u: URL, seg: readonly string[]): string | undefined {
   const [owner, repo, kind, ref] = seg
   if (seg[0] === "search") {
     // 検索結果は HTML に1件も入っていない。リポジトリ検索の API は鍵無しで通るが、
-    // **コード検索の API は 401**(認証が要る)。
+    // コード検索の API は 401(認証が要る)。
     const q = u.searchParams.get("q") ?? ""
     return u.searchParams.get("type") === "code"
       ? "コード検索の結果は JS で差し込み、API は鍵が要る(401)。このページからは取れないので別の探し方にする"
@@ -538,10 +527,10 @@ function githubDetour(u: URL, seg: readonly string[]): string | undefined {
 }
 
 /**
- * 同じホストを続けて叩かない。**巡回するなら間隔を空ける**、が礼儀の最低限。
- * プロセス内だけの記憶なので、再起動でリセットされる(それで困る規模では回さない)。
+ * 同じホストを続けて叩かない。プロセス内にしか残らないので、再起動でリセットされる
+ * (それで困る規模では回さない)。
  *
- * 環境変数で縮められるのは**検査のため**。相手を差し替えた検査(fetch を stub したもの)は
+ * 環境変数で縮められるのは検査のため。相手を差し替えた検査(fetch を stub したもの)は
  * 誰にも迷惑を掛けないのに、同じホストを4回叩く1件で 4 秒待つ。外へ出る既定は動かさない。
  */
 const hostIntervalMs = (): number => Number(process.env.OPEN_ZERO_HOST_INTERVAL_MS ?? 1_000)
@@ -555,12 +544,12 @@ async function pace(host: string): Promise<void> {
 }
 
 /**
- * 一度開いたページを、**全文のまま**覚えておく。速さのためではなく、同じものを取りに行かないため。
+ * 一度開いたページを全文のまま覚えておく。速さのためではなく、同じものを取りに行かないため。
  * `MAX_CHARS` に収まらない資料は続きを読むたびに頭から取り直すことになる。
  * 全文を持てば、続きを読むのは切り出すだけで済む。
  *
- * 同じ `offset` をもう一度求められたときだけ「さっき開いた」と書いて返す。**続き読みは咎めない** —
- * 咎める相手は同じところを回っている呼び出しであって、順に読み進めている呼び出しではない。
+ * 同じ `offset` をもう一度求められたときだけ「さっき開いた」と書いて返す。続き読みには付けない —
+ * 付ける相手は同じところを回っている呼び出しで、順に読み進めている呼び出しではない。
  */
 const MEMO_TTL_MS = 5 * 60_000
 const MEMO_MAX = 40
@@ -608,7 +597,7 @@ function repeatAgoSec(key: string, nowMs: number): number | undefined {
   return Math.round((nowMs - prev) / 1000)
 }
 
-/** 上限に達したら**そこで受信を止める**。arrayBuffer() だと数十MBの PDF を丸ごとメモリに載せる。 */
+/** 上限に達したらそこで受信を止める。arrayBuffer() だと数十MBの PDF を丸ごとメモリに載せる。 */
 async function readCapped(res: Response): Promise<{ buf: Uint8Array; cut: boolean }> {
   const reader = res.body?.getReader()
   if (!reader) return { buf: new Uint8Array(0), cut: false }
@@ -626,7 +615,7 @@ async function readCapped(res: Response): Promise<{ buf: Uint8Array; cut: boolea
       break
     }
   }
-  // 最後の塊は上限をまたぐので、`size` は上限を少し超える。**繋いでから切り直すと 1.5MB を二度取る**
+  // 最後の塊は上限をまたぐので、`size` は上限を少し超える。繋いでから切り直すと 1.5MB を二度取る
   // ので、配列を上限ちょうどで作り、またいだ分は写す前に落とす。
   const total = Math.min(size, MAX_BYTES)
   const buf = new Uint8Array(total)
@@ -642,17 +631,17 @@ async function readCapped(res: Response): Promise<{ buf: Uint8Array; cut: boolea
 /**
  * 200 で返ってきたのに中身が薄いページへの断り書き。読めているページには付けない(`undefined` を返す)。
  *
- * **黙って空を返すと、読み手は「そう書いてある」と受け取る。** 404 ではなく JS で組み立てるページ、
- * というのがたいていの正体。
+ * 黙って空を返すと、読み手は「そう書いてある」と受け取る。正体はたいてい 404 ではなく
+ * JS で組み立てるページ。
  *
  * 判定を三段に分けてある:
  *
- * - **HTML の大きさだけで測ると、小さいページの空振りを見逃す**(JS の転送ページは HTML ごと小さい)。
- *   **返した字数そのもの**でも引っかける。
- * - **疑う相手は script のある HTML だけ。** JSON の API は 200 バイトで正しく答えるし、
+ * - HTML の大きさだけで測ると、小さいページの空振りを見逃す(JS の転送ページは HTML ごと小さい)。
+ *   返した字数そのものでも引っかける。
+ * - 疑う相手は script のある HTML だけ。JSON の API は 200 バイトで正しく答えるし、
  *   素の HTML が短いのは単に短いページで、疑う理由が無い。
- * - **無いのと少ないのを言い分ける。** 一段で判定すると、本文が取れているページにまで
- *   「別の出典を当たれ」が付く。**読めたページに諦めろと言うのは、読めないページを黙って返すのと同じくらい悪い。**
+ * - 無いのと少ないのを言い分ける。一段で判定すると、本文が取れているページにまで
+ *   「別の出典を当たれ」が付く。読めたページに諦めろと言う害は、読めないページを黙って返すのと変わらない。
  */
 function thinNote(p: {
   url: string
@@ -670,7 +659,7 @@ function thinNote(p: {
   const kb = Math.round(p.bytes / 1024)
   const d = detour(p.url)
   if (slim) {
-    // **回り道があるときは、回り道に言わせる。** 後半を固定文にすると
+    // 回り道があるときは、回り道に言わせる。後半を固定文にすると
     // 「残りは JS で後から入る部分 — README は入っている」のように、自分で自分を打ち消した。
     return (
       `読めたのは ${chars}字(HTML ${kb}KB)。**これで足りているならそれでいい。** ` +
@@ -678,7 +667,7 @@ function thinNote(p: {
         "載っているはずのものが見当たらないなら、残りは JS で後から入る部分 — 別の出典を当たったほうが早い")
     )
   }
-  // **切ったのか、そもそも入っていないのかも言い分ける。** 上限で切ったページの空振りは
+  // 切ったのか、そもそも入っていないのかも言い分ける。上限で切ったページの空振りは
   // 「JS で組み立てる」ではなく「読んだ範囲に本文が無かった」。診断を間違えると、
   // 読み手は取れるはずのものを諦める。
   const why =
@@ -692,7 +681,7 @@ function thinNote(p: {
 /**
  * 全文から語を探して、当たりの前後だけを返す。
  *
- * **窓を進めるだけでは大きなページに手が届かない。** 40万字の JSON を `MAX_CHARS` 刻みで読むと
+ * 窓を進めるだけでは大きなページに手が届かない。40万字の JSON を `MAX_CHARS` 刻みで読むと
  * 十数ターン掛かり、1ターンごとにモデル呼び出しが要る。語で当てて前後だけ返す道を別に置く。
  */
 const FIND_MAX = 6
@@ -718,7 +707,7 @@ export function findIn(full: string, needle: string): { text: string; count: num
   return { text: [head, ...parts].join("\n\n").slice(0, MAX_CHARS), count: at.length }
 }
 
-/** 覚えた全文から、求められた範囲を切り出す。**ここでは外に出ない。** */
+/** 覚えた全文から、求められた範囲を切り出す。ここでは外に出ない。 */
 function slice(doc: CachedDoc, offset: number, agoSec: number | undefined): FetchedPage {
   const text = doc.full.slice(offset, offset + MAX_CHARS)
   const more = doc.full.length > offset + MAX_CHARS
@@ -726,7 +715,7 @@ function slice(doc: CachedDoc, offset: number, agoSec: number | undefined): Fetc
   if (doc.note) notes.push(doc.note)
   if (offset > 0 && text.length === 0)
     notes.push(`このページは全 ${doc.full.length}字で、${offset}字目より先は無い。続きを探すなら別の出典へ。`)
-  // **大きいページは窓で少しずつ読ませない。** ここで回数を数字で見せておくと、offset を刻む前に find へ行ける。
+  // 大きいページを窓で少しずつ読ませない。回数を数字で見せておくと、offset を刻む前に find へ行ける。
   if (more && doc.full.length > MAX_CHARS * 3)
     notes.push(
       `このページは全 ${doc.full.length}字。窓(${MAX_CHARS}字)で頭から読むと ${Math.ceil(doc.full.length / MAX_CHARS)} 回かかる。` +
@@ -746,7 +735,7 @@ function slice(doc: CachedDoc, offset: number, agoSec: number | undefined): Fetc
   }
 }
 
-/** 覚えた全文の中を探す。**外には出ない**(ページは既に手元にある)。 */
+/** 覚えた全文の中を探す。外には出ない(ページは既に手元にある)。 */
 function search(doc: CachedDoc, needle: string): FetchedPage {
   const hit = findIn(doc.full, needle)
   const notes = [doc.note].filter((s): s is string => Boolean(s))
@@ -773,7 +762,7 @@ export interface FetchOptions {
 }
 
 /**
- * 1ページ読む。**同じ URL は取り直さない**(memo の項を参照)。
+ * 1ページ読む。同じ URL は取り直さない(memo の項を参照)。
  * 続きを読むのも中を探すのも、覚えた全文の上でやる — 2回目以降は外に出ない。
  */
 export async function fetchPage(raw: string, opts: FetchOptions = {}): Promise<FetchedPage> {
@@ -787,11 +776,11 @@ export async function fetchPage(raw: string, opts: FetchOptions = {}): Promise<F
 }
 
 /**
- * 実際に取りに行く。**転送は自分で追う** — follow に任せると、公開ホストから内側への転送を検査できない。
+ * 実際に取りに行く。転送は自分で追う — follow に任せると、公開ホストから内側への転送を検査できない。
  * 切らずに全文を返す。どこを読むかを決めるのは呼び出し側(`slice`)。
  */
 async function fetchFresh(raw: string): Promise<CachedDoc> {
-  // **断られていると分かっている先へは、確かめに行かない。** `detour` は普通は取ってから
+  // 断られていると分かっている先へは、確かめに行かない。`detour` は普通は取ってから
   // (4xx・読めない形式・本文が薄い)出すが、ここだけは出る前に出す。
   if (refusedBeforeFetch(new URL(raw)))
     return { url: raw, status: 0, full: "", cut: false, note: detour(raw) ?? "" }
@@ -863,31 +852,31 @@ async function fetchFresh(raw: string): Promise<CachedDoc> {
 }
 
 /**
- * 本文を組み立てずに、**返ってきたバイト列をそのまま**返す。検索(Search.ts)が使う。
+ * 本文を組み立てずに、返ってきたバイト列をそのまま返す。検索(Search.ts)が使う。
  *
  * `fetchPage` と分けたのは、あちらが「人に読ませる1ページ」を作る道具だから — `toText` が
  * タグを剥がし、`slice` が 12,000字で切る。JSON を欄ごとに読む側にはどちらも邪魔になる。
- * 間隔(`pace`)・上限(`readCapped`)・転送の検査は同じものを通す。**内側への転送を
- * 素通りさせないため、`redirect: "follow"` にはしない**(宛先が定数でも、転送先は相手が決める)。
+ * 間隔(`pace`)・上限(`readCapped`)・転送の検査は同じものを通す。内側への転送を
+ * 素通りさせないため、`redirect: "follow"` にはしない(宛先が定数でも、転送先は相手が決める)。
  *
- * `timeoutMs` の既定は 1ページぶんの 20 秒。**同時に何本も出す側は短くする** —
+ * `timeoutMs` の既定は 1ページぶんの 20 秒。同時に何本も出す側は短くする —
  * 揃うのを待つ形では、返らない1本が全体を制限いっぱいまで引き延ばす。
  *
- * **断られたときの本文も返す**(`fetchPage` は捨てる)。API は理由を本文に書く —
+ * 断られたときの本文も返す(`fetchPage` は捨てる)。API は理由を本文に書く —
  * Qiita の 403 は `{"message":"Rate limit exceeded"}` で、これが読めないと
  * 「一時的に上限」と「弾かれた」の区別が付かない。
  */
 export interface RawOptions {
   readonly accept: string
   readonly timeoutMs?: number
-  /** 鍵などの追加見出し。**呼ぶ側が組み立てる** — ここには先ごとの事情を持ち込まない。 */
+  /** 鍵などの追加見出し。呼ぶ側が組み立てる — ここには先ごとの事情を持ち込まない。 */
   readonly headers?: Readonly<Record<string, string>>
   /**
    * この origin ちょうど1つだけ、内側判定と間隔の制限を免除する。
-   * **自分で立てたサーバを呼ぶためだけの穴**(現状は SearXNG の `http://127.0.0.1:8888`)。
+   * 自分で立てたサーバを呼ぶためだけの穴(現状は SearXNG の `http://127.0.0.1:8888`)。
    *
    * 冒頭の防御はそのまま残す。モデルが書いた URL は `fetchPage` を通り、こちらには来ない
-   * — 免除できるのは `Search.ts` の中に**先として書いてある** origin だけで、
+   * — 免除できるのは `Search.ts` の中に先として書いてある origin だけで、
    * 問い合わせ文から組み立てられる余地は無い。前方一致ではなく origin の完全一致で見る
    * (`http://127.0.0.1:8888` の免除が `http://127.0.0.1:8888.example.com` に伸びない)。
    * 転送された先には掛からない — 次の周では `url` の origin が変わるので、また弾かれる。

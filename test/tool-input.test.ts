@@ -1,5 +1,5 @@
 /**
- * 道具の入力が**実行の手前で検証されるか**を、loop を1回転させて見る。
+ * 道具の入力が実行の手前で検証されるかを、loop を1回転させて見る。
  *
  * `vs()` に `validate` が無かった間、モデルが返した引数は何の検査も受けずに `execute` へ入っていた。
  * 実測(2026-08-13): `{"hours":"24","extra":"余計な鍵"}` を返させると、`hours` は文字列のまま、
@@ -85,7 +85,7 @@ test("必須が欠けていても道具を走らせない", async () => {
   assert.equal(got, undefined, "execute が呼ばれている")
 })
 
-/** **落ちても turn は止まらない。** 指摘が次の呼び出しに載るので、同じ turn の中で呼び直せる。 */
+/** 落ちても turn は止まらない。指摘が次の呼び出しに載るので、同じ turn の中で呼び直せる。 */
 test("落ちた呼び出しは tool-error として積まれ、turn は続く", async () => {
   const { res } = await run(JSON.stringify({ hours: "24", reason: "眠い" }))
   assert.equal(res.text, "終わり")

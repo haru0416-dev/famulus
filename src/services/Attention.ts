@@ -1,15 +1,11 @@
 /**
- * 注意。**自走するために、自分が今なにを気にしているかを DB 側に持つ**。
+ * 起きたときに何を見るかを DB 側に持つ。`watchlist`(未決の追跡対象)と
+ * `questions`(未検証の仮説)の2枚。
  *
- * 対話だけなら次に何をするかはユーザーの発話が決める。自走ではその入力が無い時間のほうが長いので、
- * 「起きたとき何を見るか」を DB に置いておく必要がある。それが `watchlist`(watch している未決事項)と
- * `questions`(未 probe の仮説)の2枚。
+ * `questions` を `belief_slots` と分けてあるのは、確認していないことが事実として溜まらない
+ * ようにするため。自走中は答え合わせをする相手がいない。
  *
- * `questions` は `belief_slots` と分けてある。自走中は答え合わせをしてくれる相手がいないので、
- * **推測を belief に昇格させない置き場**が無いと、確認していないことが事実として溜まる。
- *
- * `digest` はモデルを呼ばない。tick のたびに推論を1回回すのではなく、
- * 「回す価値があるか」をまず SQL だけで判定する(定額枠でも窓は有限)。
+ * `digest` はモデルを呼ばない。起こすかどうかを SQL だけで決める。
  */
 import { randomUUID } from "node:crypto"
 import * as Effect from "effect/Effect"
@@ -18,10 +14,8 @@ import { dayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 /**
- * 次に動くのは誰か。**`famulus` は自分**(SOUL.md の名前)。
- *
- * 3つ目に `counterparty`(第三者)があったが、実データ0件のまま落とした(docs/adr/0033)。
- * 持っている仕事は AI の動向を追うことと外に出す文を書くことの2つで、返事を待つ第三者が出てこない。
+ * 次に動くのは誰か。`famulus` は自分(SOUL.md の名前)。
+ * `counterparty`(第三者)は実データ0件のまま落とした(docs/adr/0033)。
  */
 export type NextMove = "human" | "famulus"
 
@@ -32,16 +26,13 @@ export interface WatchRow {
   readonly last_activity_at: string
   readonly next_move_owner: NextMove
   readonly status: "open" | "closed"
-  /** 最後に**実際に一周回した**時刻。null = 一度も回していない。 */
+  /** 最後に回した時刻。null = 一度も回していない。 */
   readonly last_run_at: string | null
   readonly cooldown_hours: number
   readonly run_count: number
   /** 前回回して分かったこと。次に回すときの起点になる。 */
   readonly last_result: string | null
-  /**
-   * 最後に**プロンプトに載せた**時刻。null = 一度も載せていない。
-   * 回した時刻(`last_run_at`)とは別。載せたが回さなかった回も、ここだけが進む。
-   */
+  /** 最後にプロンプトに載せた時刻。載せたが回さなかった回はここだけ進む。 */
   readonly last_shown_at: string | null
 }
 
@@ -69,15 +60,13 @@ export interface PendingProposal {
   readonly created_at: string
   readonly expires_at: string
   readonly daysLeft: number
-  /** tick が前に置いた結論。**あるものは起こす理由に数えない**(承認はユーザーしか出せない)。 */
+  /** tick が前に置いた結論。あるものは起こす理由に数えない(承認はユーザーしか出せない)。 */
   readonly settled_note: string | null
 }
 
 /**
- * 断られた提案と、その理由。**同じ形をもう一度出さないために渡す。**
- *
- * watch に前回の結果を渡すのと同じ理由(docs/adr/0013)。渡さないと、毎回まっさらな状態で
- * 同じ相手に同じ用件を出し直す。実際、同じ用件が3回出されて3回とも断られている。
+ * 断られた提案と理由。同じ用件をもう一度出さないためにプロンプトへ渡す(docs/adr/0013)。
+ * 渡していなかったときは、同じ用件が3回出されて3回とも断られた。
  */
 export interface RefusedProposal {
   readonly id: string
@@ -90,20 +79,17 @@ export interface ObservedEvent {
   readonly rowid: number
   readonly at: string
   readonly source: string
-  /** 1 なら不信データ由来(gmail/web)。tick は**これを見て境界マーカーで囲う**。 */
+  /** 1 なら不信データ由来(gmail/web)。tick はこれを見て境界マーカーで囲う。 */
   readonly taint: number
   readonly content: string
 }
 
-/**
- * tick1回ぶんの視野。`idle` なら**モデルを呼ばない**。
- * `reasons` は「なぜ起こしたか」— 起きた理由を自分で説明できない tick は作らない。
- */
+/** tick 1回ぶんの入力。`idle` ならモデルを呼ばない。`reasons` は起こした理由。 */
 export interface Digest {
   readonly at: string
   readonly cursor: number
   readonly newEvents: readonly ObservedEvent[]
-  /** **この回に載せるぶんだけ**(最大 `STALLED_SHOW_MAX` 件)。冷却明けの全部ではない。 */
+  /** この回に載せるぶんだけ(最大 `STALLED_SHOW_MAX` 件)。冷却明けの全部ではない。 */
   readonly stalled: readonly WatchView[]
   /** 冷却は明けているが、この回は載せなかった件数。プロンプトに数だけ出す。 */
   readonly stalledHeld: number
@@ -117,7 +103,7 @@ export interface Digest {
   readonly reasonKey: string
   /** この tick で満たすべきだった冷却時間。後退が効いているかを外から見るため。 */
   readonly cooldownHours: number
-  /** 今日ぶんの下書きがまだ出ていない。**冷却を無視して起きる**(1日1回しか立たない)。 */
+  /** 今日ぶんの下書きがまだ出ていない。冷却を無視して起きる(1日1回しか立たない)。 */
   readonly draftDue: boolean
   readonly idle: boolean
 }
@@ -133,84 +119,64 @@ export interface StaleBelief {
 export const STALLED_DAYS = 3
 
 /**
- * watch を一周回した後、次にプロンプトに載せるまでの既定時間。
+ * watch を回した後、次にプロンプトに載せるまでの既定時間(docs/adr/0013)。
  *
- * **`last_activity_at` では止まらない。** `digest` は `next_move_owner = 'famulus'` の watch を
- * 無条件で滞留に入れるので、回して `touchWatch` しても同じ watch が次の tick でまた上がってくる。
- * 実際にそうなり、モデルは**最終走行時刻を subject の文字列に書き込んで登録し直す**という
- * 回避をしていた(列が無いので文字列で代用するしかない)。
- *
- * 止めるのは経過日数ではなく**回した回数と時刻**でなければならない。回した記録を別の列で持ち、
- * 冷却が明けるまで載せない。OpenClaw の `standing_intents`(`last_fired_at` + `cooldown_seconds` +
- * `fire_count` を見る `canFire`)と同じ形。docs/adr/0013。
+ * `last_activity_at` では止まらない。`digest` は `next_move_owner = 'famulus'` の watch を
+ * 無条件で滞留に入れるので、回して `touchWatch` しても次の tick でまた上がる。列が無かった
+ * ときは、モデルが最終走行時刻を subject の文字列に書き込んで登録し直していた。
+ * 判定は `last_run_at` と `run_count` で行う。
  */
 export const WATCH_COOLDOWN_HOURS = 24
 /**
  * 1回の tick で載せる watch の上限(docs/adr/0028)。
  *
- * 冷却は「その watch をいつまで載せないか」しか決めない。同じ日に登録したものは同じ日に明けるので、
- * **明けたぶんが全部そろって上がる。** 実測(2026-08-13 / `.data/open-zero.db` / 直近40回の実働)では
- * 6件が同時に載る状態が続き、watch で起きた9回のうち7回が道具呼び出し4回以下で終わっていた。
+ * 同じ日に登録した watch は同じ日に冷却が明けるので、明けたぶんが全部そろって上がる。
+ * 実測(2026-08-13 / 直近40回の実働)では6件が同時に載る状態が続き、watch で起きた9回のうち
+ * 7回が道具呼び出し4回以下で終わっていた。載せなかったぶんは `last_shown_at` の古い順で
+ * 次の回に上がる。3 は 420 秒の持ち時間から採った。
  *
- * 上限を置くと、載せた watch は必ず回せる数になる。載せずに残したぶんは `last_shown_at` の
- * 古い順で次の回に上がるので、落ちるのではなく後ろへ回る。3 は 420 秒の持ち時間から採った。
- *
- * **上限そのものの効き目は測れていない。** 6件同時の状態を再現して前後で1回ずつ走らせたが、
- * 上限なしの回も 11 手/305 秒で1件を回しており、記録に残っている短い終わり方は再現しなかった
- * (docs/adr/0028)。ここで固定できているのは順番が回ることだけで、それは検査で押さえてある。
+ * 上限そのものの効き目は測れていない。6件同時の状態を再現して前後1回ずつ走らせたが、
+ * 上限なしの回も 11 手 / 305 秒で1件を回しており、短い終わり方は再現しなかった。
+ * 検査で押さえてあるのは順番が回ることだけ。
  */
 export const STALLED_SHOW_MAX = 3
 /** 承認待ちがこの日数以内に期限切れになるなら、tick でユーザーに思い出させる材料にする。 */
 export const EXPIRING_DAYS = 2
 /** 何も無くてもこの時間が経ったら1回起こす(反応するだけの機械にしないための下限)。 */
 export const IDLE_WAKE_HOURS = 24
-/**
- * tick のプロンプトに載せる「断られたぶん」の数。
- *
- * **起こす理由には数えない。**断られたことは済んだ話で、それで起きても何も進まない。
- * 別件で起きたときに、同じ形をもう一度出さないための材料として置くだけ。
- */
+/** tick のプロンプトに載せる「断られたぶん」の数。起こす理由には数えない。 */
 export const REFUSED_LIMIT = 5
 /**
- * 真だと確かめてからこの日数が経った belief は、棚卸しのとき「まだ合っているか」を疑う材料にする。
+ * 確かめてからこの日数が経った belief は、棚卸しで「まだ合っているか」を疑う材料にする。
  *
- * **陳腐化は検索では絶対に見つからない。** 転職が終わっても「転職活動中」は同じ強さで検索に当たるし、
- * 当たった側は最新の1行に見える。古くなったこと自体は「最後に確かめたのがいつか」を
- * 持っている側からしか引けない。
+ * 古くなったことは検索では出ない。転職が終わっても「転職活動中」は同じ強さで当たり、
+ * 当たった側は最新の1行に見える。判定できるのは `valid_from` を持っている側だけ。
  *
- * ただし**起こす理由には数えない**。理由にすると、答えが返るまで毎回同じ slot で起き続けて
- * 自家中毒になる(watch や問いを理由から外しているのと同じ判断)。
- * 別件で起きたときのプロンプトに載せるだけにして、棚卸しの回で人に聞かせる。
+ * 起こす理由には数えない。理由にすると、答えが返るまで毎回同じ slot で起き続ける。
  */
 export const STALE_BELIEF_DAYS = 90
 
 /**
- * 一度実際に動いたら、この時間は新しい入力が無いかぎり動かない。
+ * 一度動いたら、この時間は新しい入力が無いかぎり動かない。
  *
- * **これが無いと自走は自家中毒を起こす**。「未解決の問いがある」「watch が動いていない」は、
- * 動いても解消しない理由になりうる(ユーザーしか答えられない問い、相手待ちの案件)。
- * 起こす条件をそのまま毎回の tick に効かせると、同じ理由で永久に推論を回し続ける。
- * 外から新しい入力が来たときだけ、この冷却を飛び越える。
+ * 「未解決の問いがある」「watch が動いていない」は、動いても解消しない理由になりうる
+ * (ユーザーしか答えられない問い、相手待ちの案件)。冷却が無いと同じ理由で回り続ける。
+ * 外から新しい入力が来たときだけ飛び越える。
  */
 export const ACTIVE_COOLDOWN_HOURS = 1.5
 
 /**
- * **同じ理由で続けて起きるほど、次に起きるまでを倍にする**。
+ * 同じ理由で続けて起きるほど、次に起きるまでを倍にする。
  *
- * 冷却だけでは足りない。`next_move_owner = famulus` の watch は「自分が動く番」なので
- * 起こす理由になるが、動いても解消しないことがある(相手が要る、道具が無い、ユーザーの判断が要る)。
- * 冷却は間隔を空けるだけなので、そのままだと 1.5 時間ごとに同じ材料で永久に回し続ける。
- * 理由の組み合わせが前回と変わらなければ 1.5h → 3h → 6h → 12h → 24h と引いていき、
- * 最後は「1日1回の棚卸し」に落ち着く。**外から新しい入力が来たら 0 に戻る**。
+ * `ACTIVE_COOLDOWN_HOURS` は間隔を空けるだけなので、動いても解消しない理由だと
+ * 1.5 時間ごとに同じ材料で回り続ける。理由の組み合わせが前回と同じなら
+ * 1.5h → 3h → 6h → 12h → 24h と伸ばす。外から新しい入力が来たら 0 に戻る。
  */
 export const MAX_COOLDOWN_HOURS = 24
 
 /**
- * 1日1本の下書きを出す時刻(ユーザーの時計)。**ここより前には出さない。**
- *
- * 早い時刻に出すと、その日の走行記録がまだ無い状態で書くことになり、材料が前日ぶんだけになる。
- * 夜に寄せてあるのは、読む側が1日の作業を終えた後に受け取るため — 割り込みの回数は同じでも、
- * 集中している最中に切るのと、終わった後に届くのとでは落ちるものが違う。
+ * 1日1本の下書きを出す時刻(ユーザーの時計)。これより前には出さない。
+ * 早い時刻だと、その日の走行記録がまだ無く、材料が前日ぶんだけになる。
  */
 export const dailyDraftHour = (): number => Number(process.env.OPEN_ZERO_DAILY_HOUR ?? 20)
 
@@ -262,10 +228,8 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
 
     /**
      * 動きがあったことを記録する。滞留日数の起点を今に戻す。
-     *
-     * 書き換えたあとの行を返す(以下の書き換えも同じ)。**id だけ返すと、呼んだ側が
-     * 何を触ったのかを言うためにもう一度引く必要が出る** — 前方一致で受けている以上、
-     * その引き直しは同じ行に当たる保証が無い。
+     * 書き換えた後の行を返す(以下の書き換えも同じ)。id だけ返すと呼んだ側が引き直すことになり、
+     * 前方一致で受けている以上それが同じ行に当たる保証が無い。
      */
     const touchWatch = (idOrPrefix: string, nextMoveOwner?: NextMove, at: string = nowIso()) =>
       Effect.gen(function* () {
@@ -281,27 +245,23 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       })
 
     /**
-     * 一周回した記録を付ける。**冷却はここからしか始まらない。**
+     * 回した記録を付ける。冷却はここからしか始まらない。
      *
-     * `touchWatch`(動きがあった)と分けてあるのは、両者が別のことを言っているから。
-     * 相手から返事が来たのは「動き」だが自分は何もしていない。自分が回したのなら、
-     * 何も出てこなくても回した — 空振りこそ、次の tick に「もう見た」と伝える必要がある。
+     * `touchWatch`(動きがあった)と分けてある。相手から返事が来たのは動きだが自分は回していない。
+     * 逆に、何も出てこなかった回も回したことに数える。
      *
-     * `result` を残すのは、**次に回すときの起点にするため**。これが無いと毎回まっさらな状態で
-     * 同じ一覧を読み直すことになり、先週見たものを踏まえた文が一度も出ない。実際にそうなっていた
-     * (AI追跡のwatch3件が全部「HN の新着を全部見る」で、差分を言えたことが無い)。
+     * `result` は次に回すときの起点にする。無かったときは AI追跡の watch 3件が全部
+     * 「HN の新着を全部見る」になり、差分を言えたことが無かった。
      *
-     * `at` は**回した時刻**で、記録した時刻ではない。数時間前に回したものを後から記録するとき、
-     * ここを今にすると冷却がその分だけ後ろへずれる。**ずれるくらいなら呼ばないほうがまし**という
-     * 判断が実際に起き(記録を見送った回がある)、watch はプロンプトに残り続けた。だから過去を渡せる。
-     * **先の時刻は取らない。** 未来を渡せると、一度の記録で好きなだけ冷却を伸ばせてしまう。
+     * `at` は回した時刻で、記録した時刻ではない。後から記録するとき今の時刻を入れると冷却が
+     * その分ずれるので、過去は渡せる。未来は取らない(渡せると冷却を好きなだけ伸ばせる)。
      */
     const ranWatch = (idOrPrefix: string, result: string, ranAt?: string) =>
       Effect.gen(function* () {
         const w = yield* findWatch(idOrPrefix)
         const now = nowIso()
         const at = ranAt === undefined || ranAt > now ? now : ranAt
-        // 動きの時刻は**戻さない**。後から記録するとき、その間に来た返事のほうが新しい。
+        // 動きの時刻は戻さない。後から記録するとき、その間に来た返事のほうが新しい。
         const activity = at > w.last_activity_at ? at : w.last_activity_at
         yield* db.run(
           `UPDATE watchlist
@@ -329,14 +289,11 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       })
 
     /**
-     * プロンプトに載せたことを記録する。**回したことではない。**
+     * プロンプトに載せたことを記録する。回したことではない。`ranWatch` と同じ列にすると、
+     * 回さなかった watch が次の回もまた先頭に来て同じ数件が居座る。
      *
-     * `ranWatch` と分けてあるのは、載せたのに回さなかった回があるから。そこが同じ列だと、
-     * 回さなかった watch は次の回もまた先頭に来て、同じ数件が枠を占め続ける(実際にそうなっていた)。
-     * 載せた時刻だけを進めれば、回さずに終えた watch は後ろへ回り、他のものに順番が来る。
-     *
-     * **呼ぶのは digest ではなく、プロンプトを組み立てる側。** digest は起きる理由が無い回にも
-     * 走るので、そこで記録すると誰も見ていない一覧を「載せた」ことにしてしまう。
+     * 呼ぶのは digest ではなくプロンプトを組み立てる側。digest は起きる理由が無い回にも走るので、
+     * そこで記録すると誰も見ていない一覧を載せたことになる。
      */
     const noteShown = (ids: readonly string[], at: string = nowIso()) =>
       Effect.gen(function* () {
@@ -366,7 +323,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         ),
       )
 
-    // ── 問い(questions)。**推測を belief に昇格させないための置き場**。
+    // ── 問い(questions)。推測を belief に昇格させないための置き場。
 
     const ask = (question: string, at: string = nowIso()) =>
       Effect.gen(function* () {
@@ -411,13 +368,9 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       })
 
     /**
-     * 答えないまま問いを畳む。**答えるのと取り下げるのは別の出口**。
-     *
-     * `answer` しか無いと、問いは正しい答えが出たときにしか消えない。ユーザーの向きが変われば
-     * 前の向きで立てた問いは答える意味を失うが、出口が無いぶん開いたまま残り、
-     * tick が起きるたびプロンプトに載り続ける。`openQuestions` は古い順に上限件数だけ渡すので、
-     * 死んだ問いが上限を埋めると**新しく立てた問いは一度も tick に届かない**。
-     * 理由を残して閉じる — 何を追わないと決めたかは、答えと同じくらい後から要る。
+     * 答えないまま問いを畳む。`answer` しか出口が無いと、答える意味を失った問いも開いたまま残る。
+     * `openQuestions` は古い順に上限件数だけ渡すので、それが上限を埋めると新しい問いが tick に届かない。
+     * 理由を残して閉じる。
      */
     const drop = (idOrPrefix: string, why: string) =>
       Effect.gen(function* () {
@@ -434,7 +387,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
     // ── tick の視野
 
     /**
-     * 何を見て起きるべきかを SQL だけで決める。**モデルは呼ばない**。
+     * 何を見て起きるべきかを SQL だけで決める。モデルは呼ばない。
      * 見た位置(cursor)は進めない — tick が最後まで走り切ってから `commit` で進める
      * (途中で落ちたら、次の tick が同じ入力をもう一度見る = 取りこぼさない)。
      */
@@ -452,12 +405,12 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           cursor,
         )) as unknown as ObservedEvent[]
 
-        // **冷却が明けたものだけ。** `next_move_owner = 'famulus'` は無条件で滞留に入るので、
-        // ここで `dueNow` を挟まないと自分持ちの watch は回しても静かにならず、毎回の tick で上がり続ける。
+        // 冷却が明けたものだけ。`next_move_owner = 'famulus'` は無条件で滞留に入るので、
+        // `dueNow` を挟まないと自分持ちの watch は回しても毎回の tick に上がり続ける。
         const due = (yield* openWatches(nowMs)).filter(
           (w) => w.dueNow && (w.next_move_owner === "famulus" || w.stalledDays >= STALLED_DAYS),
         )
-        // **載せた時刻の古い順。** 冷却が同時に明けたぶんに順番を付けるのはこの列だけで、
+        // 載せた時刻の古い順。冷却が同時に明けたぶんに順番を付けるのはこの列だけ。
         // NULL(一度も載せていない)を先頭に置く。同着は最後の動きが古いほうから。
         const queued = [...due].sort((a, b) => {
           const sa = a.last_shown_at ?? ""
@@ -467,7 +420,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         const stalled = queued.slice(0, STALLED_SHOW_MAX)
         const stalledHeld = queued.length - stalled.length
         const questions = yield* openQuestions()
-        // 確かめてから時間が経った事実。**古いだけで間違いとは限らない**ので、消さずに聞く材料にする。
+        // 確かめてから時間が経った事実。古いだけで間違いとは限らないので、消さずに聞く材料にする。
         const staleBefore = new Date(nowMs - STALE_BELIEF_DAYS * 86_400_000)
           .toISOString()
           .replace(/\.\d{3}Z$/, "Z")
@@ -491,8 +444,8 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
             r.settled_note === null || r.settled_note === undefined ? null : String(r.settled_note),
         }))
 
-        // 断られたぶん。**古くなっても落とさない** — 「その用件ごと畳んだ」は日が経っても効いている。
-        // 件数で切る(理由は1行ずつ短い)。落とすなら、その理由を確定値として置いてからにする。
+        // 断られたぶんは古くなっても落とさない。件数で切る。
+        // 落とすなら、その理由を確定値として置いてからにする。
         const refusedRows = yield* db.all(
           `SELECT p.id, p.summary, p.deny_reason, COALESCE(d.at, p.created_at)AS decided_at
              FROM proposals p
@@ -513,18 +466,18 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           ? (nowMs - Date.parse(lastActive)) / 3_600_000
           : Number.POSITIVE_INFINITY
 
-        // 起こす理由。**未解決の問いは理由にしない** — 自分では解消できないものが多く、
-        // 理由に数えると同じ問いで永久に起き続ける。起きたときの材料としてだけ渡す。
+        // 起こす理由。未解決の問いは理由にしない — 自分では解消できないものが多く、
+        // 理由に数えると同じ問いで起き続ける。起きたときの材料としてだけ渡す。
         const reasons: string[] = []
         if (newEvents.length > 0) reasons.push(`まだ見ていない入力が ${newEvents.length} 件`)
-        // **結論を置いたものは数えない。** 承認を出せるのはユーザーだけなので、tick が起きても
-        // 進むのは「あなた待ちです」をもう一度書くところまで。一覧には残す — 承認はまだ要る。
+        // 結論を置いたものは数えない。承認を出せるのはユーザーだけなので、tick が起きても
+        // 「あなた待ちです」をもう一度書くだけになる。承認はまだ要るので一覧には残す。
         const expiring = pending.filter((p) => p.daysLeft <= EXPIRING_DAYS && p.settled_note === null)
 
-        // 理由の「組み合わせ」= **プロンプトに何が載っているか**。件数も経過時間も入れない。
-        // 件数を入れると watch が1件増えただけで「新しい理由」になって後退が掛からない。
+        // 組み合わせはプロンプトに何が載っているかだけ。件数も経過時間も入れない。
+        // 件数を入れると watch が1件増えただけで新しい理由になり、後退が掛からない。
         // 経過時間(24時間超え)を入れると、後退が上限に達した瞬間に組み合わせが変わって
-        // 数え直しになり、1.5時間と24時間を往復し続ける — 上限が上限でなくなる。
+        // 数え直しになり、1.5時間と24時間を往復する。
         const overdue = sinceLastActiveHours >= IDLE_WAKE_HOURS
         const reasonKey = [queued.length > 0 ? "stalled" : "", expiring.length > 0 ? "expiring" : ""]
           .filter(Boolean)
@@ -539,15 +492,15 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         // 新しい入力が無いなら、直前に動いたばかりの tick は動かない(自家中毒を止める)。
         const cooled = sinceLastActiveHours >= cooldownHours
         if (cooled) {
-          // 起こす理由は**冷却が明けた全部**の数。載せる数で書くと、6件待っている回と
-          // 3件しか無い回が同じ文になり、後ろに何件溜まっているかがどこにも出なくなる。
+          // 冷却が明けた全部の数を書く。載せる数で書くと、6件待っている回と
+          // 3件しか無い回が同じ文になり、後ろに何件溜まっているかが出ない。
           if (queued.length > 0) reasons.push(`動いていない watch が ${queued.length} 件`)
           if (expiring.length > 0) reasons.push(`期限が近い承認待ちが ${expiring.length} 件`)
           if (overdue) reasons.push(`前回の棚卸しから ${IDLE_WAKE_HOURS} 時間以上`)
         }
 
-        // **冷却の外に出す。** 1日に1回しか立たない理由なので、直前に動いたかどうかで抑える対象ではない。
-        // 抑えると、夕方に別の理由で動いた日は下書きが丸ごと落ちる。
+        // 冷却の外に出す。1日に1回しか立たない理由で、抑えると夕方に別の理由で動いた日は
+        // 下書きが丸ごと落ちる。
         const draftDue =
           localHour(at) >= dailyDraftHour() && (yield* db.meta("daily:draft")) !== dayRange(at).key
         if (draftDue) reasons.push("今日ぶんの下書きがまだ出ていない")
@@ -575,12 +528,11 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
     /**
      * tick を見終えた位置を確定する。
      *
-     * `upto` は**その回が実際に見た最後の行**。渡さないと「今の最大 rowid」まで進むので、
-     * 走っている最中に届いたぶん — digest には載っていない行 — まで読んだことになり、
-     * 誰も答えないまま既読になる。tick からは必ず渡す。
+     * `upto` はその回が実際に見た最後の行。渡さないと今の最大 rowid まで進むので、
+     * 走っている最中に届いた行(digest に載っていない行)まで既読になる。tick からは必ず渡す。
      *
      * 渡さない経路(対話セッションの終わり)は、自分が書いた行ごと消費してよい場面に限る。
-     * tick 自身の書き込みで tick が起きることは無い — digest が `source='system'` を外している。
+     * tick 自身の書き込みで tick が起きることは無い(digest が `source='system'` を外している)。
      */
     const commit = (opts?: { active?: boolean; at?: string; reasonKey?: string; upto?: number }) =>
       Effect.gen(function* () {
@@ -595,8 +547,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         if (!opts?.active) return
         yield* db.setMeta("tick:last_active", at)
         // 理由の組み合わせが前回と同じなら後退を1段深くする。違えば数え直し。
-        // 数えているのは「この組み合わせで**何回起きたか**」なので、初めて記録する回も 1 になる
-        // (次に同じ組み合わせで起きたとき、それが2回目だと分かる)。
+        // 数えるのはこの組み合わせで起きた回数なので、初めて記録する回も 1 になる。
         const key = opts.reasonKey ?? ""
         const prev = yield* db.meta("tick:reason_key")
         const seen = key === "" ? 0 : (key === prev ? Number((yield* db.meta("tick:repeat")) ?? 0) : 0) + 1
