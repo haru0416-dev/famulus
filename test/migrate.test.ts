@@ -9,10 +9,10 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { DatabaseSync } from "node:sqlite"
 import { after, before, test } from "node:test"
 import { Effect } from "effect"
 import { migrate } from "../src/db/migrate.ts"
+import { openDb } from "../src/db/sqlite.ts"
 import { RunnerStub } from "../src/model/Runner.ts"
 import { makeRuntime } from "../src/runtime.ts"
 import { Db, DbLive } from "../src/services/Db.ts"
@@ -28,7 +28,7 @@ after(() => {
 
 /** v1 の形(slot が PRIMARY KEY、区間を持たない)を、行ごと手で作る。 */
 function makeV1(path: string): void {
-  const d = new DatabaseSync(path)
+  const d = openDb(path)
   d.exec("PRAGMA foreign_keys = ON;")
   d.exec(`
     CREATE TABLE events (
@@ -80,7 +80,7 @@ test("旧い形の DB は開くだけで新しい形になる — 行は落ち�
 test("掛かっている DB に二度掛けても何も起きない", () => {
   const path = join(ROOT, "twice.db")
   makeV1(path)
-  const d = new DatabaseSync(path)
+  const d = openDb(path)
   assert.deepEqual(migrate(d), ["belief_slots:bitemporal"], "1回目は掛かる")
   assert.deepEqual(migrate(d), [], "2回目は何もしない")
   const rows = d.prepare("SELECT slot, valid_from FROM belief_slots").all() as { slot: string }[]
@@ -90,7 +90,7 @@ test("掛かっている DB に二度掛けても何も起きない", () => {
 
 test("cache_write の無い ledger は列が足され、既存の行は残る", () => {
   const path = join(ROOT, "ledger-v1.db")
-  const d = new DatabaseSync(path)
+  const d = openDb(path)
   d.exec(`
     CREATE TABLE ledger (
       id TEXT PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL, role TEXT, model TEXT,
@@ -111,7 +111,7 @@ test("cache_write の無い ledger は列が足され、既存の行は残る", 
 
 test("発火の記録を持たない watchlist は列が足され、既存の watch は「まだ回していない」になる", () => {
   const path = join(ROOT, "watchlist-v1.db")
-  const d = new DatabaseSync(path)
+  const d = openDb(path)
   d.exec(`
     CREATE TABLE watchlist (
       id TEXT PRIMARY KEY, subject TEXT NOT NULL, opened_at TEXT NOT NULL,
@@ -123,7 +123,10 @@ test("発火の記録を持たない watchlist は列が足され、既存の wa
   `)
   assert.deepEqual(migrate(d), ["watchlist:firing"], "1回目は掛かる")
   assert.deepEqual(migrate(d), [], "2回目は何もしない")
-  const row = d.prepare("SELECT last_run_at, cooldown_hours, run_count, last_result FROM watchlist").get()
+  const row = d
+    .prepare("SELECT last_run_at, cooldown_hours, run_count, last_result FROM watchlist")
+    .get() as Record<string, unknown> | null
+  assert.ok(row, "移行したはずの行が引けない")
   // **回した跡はどこにも残っていない。** `opened_at` で埋めると、回していないものを回したことにする。
   assert.deepEqual({ ...row }, { last_run_at: null, cooldown_hours: 24, run_count: 0, last_result: null })
   d.close()
@@ -131,7 +134,7 @@ test("発火の記録を持たない watchlist は列が足され、既存の wa
 
 test("読み書きする側の無いテーブルは、空なら落ちる", () => {
   const path = join(ROOT, "unused.db")
-  const d = new DatabaseSync(path)
+  const d = openDb(path)
   d.exec("CREATE TABLE outbox (id TEXT PRIMARY KEY, destination_key TEXT);")
   d.exec("CREATE TABLE schedule (id TEXT PRIMARY KEY);")
   assert.deepEqual(migrate(d), ["drop:outbox", "drop:schedule"])
@@ -141,7 +144,7 @@ test("読み書きする側の無いテーブルは、空なら落ちる", () =>
 
 test("行が入っているテーブルは落とさない — 想定と違うことが起きている兆候なので残す", () => {
   const path = join(ROOT, "unused-rows.db")
-  const d = new DatabaseSync(path)
+  const d = openDb(path)
   d.exec("CREATE TABLE outbox (id TEXT PRIMARY KEY);")
   d.exec("INSERT INTO outbox (id)VALUES ('o1')")
   assert.deepEqual(migrate(d), [], "行があるので触らない")

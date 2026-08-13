@@ -9,9 +9,9 @@
  * **正本(`events`)には触らない。** ここで作り直すのは projection だけで、
  * 万一壊しても events から引き直せる、という前提を崩さない。
  */
-import type { DatabaseSync } from "node:sqlite"
+import type { Sqlite } from "./sqlite.ts"
 
-const columns = (d: DatabaseSync, table: string): string[] => {
+const columns = (d: Sqlite, table: string): string[] => {
   try {
     return (d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name)
   } catch {
@@ -26,7 +26,7 @@ const columns = (d: DatabaseSync, table: string): string[] => {
  * DB が知った時刻(`updated_at`)をそのまま `valid_from` に置く — これは
  * 「いつからかは分からないが、遅くともこの時点では真だった」という、記録として正しい読み。
  */
-function bitemporalBeliefSlots(d: DatabaseSync): boolean {
+function bitemporalBeliefSlots(d: Sqlite): boolean {
   const cols = columns(d, "belief_slots")
   if (cols.length === 0 || cols.includes("valid_from")) return false
 
@@ -60,7 +60,7 @@ function bitemporalBeliefSlots(d: DatabaseSync): boolean {
  * 既存行は当時の値が復元できないので 0 のまま置く(**推測で埋めない**)。
  * 0 と「本当に 0 だった」の区別が要るなら at で切る。
  */
-function ledgerCacheWrite(d: DatabaseSync): boolean {
+function ledgerCacheWrite(d: Sqlite): boolean {
   const cols = columns(d, "ledger")
   if (cols.length === 0 || cols.includes("cache_write")) return false
   d.exec("ALTER TABLE ledger ADD COLUMN cache_write INTEGER NOT NULL DEFAULT 0")
@@ -74,7 +74,7 @@ function ledgerCacheWrite(d: DatabaseSync): boolean {
  * — 回した跡はどこにも残っていないので、`opened_at` や `last_activity_at` で埋めると
  * 回していないものを回したことにする。NULL は最初の tick で1回だけプロンプトに載り、そこから冷却が始まる。
  */
-function watchlistFiring(d: DatabaseSync): boolean {
+function watchlistFiring(d: Sqlite): boolean {
   const cols = columns(d, "watchlist")
   if (cols.length === 0 || cols.includes("last_run_at")) return false
   d.exec("ALTER TABLE watchlist ADD COLUMN last_run_at TEXT")
@@ -102,7 +102,7 @@ const DROPPED = [
   "owner_allowlist",
 ]
 
-function dropUnusedTables(d: DatabaseSync): string[] {
+function dropUnusedTables(d: Sqlite): string[] {
   const gone: string[] = []
   for (const t of DROPPED) {
     if (columns(d, t).length === 0) continue
@@ -115,7 +115,7 @@ function dropUnusedTables(d: DatabaseSync): string[] {
 }
 
 /** 適用したものの名前を返す。何も要らなければ空。 */
-export function migrate(d: DatabaseSync): string[] {
+export function migrate(d: Sqlite): string[] {
   const applied: string[] = []
   if (bitemporalBeliefSlots(d)) applied.push("belief_slots:bitemporal")
   if (ledgerCacheWrite(d)) applied.push("ledger:cache_write")

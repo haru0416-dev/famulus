@@ -384,7 +384,9 @@ export function decodeBody(buf: Uint8Array, contentType: string): string {
   for (const enc of [fromHeader, fromMeta, "utf-8"]) {
     if (!enc) continue
     try {
-      return new TextDecoder(enc, { fatal: false }).decode(buf, { stream: true })
+      // 名前はページから拾った文字列で、既知の一覧に入っているとは限らない。
+      // 型は既知の名前しか許さないので、投げさせて下の catch で落とすために外す。
+      return new TextDecoder(enc as never, { fatal: false }).decode(buf, { stream: true })
     } catch {
       // 知らない名前の charset。次の候補へ落とす。
     }

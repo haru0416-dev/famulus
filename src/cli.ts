@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * ユーザー側の入口。**承認はここでしか起きない**。
  *

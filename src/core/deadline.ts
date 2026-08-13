@@ -24,7 +24,7 @@ export const startDeadline = (budgetMs: number): void => {
   deadlineAtMs = Date.now() + budgetMs
 }
 
-/** 締切を外す。対話(`flue run` / `oz`)は時間で切られないので、既定はこちら。 */
+/** 締切を外す。対話(`pnpm agent` / `oz`)は時間で切られないので、既定はこちら。 */
 export const clearDeadline = (): void => {
   deadlineAtMs = undefined
 }

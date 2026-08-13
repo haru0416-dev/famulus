@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * 対話の入口。**人が口を開いて動かす側**(自走は src/tick.ts)。
  *

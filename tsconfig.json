@@ -4,7 +4,7 @@
     "lib": ["ES2023"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "types": ["node"],
+    "types": ["node", "bun"],
 
     // `.ts` を拡張子付きで import する(Node の型剥がしと同じ解決)。
     "allowImportingTsExtensions": true,

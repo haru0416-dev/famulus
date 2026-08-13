@@ -442,7 +442,7 @@ test("同じ URL を続けて開いたら取りに行かず「さっき開いた
       status: 200,
       headers: { "content-type": "text/html; charset=utf-8" },
     })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
   try {
     const url = `https://example.com/memo-${Math.random().toString(36).slice(2)}`
     const t0 = 1_000_000
@@ -472,7 +472,7 @@ test("続きを読むのに取り直さない(全文を覚えて切り出す)", 
   globalThis.fetch = (async () => {
     hits++
     return new Response(body, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
   try {
     const url = `https://example.com/long-${Math.random().toString(36).slice(2)}`
     const t0 = 2_000_000
@@ -532,7 +532,7 @@ test("find は取りに行かず、覚えた全文の中を探す", async () => 
   globalThis.fetch = (async () => {
     hits++
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
   try {
     const url = `https://example.com/reg-${Math.random().toString(36).slice(2)}`
     const t0 = 3_000_000
@@ -569,7 +569,7 @@ test("本文が頭 400KB より後ろにあるページも読む", async () => {
     new Response(body, {
       status: 200,
       headers: { "content-type": "text/html; charset=utf-8" },
-    })) as typeof fetch
+    })) as unknown as typeof fetch
   try {
     const p = await fetchPage(`https://example.com/heavy-${Math.random().toString(36).slice(2)}`, {
       nowMs: 3_000_000,
@@ -592,7 +592,7 @@ test("上限で切ったときは、切ったと分かる言い方をする", as
     new Response(body, {
       status: 200,
       headers: { "content-type": "text/html; charset=utf-8" },
-    })) as typeof fetch
+    })) as unknown as typeof fetch
   try {
     const p = await fetchPage(`https://example.com/huge-${Math.random().toString(36).slice(2)}`, {
       nowMs: 4_000_000,
@@ -619,7 +619,7 @@ test("読めているページに「別を当たれ」と言わない", async ()
       new Response(html, {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" },
-      })) as typeof fetch
+      })) as unknown as typeof fetch
   }
   try {
     serve(page("東京地方の天気は晴れのち曇り。".repeat(80))) // 約 1,100字

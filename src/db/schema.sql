@@ -1,4 +1,4 @@
--- open-zero の DB スキーマ。ストア: node:sqlite(`DatabaseSync`)。
+-- open-zero の DB スキーマ。ストア: bun:sqlite(`Database`、src/db/sqlite.ts 経由)。
 -- 設計原則:
 --   1. 正本は events。belief_slots / events_fts は projection(silent overwrite 禁止)。
 --   2. 時刻は ISO-8601 UTC 'Z'(src/core/brand.ts の IsoUtc)。TEXT で保持。

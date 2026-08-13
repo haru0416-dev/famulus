@@ -317,7 +317,7 @@ async function qiitaCalls(term: string, body: (url: string) => string): Promise<
     const url = typeof input === "string" ? input : String((input as { url?: string }).url ?? input)
     called.push(url)
     return new Response(body(url), { status: 200, headers: { "content-type": "application/json" } })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
   try {
     await searchWeb(term, { where: ["qiita"] })
     return called
@@ -332,7 +332,7 @@ test("zenn — 長すぎる語は 100 文字で切る(101 文字だと 400 が�
   globalThis.fetch = (async (input: unknown) => {
     called.push(typeof input === "string" ? input : String((input as { url?: string }).url ?? input))
     return new Response('{"articles":[]}', { status: 200, headers: { "content-type": "application/json" } })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
   try {
     // 実測で落ちたのはこの形 — モデルが語を並べて 100 文字を越えた。
     const long =
@@ -388,7 +388,7 @@ test("回数制限に当たった先は、解けるまで叩かない", async ()
       status: 403,
       headers: { "content-type": "application/json", "rate-reset": String(resetEpoch) },
     })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
   try {
     const first = await searchWeb("Effect", { where: ["qiita"] })
     assert.equal(calls, 1)
@@ -435,7 +435,7 @@ async function urlsFor(source: string, term: string, body: string): Promise<read
   globalThis.fetch = (async (input: unknown) => {
     called.push(typeof input === "string" ? input : String((input as { url?: string }).url ?? input))
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
   try {
     await searchWeb(term, { where: [source] })
     return called
@@ -536,7 +536,7 @@ test("回した先は x として返る(どこから来たかを読む側に見�
         ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
-    )) as typeof fetch
+    )) as unknown as typeof fetch
   try {
     const r = await searchWeb("site:x.com Vite", { where: ["web"] })
     assert.equal(r[0]?.source, "x", "web のまま返している")
@@ -692,7 +692,7 @@ test("回した先は showhn として返る(どこから来たかを読む側�
         hits: [{ objectID: "1", title: "Show HN: Alacritty", url: "https://a/", points: 1170 }],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
-    )) as typeof fetch
+    )) as unknown as typeof fetch
   try {
     const r = await searchWeb("Show HN terminal", { where: ["hn"] })
     assert.equal(r[0]?.source, "showhn", "hn のまま返している")
@@ -707,7 +707,7 @@ test("仕事を探す語なら、web と並べて job も出す(置き換えな�
   globalThis.fetch = (async (input: unknown) => {
     called.push(String(input))
     return new Response('{"results":[]}', { status: 200, headers: { "content-type": "application/json" } })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
   try {
     const r = await searchWeb("React 副業 週2", { where: ["web"] })
     assert.deepEqual(
@@ -731,7 +731,7 @@ test("仕事と関係ない語では job を足さない", async () => {
     new Response('{"results":[]}', {
       status: 200,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch
+    })) as unknown as typeof fetch
   try {
     const r = await searchWeb("React Server Components", { where: ["web"] })
     assert.deepEqual(
@@ -822,7 +822,7 @@ test("媒体を調べているだけの語では job を出さない", async () 
     new Response('{"results":[]}', {
       status: 200,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch
+    })) as unknown as typeof fetch
   try {
     const r = await searchWeb("Offers 手数料 審査 スカウト 応募 公式 副業", { where: ["web"] })
     assert.deepEqual(

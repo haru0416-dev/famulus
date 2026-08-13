@@ -9,27 +9,40 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { causeReason } from "../src/core/errors.ts"
 
-/** Flue が実際に投げてくる形。理由は外側に出ず、内側の `meta.reason` にだけある。 */
-const flueError = (reason: string): Error => {
+/** 枠(Flue)が投げていた形。理由は外側に出ず、内側の `meta.reason` にだけあった。 */
+const metaError = (reason: string): Error => {
   const inner = Object.assign(new Error("dispatch failed"), {
     meta: { operation: "dispatch(sub_01X)", reason },
   })
-  return Object.assign(new Error("[flue] Agent run failed (submission sub_01X)."), { cause: inner })
+  return Object.assign(new Error("Agent run failed (submission sub_01X)."), { cause: inner })
 }
 
 test("包まれた理由を取り出す", () => {
-  assert.equal(causeReason(flueError("日次 run 上限に到達(60/60)")), "日次 run 上限に到達(60/60)")
+  assert.equal(causeReason(metaError("日次 run 上限に到達(60/60)")), "日次 run 上限に到達(60/60)")
 })
 
-test("理由が無ければ元の文字列を返す(分からないことを埋めない)", () => {
-  assert.equal(causeReason(new Error("接続が切れた")), "Error: 接続が切れた")
+/**
+ * **`Error: ` を頭に付けない。** いまゲートが投げるのは素の `Error` で、
+ * `String(e)` のまま記録すると「止まった: Error: 停止中(halt): …」になる。
+ */
+test("meta が無ければ一番内側の message を返す", () => {
+  assert.equal(causeReason(new Error("接続が切れた")), "接続が切れた")
+  assert.equal(
+    causeReason(new Error("道具の中で落ちた", { cause: new Error("停止中(halt): 予算を止めた") })),
+    "停止中(halt): 予算を止めた",
+  )
+})
+
+/** message も meta も無いものは埋めない。**分からないことを分かったように書かない。** */
+test("取り出せるものが無ければ元の文字列を返す", () => {
   assert.equal(causeReason("ただの文字列"), "ただの文字列")
   assert.equal(causeReason(undefined), "undefined")
+  assert.equal(causeReason({ _tag: "Halt" }), "[object Object]")
 })
 
 test("何段包まれていても辿る", () => {
   const deep = Object.assign(new Error("外"), {
-    cause: { cause: flueError("枠 claude-max はクールダウン中") },
+    cause: { cause: metaError("枠 claude-max はクールダウン中") },
   })
   assert.equal(causeReason(deep), "枠 claude-max はクールダウン中")
 })

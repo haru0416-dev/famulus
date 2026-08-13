@@ -14,11 +14,11 @@
  */
 import { mkdirSync, readFileSync } from "node:fs"
 import { dirname } from "node:path"
-import { DatabaseSync } from "node:sqlite"
 import { fileURLToPath } from "node:url"
 import { Context, Effect, Layer } from "effect"
 import { DbFailed } from "../core/errors.ts"
 import { migrate } from "../db/migrate.ts"
+import { openDb, type Sqlite } from "../db/sqlite.ts"
 
 const SCHEMA_PATH = fileURLToPath(new URL("../db/schema.sql", import.meta.url))
 const SCHEMA_VERSION = "2"
@@ -28,7 +28,7 @@ export interface Row {
 }
 
 export interface DbApi {
-  readonly raw: DatabaseSync
+  readonly raw: Sqlite
   readonly all: (sql: string, ...params: readonly unknown[]) => Effect.Effect<Row[], DbFailed>
   readonly get: (sql: string, ...params: readonly unknown[]) => Effect.Effect<Row | undefined, DbFailed>
   readonly run: (sql: string, ...params: readonly unknown[]) => Effect.Effect<unknown, DbFailed>
@@ -49,7 +49,7 @@ export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed
         Effect.try({
           try: () => {
             if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true })
-            const d = new DatabaseSync(path)
+            const d = openDb(path)
             // WAL: 再起動・並行読み取りに強い。foreign_keys: FK 強制(approvals→proposals の不変条件)。
             if (path !== ":memory:") d.exec("PRAGMA journal_mode = WAL;")
             d.exec("PRAGMA foreign_keys = ON;")

@@ -86,23 +86,32 @@ export class DbFailed extends Data.TaggedError("DbFailed")<{
 export type Refusal = Halt | QuotaCooldown | DailyRunLimit | UnpricedModel | EgressDenied | DeliveryRejected
 
 /**
- * 包まれた失敗から**本当の理由**を一行で取り出す。
+ * 包まれた失敗から**本当の理由**を一行で取り出す。ここで返した文字列がそのまま
+ * 「止まった: …」として DB に残り、ユーザーが読む1行になる。
  *
- * Flue は dispatch の失敗を `Agent run failed (submission sub_…)` にまとめてしまうので、
- * 表に出た文字列だけを記録すると、自走枠の使い切りも provider の落ちも同じ顔になる。
- * 実際の理由は内側の `meta.reason` にあるので、`cause` を辿って最初に見つけたものを返す。
- * 見つからなければ元の文字列(それ以上のことは分からない、が正しい記録)。
+ * 元は枠(Flue)が dispatch の失敗を `Agent run failed (submission sub_…)` にまとめてしまい、
+ * 表に出た文字列だけを記録すると自走枠の使い切りも provider の落ちも同じ顔になっていた
+ * (docs/adr/0011)。実際の理由は内側の `meta.reason` にあった。
+ *
+ * **枠が無くなっても包まれ方は残る。** いまゲートが投げるのは素の `Error` で、道具ループが
+ * それをさらに包むことがある。だから `cause` を辿り、いちばん内側の `message` を返す —
+ * 実測では halt 中の1ターンが `Error: 停止中(halt): …` として出ていて、
+ * `String(e)` のままだと先頭に `Error: ` が付いたまま記録される。
+ * `message` を持たないもの(Effect のタグ付き失敗など)は元の文字列に落とす。
  */
 export function causeReason(e: unknown): string {
   const seen = new Set<unknown>()
   let cur: unknown = e
+  let deepest: string | undefined
   while (cur && typeof cur === "object" && !seen.has(cur)) {
     seen.add(cur)
     const meta = (cur as { meta?: { reason?: unknown } }).meta
     if (typeof meta?.reason === "string" && meta.reason) return meta.reason
+    const msg = (cur as { message?: unknown }).message
+    if (typeof msg === "string" && msg) deepest = msg
     cur = (cur as { cause?: unknown }).cause
   }
-  return String(e)
+  return deepest ?? String(e)
 }
 
 /** 人間に見せる一行(承認ボード・CLI 共通)。 */
