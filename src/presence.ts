@@ -214,7 +214,7 @@ function once(
 
 async function main(): Promise<void> {
   if (!token) {
-    // 設定が無いのは異常ではない(Notify / Discord と同じ契約)。走り続ける理由も無い。
+    // 設定が無いのは異常ではない(Discord と同じ契約)。走り続ける理由も無い。
     log("OPEN_ZERO_DISCORD_TOKEN が無い — 接続しない")
     return
   }

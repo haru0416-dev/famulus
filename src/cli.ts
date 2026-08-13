@@ -46,7 +46,6 @@ import { AUTONOMOUS_ROLE, BUDGET, Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
 import { Memory, renderRecall } from "./services/Memory.ts"
-import { Notify } from "./services/Notify.ts"
 import { type ProposalRow, type ProposalStatus, Proposals } from "./services/Proposals.ts"
 import { runsRoot } from "./services/Sandbox.ts"
 
@@ -200,7 +199,6 @@ const program = (argv: readonly string[]) =>
           day.startIso,
           day.endIso,
         )
-        const notify = yield* Notify
         const discord = yield* Discord
         const dc = yield* discord.where()
         const last = yield* db.meta("tick:last")
@@ -225,11 +223,8 @@ const program = (argv: readonly string[]) =>
             : "tick: まだ一度も回っていない — systemctl --user status open-zero-tick.timer",
           `DB: ${Number(mem?.n ?? 0)} 件(うち取り込み ${Number(mem?.imported ?? 0)} セッション)`,
           `承認待ち: ${pending.length} 件`,
-          // 通知先が無いことは実行時に何も起こさない(黙って false になる)ので、ここで出さないと
-          // 「静かなのは用が無いからか、宛先が空だからか」が分からない。
-          notify.configured()
-            ? `通知: 出せる${notify.canReply() ? " / 押し戻しも受けられる" : "(押し戻しは受けられない)"}`
-            : "通知: 宛先が無い(.env の OPEN_ZERO_NTFY_TOPIC が空)",
+          // 宛先が無いことは実行時に何も起こさない(黙って何もしない)ので、ここで出さないと
+          // 「静かなのは用が無いからか、宛先が空だからか」が分からない。**行き来はこの1本だけ。**
           discord.configured()
             ? `Discord: 会話 ${place(dc.talk, dc.dm)} / 下書き ${place(dc.draft, dc.dm)} — リアクションも自由文も受けられる`
             : "Discord: 宛先が無い(.env の OPEN_ZERO_DISCORD_TOKEN が空)",

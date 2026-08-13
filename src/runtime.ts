@@ -18,7 +18,6 @@ import { Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
 import { Memory } from "./services/Memory.ts"
-import { Notify } from "./services/Notify.ts"
 import { Proposals } from "./services/Proposals.ts"
 
 /** Db の上に載る素のサービス群。 */
@@ -29,7 +28,6 @@ const services = Layer.mergeAll(
   Proposals.Default,
   Attention.Default,
   Intake.Default,
-  Notify.Default,
   Discord.Default,
 )
 
@@ -95,7 +93,6 @@ export type AppServices =
   | Proposals
   | Attention
   | Intake
-  | Notify
   | Discord
   | Runner
 

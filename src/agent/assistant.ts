@@ -36,7 +36,6 @@ import { Discord } from "../services/Discord.ts"
 import { buildFencedPrompt, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { Memory, renderRecall } from "../services/Memory.ts"
-import { Notify } from "../services/Notify.ts"
 import { Proposals } from "../services/Proposals.ts"
 import { runDir, runInSandbox } from "../services/Sandbox.ts"
 import { defaultSources, renderHits, SOURCE_MENU, searchWeb } from "../services/Search.ts"
@@ -792,18 +791,21 @@ function buildTools(state: TurnState) {
      *
      * `remember` は自分の側に残すだけで、ユーザーは `oz recall` を打たない限り一生読まない。
      * 調べたことが役に立つのは相手が読んだときなので、読ませたいものはここから外へ押す。
-     * 承認は要らない — 出るのはユーザー自身の端末だけで、外の誰にも届かない。
+     * 承認は要らない — 出るのはユーザーしか居ない場所(DM か、ユーザーが用意した囲いの中)だけ。
+     *
+     * 出し先は Discord の会話。**`draft` とは場所を分ける** — あちらは押して返す文で、
+     * こちらは読んで終わる文。混ぜると、返事の要るものが流れる(docs/adr/0029)。
      */
     tell: tool({
       description:
-        "ユーザーのスマホに直接届ける。**用があるときだけ**。相手が今すぐ知りたいこと・知らないと選べないこと・" +
-        "こちらが動いた結果だけを出す。作業の経過、気付きの共有、起きた報告は出さない — " +
+        "ユーザーに直接届ける(Discord の会話に出る)。**用があるときだけ**。相手が今すぐ知りたいこと・" +
+        "知らないと選べないこと・こちらが動いた結果だけを出す。作業の経過、気付きの共有、起きた報告は出さない — " +
         "鳴った回数が増えるほど次に鳴ったとき読まれなくなる。届いて困らないかではなく、**鳴らす価値があるか**で決める。",
       inputSchema: vs(
         v.object({
           title: v.pipe(
             v.string(),
-            v.description("1行目。ロック画面ではここまでしか読めないので、これだけで用が分かる形にする。"),
+            v.description("1行目。通知に出るのはここまでなので、これだけで用が分かる形にする。"),
           ),
           body: v.pipe(v.string(), v.description("本文。名前・日付・URL・金額は省かずそのまま入れる。")),
           urgent: v.optional(
@@ -814,19 +816,25 @@ function buildTools(state: TurnState) {
       execute: async ({ title, body, urgent }) =>
         run(
           Effect.gen(function* () {
-            const notify = yield* Notify
+            const discord = yield* Discord
             const mem = yield* Memory
-            const sent = yield* notify.push({ title, body, ...(urgent ? { priority: 4 } : {}) })
+            const id = yield* discord.post({
+              text: `**${title}**\n${body}`,
+              to: "talk",
+              // 名指しで呼ぶのは、今日中に動かないと手遅れになるものだけ。既定では呼ばない
+              // — ミュートしてある場所まで貫くのを毎回やると、貫けなくなる。
+              ping: urgent === true,
+            })
             // 押した事実は自分の側にも残す。**届いたかどうかまで残す** — 届いていない通知を
             // 「伝えた」として次のターンで前提にすると、ユーザーだけが知らない話が進む。
             yield* mem.remember({
               source: "system",
-              content: { told: title, body, sent },
+              content: { told: title, body, sent: Boolean(id) },
               text: `${title}\n${body}`,
             })
-            return sent
+            return id
               ? `送った: ${title}`
-              : "送れなかった(通知先が未設定か、ntfy に届かない)。中身は記録に残したので、次に会ったとき口で伝える。"
+              : "送れなかった(Discord の宛先が未設定か、届かない)。中身は記録に残したので、次に会ったとき口で伝える。"
           }),
         ),
     }),

@@ -121,6 +121,23 @@ function proposalsSettled(d: Sqlite): boolean {
 }
 
 /**
+ * 外した経路が残した印を落とす(docs/adr/0029)。
+ *
+ * ntfy を読む側はもう無い。`ntfy:in_cursor` を残しておくと、`schema_meta` を読んだ人が
+ * 「まだその経路がある」と読む。**テーブルを落とすのと同じ理由で、印も落とす。**
+ * 値そのものは ntfy 側のメッセージ id で、こちらから使い道が無い。
+ */
+function dropNtfyCursor(d: Sqlite): boolean {
+  if (columns(d, "schema_meta").length === 0) return false
+  const row = d.prepare("SELECT count(*)AS n FROM schema_meta WHERE key = 'ntfy:in_cursor'").get() as
+    | { n: number }
+    | undefined
+  if ((row?.n ?? 0) === 0) return false
+  d.exec("DELETE FROM schema_meta WHERE key = 'ntfy:in_cursor'")
+  return true
+}
+
+/**
  * 読み書きする側の無いテーブルを落とす(docs/adr/0007)。
  *
  * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、テーブルは残り続ける。
@@ -158,6 +175,7 @@ export function migrate(d: Sqlite): string[] {
   if (watchlistFiring(d)) applied.push("watchlist:firing")
   if (watchlistShown(d)) applied.push("watchlist:shown")
   if (proposalsSettled(d)) applied.push("proposals:settled")
+  if (dropNtfyCursor(d)) applied.push("drop:ntfy_cursor")
   for (const t of dropUnusedTables(d)) applied.push(`drop:${t}`)
   return applied
 }

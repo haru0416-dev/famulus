@@ -1,8 +1,9 @@
 /**
- * Discord。**ユーザーが一番長く居る場所に出すための経路。**
+ * Discord。**ユーザーと行き来する唯一の経路。**
  *
- * ntfy はロック画面に届くが、届いた先で出来ることが少ない(短い本文と決め打ちのボタンだけ)。
- * 長い下書きを読ませて一言返してもらう相手としては、既に開いている画面のほうが強い。
+ * 前は ntfy も並べていた。届く先は同じ端末で、届いた先で出来ることはこちらのほうが多い
+ * (ntfy は短い本文と決め打ちのボタンだけ)。経路が2本あると、片方の位置がずれたことに
+ * 誰も気付かないまま入力が落ちるので、1本に寄せた(docs/adr/0029)。
  *
  * **常駐しない。** ボタン(interaction)は3秒以内に応答が要るので gateway 接続が要るが、
  * 絵文字のリアクションなら後から数えられる。返事の待ち時間は、常駐ではなく**読みに行く間隔**で決まる
@@ -27,7 +28,8 @@
  * 「直す」の中身を受けるには自由文が要るが、スレッド外に書かれた自由文はどの1件への返事か分からない。
  * スレッドの中なら場所そのものが宛先になる(docs/adr/0016)。
  *
- * 設定が無ければ**黙って何もしない**(Notify と同じ契約)。
+ * 設定が無ければ**黙って何もしない**。経路が塞がっていることで tick を止めない
+ * — 届かないより、動かないほうが困る。
  */
 import { Effect } from "effect"
 import type { DbFailed } from "../core/errors.ts"
@@ -82,6 +84,25 @@ export interface Post {
 export interface Inbound {
   readonly id: string
   readonly text: string
+}
+
+/**
+ * 1回読んだぶんと、**まだ DB に書いていない既読の位置**。
+ *
+ * 読むことと「読んだ」と記録することを分けてあるのは、記録する前に位置が進むと、
+ * 記録が落ちた回のぶんが二度と来ないから。Discord は `after` ではなく id の比較で絞るので、
+ * 位置が進んだメッセージはチャンネルに残っていても拾われない。**消えたことも残らない。**
+ * 後から進めるなら、最悪でも同じものを二度読むだけで済む(docs/adr/0029)。
+ */
+export interface Batch {
+  /** 届いていた順に並べたもの。 */
+  readonly items: readonly Inbound[]
+  /** 場所ごとの新しい位置。`seen` を呼ぶまで DB には入らない。 */
+  readonly marks: Readonly<Record<string, string>>
+  /** 押されたぶんを落とした後の、リアクション待ちの一覧。 */
+  readonly taps: Readonly<Record<string, Record<string, string>>>
+  /** 最後に自由文が来た場所。返事はここへ出す。来ていなければ undefined。 */
+  readonly heard?: string
 }
 
 const token = (): string | undefined => process.env.OPEN_ZERO_DISCORD_TOKEN
@@ -315,18 +336,21 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
      * 返ってきたものを読む。**リアクションと自由文を同じ形で返す** — 呼ぶ側はどちらで来たかを気にしない。
      * 一覧を1回引くだけで両方見る(リアクションは古いメッセージに後から付くので、`after` では拾えない)。
      *
-     * 読んだものは二度返さない(既読位置と待ちリストをここで進める)。
-     * 位置を持っていない初回は**自由文を取り込まずに位置だけ進める** — DM には過去の会話が
+     * **位置は進めない。** 進めるのは `seen` で、呼ぶのは読んだものを記録し終えた側。
+     * ここで進めると、記録が落ちた回のぶんが二度と来ない(`Batch` の説明)。
+     *
+     * 位置を持っていない初回は**自由文を取り込まずに位置だけ返す** — DM には過去の会話が
      * 残っているので、位置なしで引くと去年の一言が今日の指示として流れ込む。
      * リアクションはこの制限を受けない(自分が出した通知に対してしか登録されていない)。
      *
      * 取れなければ空 — 「届いていない」と「Discord が落ちている」を呼ぶ側に区別させない。
      */
-    const inbox = (): Effect.Effect<readonly Inbound[], DbFailed> =>
+    const inbox = (): Effect.Effect<Batch, DbFailed> =>
       Effect.gen(function* () {
         const owner = ownerId()
         const pending = yield* meta<Pending>("discord:taps", {})
         const out: Inbound[] = []
+        const marks: Record<string, string> = {}
         let heard: string | undefined
 
         for (const ch of yield* listening()) {
@@ -363,14 +387,29 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
             }
           }
 
-          const newest = msgs.reduce((a, m) => (newer(m.id, a) ? m.id : a), msgs[0]?.id ?? "0")
-          yield* db.setMeta(`discord:last:${ch}`, newest)
+          marks[ch] = msgs.reduce((a, m) => (newer(m.id, a) ? m.id : a), msgs[0]?.id ?? "0")
         }
 
-        if (heard !== undefined) yield* db.setMeta("discord:heard_in", heard)
-        yield* db.setMeta("discord:taps", JSON.stringify(pending))
-        // 場所をまたいでも届いた順に並べる。snowflake は時刻で単調増加するので id で並べ直せる。
-        return out.sort((a, b) => (newer(a.id.split(":")[0] ?? "0", b.id.split(":")[0] ?? "0") ? 1 : -1))
+        return {
+          // 場所をまたいでも届いた順に並べる。snowflake は時刻で単調増加するので id で並べ直せる。
+          items: out.sort((a, b) => (newer(a.id.split(":")[0] ?? "0", b.id.split(":")[0] ?? "0") ? 1 : -1)),
+          marks,
+          taps: pending,
+          ...(heard === undefined ? {} : { heard }),
+        } satisfies Batch
+      })
+
+    /**
+     * 読んだものを記録し終えたことを DB に書く。**`inbox` で読んだ後に、呼ぶ側が呼ぶ。**
+     *
+     * ここを呼ばずに終えた回は、次に同じものをもう一度読む。二度覚えるのは直せるが、
+     * 位置の向こう側に取り残されたものは取りに行く手立てが無い(docs/adr/0029)。
+     */
+    const seen = (b: Batch): Effect.Effect<void, DbFailed> =>
+      Effect.gen(function* () {
+        for (const [ch, id] of Object.entries(b.marks)) yield* db.setMeta(`discord:last:${ch}`, id)
+        if (b.heard !== undefined) yield* db.setMeta("discord:heard_in", b.heard)
+        yield* db.setMeta("discord:taps", JSON.stringify(b.taps))
       })
 
     /** 出せるか。人に「Discord には出ない」と伝えるためだけに使う。 */
@@ -392,6 +431,6 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         }
       })
 
-    return { post, inbox, configured, where } as const
+    return { post, inbox, seen, configured, where } as const
   }),
 }) {}

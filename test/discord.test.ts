@@ -109,7 +109,16 @@ const post = (p: Post) =>
     return yield* d.post(p)
   })
 
+/** 読んで、読んだことを記録するところまで。**呼ぶ側と同じ順**(src/inbox.ts)。 */
 const inbox = Effect.gen(function* () {
+  const d = yield* Discord
+  const batch = yield* d.inbox()
+  yield* d.seen(batch)
+  return batch.items
+})
+
+/** 読むだけ。位置を進めない — `seen` を呼ばなかった回を作るために使う。 */
+const peek = Effect.gen(function* () {
   const d = yield* Discord
   return yield* d.inbox()
 })
@@ -232,6 +241,48 @@ test("初回は自由文を取り込まない — DM に残っている過去の
       assert.deepEqual(await h.run(inbox), [])
       dc.msgs.unshift({ id: "52", content: "今日はこれをやって", author: { id: OWNER } })
       assert.deepEqual(await h.run(inbox), [{ id: "52", text: "今日はこれをやって" }])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("記録し終える前に落ちた回のぶんは、次の回にもう一度来る", async () => {
+  const dc = await fakeDiscord([{ id: "70", content: "位置合わせ", author: { id: OWNER } }])
+  wire(dc.url)
+  try {
+    await withHarness(async (h) => {
+      await h.run(inbox)
+      dc.msgs.unshift({ id: "71", content: "歯医者を来週にずらして", author: { id: OWNER } })
+      // 読んだが `seen` を呼ばずに終えた回。**位置は進んでいない。**
+      const first = await h.run(peek)
+      assert.deepEqual([...first.items], [{ id: "71", text: "歯医者を来週にずらして" }])
+      // **二度覚えるのは直せるが、位置の向こう側に取り残されたものは取りに行けない。**
+      assert.deepEqual(await h.run(inbox), [{ id: "71", text: "歯医者を来週にずらして" }])
+      // 記録し終えた後は返らない。
+      assert.deepEqual(await h.run(inbox), [])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("押されたリアクションも、記録し終えるまでは消えない", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url)
+  try {
+    await withHarness(async (h) => {
+      const id = await h.run(post({ text: "出していいか", taps: [{ emoji: "✅", reply: "出していい" }] }))
+      const r = dc.msgs.find((x) => x.id === id)?.reactions?.[0]
+      assert.ok(r, "自分で付けたリアクションが見つからない")
+      r.count = 2
+      const first = await h.run(peek)
+      assert.deepEqual([...first.items], [{ id: `${id}:✅`, text: "出していい" }])
+      // 待ちリストから落ちるのも `seen` のとき。落ちる前に切られたら、次の回にもう一度返る。
+      assert.deepEqual(await h.run(inbox), [{ id: `${id}:✅`, text: "出していい" }])
+      assert.deepEqual(await h.run(inbox), [])
     })
   } finally {
     wire(undefined)

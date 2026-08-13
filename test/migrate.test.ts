@@ -155,6 +155,24 @@ test("結論の置き場を持たない proposals は列が足され、既存の
   d.close()
 })
 
+test("外した経路の印は落ちる — 残すと「まだその経路がある」と読まれる", () => {
+  const path = join(ROOT, "ntfy-cursor.db")
+  const d = openDb(path)
+  d.exec(`
+    CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO schema_meta (key, value)VALUES ('ntfy:in_cursor', '5iTGgng7sRsd'), ('tick:last', '2026-08-13T04:39:35Z');
+  `)
+  assert.deepEqual(migrate(d), ["drop:ntfy_cursor"], "1回目は落ちる")
+  assert.deepEqual(migrate(d), [], "2回目は何もしない")
+  const rows = d.prepare("SELECT key FROM schema_meta ORDER BY key").all() as { key: string }[]
+  // **他の印は巻き込まない。** tick の記録が消えると、動いていた事実が消える。
+  assert.deepEqual(
+    rows.map((r) => r.key),
+    ["tick:last"],
+  )
+  d.close()
+})
+
 test("読み書きする側の無いテーブルは、空なら落ちる", () => {
   const path = join(ROOT, "unused.db")
   const d = openDb(path)

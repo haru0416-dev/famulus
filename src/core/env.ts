@@ -9,7 +9,7 @@
  *
  * 解析は自前。前は `process.loadEnvFile()` を呼んでいたが、**あれは Node にしか無い。**
  * Bun 1.3.14 では未実装で、`try/catch` に落ちて `.env` が丸ごと読まれないまま静かに進んだ
- * (Discord のトークンも ntfy の宛先も未設定として動く)。読む形は下の4行分しかないので、
+ * (Discord のトークンも宛先も未設定として動く)。読む形は下の4行分しかないので、
  * 走らせる側を選ばない書き方にしてある。
  */
 import { existsSync, readFileSync } from "node:fs"
