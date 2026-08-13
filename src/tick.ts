@@ -29,6 +29,7 @@ import { dayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
 import { logPost, readJournal } from "./journal.ts"
+import { poolForModel } from "./model/claude-cli.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
 import { Attention, type Digest, type ObservedEvent } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
@@ -253,17 +254,15 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
   return buildFencedPrompt(sections.join("\n\n"), untrusted)
 }
 
-/**
- * エージェントを組み立てる前の予備判定。
- * 現在 pool は claude-max 固定なので、GPT を tickModel に指定した場合は実行時ゲートと一致しない。
- */
+/** エージェントを組み立てる前の予備判定。 */
 const blocked = Effect.gen(function* () {
   const gov = yield* Governance
+  const model = tickModel()
   return yield* gov
     .precheck({
       meter: "quota",
-      pool: "claude-max",
-      model: tickModel(),
+      pool: poolForModel(model),
+      model,
       at: nowIso(),
       nowMs: Date.now(),
       lane: "autonomous",
