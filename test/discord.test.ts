@@ -374,7 +374,7 @@ test("リアクションは出した場所に付く — 会話の場所に出し
   }
 })
 
-/** 訊かれた場所に返す。**書いた側から見て返事が無いのと、別の部屋に返すのは同じこと。** */
+/** 訊かれたチャンネルに返す。別のチャンネルに返すのは、書いた側からは返事が無いのと同じ。 */
 test("返事は最後に話しかけられた場所に返る — DM に書かれたら DM に返す", async () => {
   const dc = await fakeDiscord()
   wire(dc.url, { talk: TALK, draft: DRAFT })
@@ -395,6 +395,42 @@ test("返事は最後に話しかけられた場所に返る — DM に書かれ
       assert.deepEqual(await h.run(inbox), [{ id: "301", text: "やっぱりこっち" }])
       await h.run(post({ text: "チャンネルへの返事" }))
       assert.equal(dc.at(TALK)[0]?.content, "チャンネルへの返事")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+/**
+ * 2つのチャンネルに同時に未読があるとき、どちらへ返すか。`listening()` は talk → DM の順で
+ * 読むので、単に「最後に見たチャンネル」を覚えると常に DM になる。
+ */
+test("返事は、複数のチャンネルに未読があっても新しいほうへ返る", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      dc.at(TALK).unshift({ id: "200", content: "位置合わせ", author: { id: OWNER } })
+      dc.msgs.unshift({ id: "201", content: "位置合わせ", author: { id: OWNER } })
+      await h.run(inbox)
+
+      // DM のほうが古い。返事は新しい talk へ。
+      dc.msgs.unshift({ id: "300", content: "先に DM", author: { id: OWNER } })
+      dc.at(TALK).unshift({ id: "301", content: "後から talk", author: { id: OWNER } })
+      assert.deepEqual(await h.run(inbox), [
+        { id: "300", text: "先に DM" },
+        { id: "301", text: "後から talk" },
+      ])
+      await h.run(post({ text: "新しいほうへ" }))
+      assert.equal(dc.at(TALK)[0]?.content, "新しいほうへ")
+
+      // 逆順。talk のほうが古ければ DM へ。
+      dc.at(TALK).unshift({ id: "400", content: "先に talk", author: { id: OWNER } })
+      dc.msgs.unshift({ id: "401", content: "後から DM", author: { id: OWNER } })
+      await h.run(inbox)
+      await h.run(post({ text: "DM へ" }))
+      assert.equal(dc.msgs[0]?.content, "DM へ")
     })
   } finally {
     wire(undefined)

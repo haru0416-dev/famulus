@@ -1,12 +1,9 @@
 /**
- * Layer の合成と、Flue の async フックから Effect を呼ぶための橋。
+ * Layer の合成と、Promise を返す呼び出し側から Effect を走らせる `run`。
+ * Effect は `ManagedRuntime` の中に閉じ、外へは拒否が例外として出るだけにする。
  *
- * Flue のフックは `Promise<void>` を返す普通の非同期関数なので、Effect はここで
- * `ManagedRuntime` に閉じ込めて `runPromise` で渡す。**エフェクトを外へ漏らさない**のが要点で、
- * エージェント側のコードは「拒否は例外として飛んでくる」だけを知っていればよい。
- *
- * Db を Layer の一番下に置いてあるので、テストは `makeRuntime(DbLive(":memory:"))` で
- * 実 DB に触らずに同じ配線を走らせられる(スキーマもトリガも本物のまま)。
+ * Db が Layer の一番下なので、テストは `makeRuntime(DbLive(":memory:"))` で
+ * 同じ配線をそのまま走らせられる(スキーマもトリガも本物)。
  */
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -48,11 +45,7 @@ export const makeRuntime = (db: DbLayer = DbLive(), runner: RunnerLayer = Runner
 
 export type AppRuntime = ReturnType<typeof makeRuntime>
 
-/**
- * 既定のランタイム。プロセスに1つ。
- * 差し替えの経路は `run(effect, rt)` の第2引数だけにしてある。
- * 入口を2つ持つと、どちらが効いているのかを読んで確かめないと分からなくなる。
- */
+/** 既定のランタイム。プロセスに1つ。差し替えは `run(effect, rt)` の第2引数だけ。 */
 let current: AppRuntime | undefined
 export const runtime = (): AppRuntime => {
   current ??= makeRuntime()
@@ -68,7 +61,7 @@ const REFUSAL_TAGS = new Set([
   "DeliveryRejected",
 ])
 
-/** 拒否を人間に読める Error にして投げる。Flue のフックはこれを見て submission を止める。 */
+/** 拒否を人間に読める Error にして投げる。 */
 export class RefusedError extends Error {
   readonly refusal: Refusal
   constructor(refusal: Refusal) {
@@ -82,11 +75,7 @@ export function isRefusal(e: unknown): e is Refusal {
   return typeof e === "object" && e !== null && "_tag" in e && REFUSAL_TAGS.has(String(e._tag))
 }
 
-/**
- * Flue のフック本体から Effect を走らせる。拒否は `RefusedError` に翻訳して投げる
- * — フックが throw すると Flue はモデルを呼ぶ前に submission を落とすので、
- * **ゲートが実際にモデル呼び出しを止める**のはここ。
- */
+/** 拒否は `RefusedError` にして投げる。呼び出し側は例外として受ける。 */
 export type AppServices =
   | Db
   | Governance

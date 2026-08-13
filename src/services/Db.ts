@@ -1,16 +1,14 @@
 /**
- * DB サービス。`src/db/schema.sql` が正本で、アプリ側はそれを書き換えない。
+ * DB サービス。`src/db/schema.sql` が正本で、アプリ側は書き換えない。
  *
- * events の append-only はアプリ側のお行儀ではなく **SQL トリガで強制**されている
- * (DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)。不変条件を SQL 側に置いてあるので、
+ * events の append-only は SQL トリガで強制する(DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)。
  * どのドライバから触っても同じように掛かる。
  *
- * **外に出る行為の冪等性は、いま担保されていない。** それ用のテーブルは作ってあったが読み書きする側が
- * 一度も書かれなかったので落とした(docs/adr/0007)。予告→猶予→実行を作るときに改めて決める。
+ * 外に出る行為の冪等性は担保していない。用のテーブルは作ったが読み書きする側が書かれず、
+ * 落とした(docs/adr/0007)。
  *
- * Tag + Layer にしてあるのは**接続先を積み替えられるようにするため**。
- * テストは `DbLive(":memory:")` を積むだけで、実 DB にもモックにも触らずに
- * トリガ込みの本物のスキーマを相手にできる(SQL の不変条件を検査から外さない)。
+ * Tag + Layer にしてあるので、テストは `DbLive(":memory:")` を積むだけでトリガ込みの
+ * 本物のスキーマを相手にできる。
  */
 import { mkdirSync, readFileSync } from "node:fs"
 import { dirname } from "node:path"
@@ -52,11 +50,11 @@ export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed
           try: () => {
             if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true })
             const d = openDb(path)
-            // WAL: 再起動・並行読み取りに強い。foreign_keys: FK 強制(approvals→proposals の不変条件)。
+            // WAL は並行読み取りのため。foreign_keys は approvals→proposals の FK を効かせるため。
             if (path !== ":memory:") d.exec("PRAGMA journal_mode = WAL;")
             d.exec("PRAGMA foreign_keys = ON;")
             d.exec("PRAGMA busy_timeout = 5000;")
-            // **schema.sql より先**。旧い形を寄せてから `IF NOT EXISTS` を通す(src/db/migrate.ts)。
+            // schema.sql より先。旧い形を寄せてから `IF NOT EXISTS` を通す(src/db/migrate.ts)。
             migrate(d)
             d.exec(readFileSync(SCHEMA_PATH, "utf8"))
             d.prepare("INSERT OR REPLACE INTO schema_meta (key, value)VALUES ('version', ?)").run(
@@ -84,7 +82,7 @@ export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed
           catch: (e) => new DbFailed({ op: sql.slice(0, 40), message: String(e) }),
         })
 
-      /** schema_meta の 1 行を読む。halt / quota:* の格納先。 */
+      /** schema_meta の1行を読む。halt / quota:* / cursor 類の置き場。 */
       const meta = (key: string) =>
         get("SELECT value FROM schema_meta WHERE key = ?", key).pipe(
           Effect.map((r) => (r?.value as string | undefined) ?? undefined),

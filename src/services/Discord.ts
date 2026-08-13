@@ -1,50 +1,31 @@
 /**
- * Discord。**ユーザーと行き来する唯一の経路。**
+ * Discord。ユーザーとの入出力はここだけ(docs/adr/0029)。
  *
- * 前は ntfy も並べていた。届く先は同じ端末で、届いた先で出来ることはこちらのほうが多い
- * (ntfy は短い本文と決め打ちのボタンだけ)。経路が2本あると、片方の位置がずれたことに
- * 誰も気付かないまま入力が落ちるので、1本に寄せた(docs/adr/0029)。
+ * gateway に接続しない。ボタン(interaction)は3秒以内の応答が要るので使えないが、
+ * 絵文字のリアクションなら後から数えられる。REST を30秒ごとに1回叩く(src/poll.ts)。
+ * オンライン表示は gateway でしか出ないので別プロセス(src/presence.ts / docs/adr/0027)。
  *
- * **常駐しない。** ボタン(interaction)は3秒以内に応答が要るので gateway 接続が要るが、
- * 絵文字のリアクションなら後から数えられる。返事の待ち時間は、常駐ではなく**読みに行く間隔**で決まる
- * — 30秒ごとに `inbox()` を1回叩くだけならモデルを呼ばず REST 1本で済む(src/poll.ts)。
- * 落ちたら黙って死ぬ常駐を1本増やさずに、待ち時間だけ 15分 から 30秒 に落ちる。
+ * 出す先は用途で分ける(`Desk`)。ミュートの単位が用途と一致する。チャンネルは id を env で
+ * 指す。名前で引くと改名した日に出なくなる(docs/adr/0015)。
  *
- * **これは受け取りについての決め。** オンライン表示のほうは gateway でしか出ないので、
- * 表示だけを持つ常駐が別に1本ある(`src/presence.ts` / docs/adr/0027)。
- * そちらはメッセージを1通も読まない — 死んでも失われるのは表示だけ。
+ * 返事は最後に話しかけられた場所へ返す。リアクションを押させるものはスレッドを立てる
+ * — スレッド外の自由文はどの1件への返事か判定できない(docs/adr/0016)。
  *
- * 出す先は用途で分ける(`Desk`)。**通知を切れる単位が用途と一致する**のが分ける理由で、
- * 全部を1本に流すと「読まなくていいもの」をミュートした瞬間に「返事が要るもの」も届かなくなる。
- * 分け先はチャンネル id を env で指す — 名前で引くと、名前を変えた日に黙って出なくなる(docs/adr/0015)。
- *
- * **人が居ない場所には出さない。** チャンネルを指していなければ DM に落ちるし、
- * 指す先をユーザー以外が読める場所にすると、DB の中身がそこに出る(囲いの中かは env を書く側の責任)。
- *
- * 返事は**訊かれた場所に返す**。ユーザーが DM に書いたのにチャンネルへ返すと、
- * 書いた側は返事が無かったことになる。最後に話しかけられた場所を覚えておいてそこへ出す。
- *
- * リアクションを押させるものは**スレッドを1本立てる**。リアクションは「どれに」までしか言えないので、
- * 「直す」の中身を受けるには自由文が要るが、スレッド外に書かれた自由文はどの1件への返事か分からない。
- * スレッドの中なら場所そのものが宛先になる(docs/adr/0016)。
- *
- * 設定が無ければ**黙って何もしない**。経路が塞がっていることで tick を止めない
- * — 届かないより、動かないほうが困る。
+ * token / owner id が無ければ何もせず undefined を返す。tick を止めない。
  */
 import * as Effect from "effect/Effect"
 import type { DbFailed } from "../core/errors.ts"
 import { Db } from "./Db.ts"
 
-/** 叩き先。検査のときだけ差し替える — 本物に出すとユーザーの DM が試し書きで埋まる。 */
+/** API の base URL。テストだけ差し替える。 */
 const api = (): string => process.env.OPEN_ZERO_DISCORD_API ?? "https://discord.com/api/v10"
 
 /** 1通の上限。Discord は 2000 字で弾くので、超えるぶんは分けて出す。 */
 const LIMIT = 2000
 
 /**
- * 1通に入れる行数の上限。**字数だけで切ると縦に長いものが畳まれる。**
- * Discord のクライアントは高いメッセージを途中で閉じて「続きを表示」にするので、
- * 2000字に収まっていても読む側の手数が1回増える。
+ * 1通に入れる行数の上限。Discord のクライアントは縦に長いメッセージを途中で閉じて
+ * 「続きを表示」にするので、2000字に収まっていても行数で切る。
  */
 const LINES = 17
 
@@ -56,32 +37,23 @@ export interface Tap {
 }
 
 /**
- * 出す先の種類。**チャンネルそのものではなく用途を渡す** — 呼ぶ側は id を知らないでよい。
+ * 出す先の種類。呼ぶ側はチャンネル id を知らなくてよい。
  *
- * `talk` は会話(訊かれたら返す)。`draft` は名前が出る文で、リアクションを押させる場所。
- * `log` は進み具合(docs/adr/0030)。**返事を求めない** — 用があるものは `talk` へ出す。
- *
- * `talk` と `draft` は指す先が無ければ DM に落ちるが、**`log` は落ちない**。
- * 1回動くたびに1行出るものなので、DM に落ちると会話がそれで埋まる。
- * 指していなければ出さない — 見たい人がチャンネルを1つ作って id を入れる、という形。
+ * `talk` は会話、`draft` は外に出す文(リアクションを押させる)、`log` は進み具合
+ * (docs/adr/0030)。`talk` と `draft` は指す先が無ければ DM に落ちるが、`log` は落ちない
+ * — 1回動くたびに1行出るので、DM に混ぜると会話が埋まる。
  */
 export type Desk = "talk" | "draft" | "log"
 
 export interface Post {
   readonly text: string
-  /** 付けるリアクション。先に自分で付けておく — 押す側が絵文字を探さずに済む。 */
+  /** 付けるリアクション。出した直後に自分で付ける。 */
   readonly taps?: readonly Tap[]
-  /** 出す先。既定は会話。 */
+  /** 出す先。既定は `talk`。 */
   readonly to?: Desk
-  /**
-   * ユーザーを呼ぶ。**チャンネルをミュートしていても届く**ので、返事が要るものにだけ付ける。
-   * DM には付けない — 既に本人しか居ない場所で、呼びかけは字が増えるだけ。
-   */
+  /** メンションを付ける。ミュートしていても届くので、返事が要るものだけ。DM には付けない。 */
   readonly ping?: boolean
-  /**
-   * スレッドの名前。渡すと、出した1通からスレッドを立ててそこも聞きに行く。
-   * **この1件への返事を、場所で受け取るため** — スレッド外の自由文はどれへの返事か分からない。
-   */
+  /** スレッドの名前。渡すと出した1通からスレッドを立て、そこも読みに行く。 */
   readonly thread?: string
 }
 
@@ -92,21 +64,20 @@ export interface Inbound {
 }
 
 /**
- * 1回読んだぶんと、**まだ DB に書いていない既読の位置**。
+ * 1回読んだぶんと、まだ DB に書いていない既読位置。
  *
- * 読むことと「読んだ」と記録することを分けてあるのは、記録する前に位置が進むと、
- * 記録が落ちた回のぶんが二度と来ないから。Discord は `after` ではなく id の比較で絞るので、
- * 位置が進んだメッセージはチャンネルに残っていても拾われない。**消えたことも残らない。**
- * 後から進めるなら、最悪でも同じものを二度読むだけで済む(docs/adr/0029)。
+ * 読むことと記録することを分けてあるのは、記録前に cursor が進むと、記録が落ちた回のぶんが
+ * 二度と読まれないから。絞り込みは id の比較なので、cursor の向こう側はチャンネルに残って
+ * いても拾えない(docs/adr/0029)。
  */
 export interface Batch {
-  /** 届いていた順に並べたもの。 */
+  /** 届いた順に並べたもの。 */
   readonly items: readonly Inbound[]
-  /** 場所ごとの新しい位置。`seen` を呼ぶまで DB には入らない。 */
+  /** チャンネルごとの新しい cursor。`seen` を呼ぶまで DB には入らない。 */
   readonly marks: Readonly<Record<string, string>>
   /** 押されたぶんを落とした後の、リアクション待ちの一覧。 */
   readonly taps: Readonly<Record<string, Record<string, string>>>
-  /** 最後に自由文が来た場所。返事はここへ出す。来ていなければ undefined。 */
+  /** 最後に自由文が来たチャンネル。返事はここへ出す。 */
   readonly heard?: string
 }
 
@@ -128,13 +99,12 @@ const fixedChannel = (to: Desk): string | undefined => {
 /** 待っているリアクション。`{ メッセージid: { 絵文字: 返る文 } }` を schema_meta に置く。 */
 type Pending = Record<string, Record<string, string>>
 
-/** 覚えておく待ちの数。押されないまま溜まった古いものは落とす — 返事が来ないものは流れたもの。 */
+/** 覚えておくリアクション待ちの数。押されないまま溜まった古いものから落とす。 */
 const MAX_PENDING = 20
 
 /**
- * 聞き続けるスレッドの数。**押された時点では閉じない** — 「直す」を押した人は、その後に
- * 何を直すかを書く。決着で閉じると、その自由文の行き先が無くなる。
- * 古いものから落ちる。1つ増えるごとに、poll が30秒ごとに叩く先が1つ増える。
+ * 読み続けるスレッドの数。リアクションが押されても閉じない — 「直す」を押した後に何を直すかが
+ * 書かれる。古いものから落ちる。1つ増えるごとに poll が30秒ごとに読む先が1つ増える。
  */
 const MAX_THREADS = 3
 
@@ -155,7 +125,7 @@ interface RawMessage {
 /** snowflake は数として単調増加する。文字列比較では桁が変わったときに壊れる。 */
 const newer = (a: string, b: string): boolean => BigInt(a) > BigInt(b)
 
-/** 字数で切る位置。行の途中で切らない — 切れ目が無ければ諦めて長さで切る。 */
+/** 字数で切る位置。改行で切る。後半に改行が無ければ LIMIT で切る。 */
 const charCut = (s: string): number => {
   if (s.length <= LIMIT) return s.length
   const nl = s.lastIndexOf("\n", LIMIT)
@@ -173,7 +143,7 @@ const lineCut = (s: string): number => {
   return at
 }
 
-/** 字数と行数の**先に来たほう**で切る。どちらか片方だけだと、もう片方で畳まれる。 */
+/** 字数と行数の、先に来たほうで切る。 */
 const chunks = (text: string): string[] => {
   const out: string[] = []
   let rest = text
@@ -245,11 +215,9 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       })
 
     /**
-     * 出す先を決める。**最後に話しかけられた場所が最優先** — 返事は訊かれた場所に返す。
-     * リアクションを押させるものは、指してあれば専用の場所へ出す(ミュートの単位を会話と分けるため)。
-     *
-     * `log` だけは**指してある場所にしか出さない**。落とす先を持たせると、進み具合の1行が
-     * 会話や DM に混ざる — 混ざった瞬間に、その場所は読み飛ばす場所になる(docs/adr/0030)。
+     * 出す先を決める。`talk` は最後に話しかけられたチャンネルが最優先。
+     * `log` は指してあるチャンネルにしか出さない — 落とす先を持たせると進み具合の1行が
+     * 会話や DM に混ざる(docs/adr/0030)。
      */
     const channel = (to: Desk = "talk"): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
@@ -267,18 +235,17 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         return yield* dm()
       })
 
-    /** リアクションを1つ付ける。**押す側が絵文字を探さずに済むように、出した直後に自分で置く。** */
+    /** リアクションを1つ付ける。押す側が絵文字を探さずに済むよう、出した直後に自分で置く。 */
     const mark = (ch: string, messageId: string, emoji: string): Effect.Effect<void> =>
       call(`/channels/${ch}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`, {
         method: "PUT",
       }).pipe(Effect.ignore)
 
     /**
-     * スレッドを1本立てる。**返事の宛先を場所で持つため。**
-     * スレッドの中の発言は `channel_id` がそのまま元の1通を指すので、どれへの返事かを当てずに済む。
+     * スレッドを1本立てる。スレッド内の発言は `channel_id` が元の1通を指すので、宛先が確定する。
      *
-     * 生やした直後に既読位置を起点へ置く。置かないと「位置を持たない場所」の規則に当たって、
-     * **ユーザーがスレッドに書いた最初の1通が、取り込まれないまま位置だけ進む**(docs/adr/0015 の影響)。
+     * 立てた直後に cursor を起点へ置く。置かないと「cursor を持たないチャンネル」の扱いになり、
+     * 最初の1通が取り込まれないまま cursor だけ進む(docs/adr/0015)。
      */
     const branch = (ch: string, messageId: string, name: string): Effect.Effect<void, DbFailed> =>
       Effect.gen(function* () {
@@ -297,10 +264,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         yield* db.setMeta("discord:threads", JSON.stringify([...open, made].slice(-MAX_THREADS)))
       })
 
-    /**
-     * 1通出す。**失敗しても例外にしない** — 送れたらメッセージ id、駄目なら undefined。
-     * リアクションは自分で先に付ける。押す側が絵文字を選ぶ手間を消すため。
-     */
+    /** 1通出す。失敗しても例外にしない。送れたらメッセージ id、駄目なら undefined。 */
     const post = (p: Post): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
         const ch = yield* channel(p.to)
@@ -320,7 +284,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
           )
         }
         if (!last) return last
-        // スレッドはリアクションより先に。リアクションを付けてから落ちても、返事の行き先だけは立っている。
+        // スレッドをリアクションより先に立てる。途中で落ちても返事の宛先は残る。
         if (p.thread) yield* branch(ch, last, p.thread)
         if (!p.taps?.length) return last
         for (const t of p.taps) yield* mark(ch, last, t.emoji)
@@ -331,17 +295,12 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         return last
       })
 
-    /**
-     * 読みに行く場所。**出す先を全部聞く** — 出した場所に返事が来るし、
-     * DM は出し先をチャンネルに移した後も残る(ユーザーがそちらに書いたら黙って落ちる、が起きない)。
-     * 立てたスレッドも聞く。スレッドは自分で出した1件に紐づくので、そこに他人は書けない。
-     */
+    /** 読みに行くチャンネル。出す先すべてと DM、立てたスレッド。 */
     const listening = (): Effect.Effect<readonly string[], DbFailed> =>
       Effect.gen(function* () {
         if (!token()) return []
         const out = new Set<string>()
-        // **出す先は全部聞く。log も。** こちらから返事を求めない場所でも、ユーザーが
-        // そこに書くことはある。聞かない場所に位置だけ進む形にすると、書いたものが黙って消える。
+        // log も読む。返事を求めないチャンネルでもユーザーが書くことはある。
         for (const to of ["talk", "draft", "log"] as const) {
           const fixed = fixedChannel(to)
           if (fixed) out.add(fixed)
@@ -353,8 +312,8 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       })
 
     /**
-     * その場所の既読位置。持っていない場所は**取り込まずに位置だけ進める**(初回の規則)。
-     * DM だけは場所ごとに分ける前の位置を引き継ぐ — 引き継がないと、DM の過去ログを一度だけ全部読む。
+     * そのチャンネルの cursor。持っていなければ undefined(取り込まずに cursor だけ進める)。
+     * DM はチャンネルごとに分ける前の cursor を引き継ぐ。引き継がないと過去ログを一度全部読む。
      */
     const cursorOf = (ch: string): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
@@ -364,17 +323,16 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       })
 
     /**
-     * 返ってきたものを読む。**リアクションと自由文を同じ形で返す** — 呼ぶ側はどちらで来たかを気にしない。
-     * 一覧を1回引くだけで両方見る(リアクションは古いメッセージに後から付くので、`after` では拾えない)。
+     * 返ってきたものを読む。リアクションと自由文を同じ形で返す。一覧を1回引いて両方見る
+     * (リアクションは古いメッセージに後から付くので `after` では拾えない)。
      *
-     * **位置は進めない。** 進めるのは `seen` で、呼ぶのは読んだものを記録し終えた側。
-     * ここで進めると、記録が落ちた回のぶんが二度と来ない(`Batch` の説明)。
+     * cursor は進めない。進めるのは `seen`。
      *
-     * 位置を持っていない初回は**自由文を取り込まずに位置だけ返す** — DM には過去の会話が
-     * 残っているので、位置なしで引くと去年の一言が今日の指示として流れ込む。
-     * リアクションはこの制限を受けない(自分が出した通知に対してしか登録されていない)。
+     * cursor を持たないチャンネルは自由文を取り込まず cursor だけ返す。DM には過去の会話が
+     * 残っていて、cursor なしで引くと去年の発言が今日の入力になる。リアクションは対象外
+     * (自分が出したメッセージにしか登録されていない)。
      *
-     * 取れなければ空 — 「届いていない」と「Discord が落ちている」を呼ぶ側に区別させない。
+     * 取れなければ空を返す。呼ぶ側は「届いていない」と「Discord が落ちている」を区別しない。
      */
     const inbox = (): Effect.Effect<Batch, DbFailed> =>
       Effect.gen(function* () {
@@ -383,6 +341,10 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         const out: Inbound[] = []
         const marks: Record<string, string> = {}
         let heard: string | undefined
+        // 比較用に、`heard` を決めたときのメッセージ id を別に持つ。`heard` はチャンネル id なので、
+        // それと m.id を比べると常に m.id のほうが新しくなる(チャンネルはその中のどの
+        // メッセージよりも先に作られる)。
+        let heardAt: string | undefined
 
         // GET だけ並列にする。逐次だとチャンネル数ぶん往復が加算される(3 本で実測 1082〜2349ms、
         // 並列で 325〜932ms)。下のループは直列のまま — `pending` の消し込み、`heard`、`marks` の
@@ -401,13 +363,16 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
 
           const cursor = yield* cursorOf(ch)
 
-          // 古い順に見る。API は新しい順で返すので、そのまま流すと DB の並びが逆になる。
+          // 古い順に見る。API は新しい順で返す。
           for (const m of [...msgs].reverse()) {
             if (cursor && m.author.id === owner && m.content.trim() !== "" && newer(m.id, cursor)) {
               out.push({ id: m.id, text: m.content })
-              // **返す先はここ。** 一番新しい自由文の場所を覚える(リアクションは場所を動かさない —
-              // 押すのは前に出したものへの返事で、話しかけられたのとは違う)。
-              if (heard === undefined || newer(m.id, heard)) heard = ch
+              // 一番新しい自由文のチャンネルを覚える。リアクションでは動かさない
+              // (押すのは前に出したものへの返事で、話しかけられたのとは違う)。
+              if (heardAt === undefined || newer(m.id, heardAt)) {
+                heard = ch
+                heardAt = m.id
+              }
             }
             const waiting = pending[m.id]
             if (!waiting) continue
@@ -426,7 +391,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         }
 
         return {
-          // 場所をまたいでも届いた順に並べる。snowflake は時刻で単調増加するので id で並べ直せる。
+          // チャンネルをまたいでも届いた順に並べる。snowflake は時刻で単調増加する。
           items: out.sort((a, b) => (newer(a.id.split(":")[0] ?? "0", b.id.split(":")[0] ?? "0") ? 1 : -1)),
           marks,
           taps: pending,
@@ -435,10 +400,8 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       })
 
     /**
-     * 読んだものを記録し終えたことを DB に書く。**`inbox` で読んだ後に、呼ぶ側が呼ぶ。**
-     *
-     * ここを呼ばずに終えた回は、次に同じものをもう一度読む。二度覚えるのは直せるが、
-     * 位置の向こう側に取り残されたものは取りに行く手立てが無い(docs/adr/0029)。
+     * cursor を DB に書く。`inbox` の返り値を記録し終えた側が呼ぶ。
+     * 呼ばずに終えた回は次に同じものをもう一度読む(docs/adr/0029)。
      */
     const seen = (b: Batch): Effect.Effect<void, DbFailed> =>
       Effect.gen(function* () {
@@ -447,12 +410,12 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         yield* db.setMeta("discord:taps", JSON.stringify(b.taps))
       })
 
-    /** 出せるか。人に「Discord には出ない」と伝えるためだけに使う。 */
+    /** 出せるか。CLI の表示にだけ使う。 */
     const configured = (): boolean => token() !== undefined && ownerId() !== undefined
 
     /**
-     * いまどこに出て、どこを聞いているか。**人が読むためだけ**に使う。
-     * 出し先は状態(最後に話しかけられた場所)で動くので、env を読むだけでは分からない。
+     * いまどのチャンネルに出るか。CLI の表示にだけ使う。
+     * `talk` は最後に話しかけられたチャンネルで動くので、env を読むだけでは分からない。
      */
     const where = (): Effect.Effect<{ talk?: string; draft?: string; log?: string; dm?: string }, DbFailed> =>
       Effect.gen(function* () {
