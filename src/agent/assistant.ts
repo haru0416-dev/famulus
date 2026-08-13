@@ -1025,6 +1025,14 @@ function buildTools(state: TurnState) {
 export interface Turn {
   readonly text: string
   readonly steps: number
+  /**
+   * **実際に呼ばれた道具の名前**を、呼ばれた順に。同じものが続けば続いた回数だけ並ぶ。
+   *
+   * 締めの文(`text`)は自分で書いた報告なので、やったと書いてあることと
+   * やったことがずれる。ずれても外から分かるように、呼び出しの跡を別に残す。
+   * 切られた回も、そこまでに呼ばれたぶんは残る(docs/adr/0030)。
+   */
+  readonly tools: readonly string[]
   /** 止まった理由。最後まで書けていれば undefined。 */
   readonly cutOff?: string
 }
@@ -1102,21 +1110,24 @@ export function createAssistant(opts: AssistantOptions = {}) {
       // 途中の step で書かれた文を拾っておく。切られたときに返すのはこれ。
       let partial = ""
       let steps = 0
+      // **呼ばれた道具は step ごとに積む。** 最後に res から取ると、切られた回のぶんが残らない。
+      const tools: string[] = []
       try {
         const res = await agent.generate({
           messages: sent,
           ...(o.signal ? { abortSignal: o.signal } : {}),
           onStepFinish: (s) => {
             steps += 1
+            for (const c of s.toolCalls ?? []) tools.push(c.toolName)
             if (s.text.trim()) partial = s.text
           },
         })
         history = [...sent, ...res.response.messages]
-        return { text: res.text, steps: res.steps.length }
+        return { text: res.text, steps: res.steps.length, tools }
       } catch (e) {
         // **切られた回の途中経過は継がない。** 道具呼び出しに結果が付いていない列を次のターンへ
         // 渡すと、以後そのターンごと弾かれる。書けた文だけ返して、会話は前の回のまま置く。
-        return { text: partial, steps, cutOff: causeReason(e) }
+        return { text: partial, steps, tools, cutOff: causeReason(e) }
       }
     },
   }

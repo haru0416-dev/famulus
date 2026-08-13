@@ -29,6 +29,7 @@ import { causeReason, describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
+import { oneLine, readJournal } from "./journal.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
 import { Attention, type Digest, type ObservedEvent } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
@@ -381,7 +382,9 @@ async function tick(): Promise<string> {
         }),
       )
     }
+    const began = Date.now()
     const turn = await assistant.respond(prompt, { signal: deadline })
+    const ms = Date.now() - began
     // **時間切れと、それ以外の止まり方を混ぜない。** 混ぜると「420秒で切られた」だけが DB に残り、
     // 自走枠の使い切りもモデル側の落ちも同じ顔になる。次の回で何を直せばいいか読めなくなる。
     const cutOff = turn.cutOff
@@ -424,7 +427,20 @@ async function tick(): Promise<string> {
         yield* mem.remember({
           kind: "observe",
           source: "system",
-          content: { tick: d.at, reasons: d.reasons, said: text, ...(kept ? { kept } : {}) },
+          // **やったことと、やったと書いたことを別の欄に置く。** `said` は自分で書いた報告なので、
+          // それだけでは外から進み具合を確かめられない(docs/adr/0030)。`tools` は実際に呼ばれた
+          // 道具の並び、`steps` は手数、`ms` は掛かった時間 — どれも呼び出し側で数えた値。
+          // 切られた回は `cutOff` も残す。**止まったことが `said` に書かれるとは限らない。**
+          content: {
+            tick: d.at,
+            reasons: d.reasons,
+            said: text,
+            tools: turn.tools,
+            steps: turn.steps,
+            ms,
+            ...(cutOff ? { cutOff } : {}),
+            ...(kept ? { kept } : {}),
+          },
           // 索引に入れるのは**言ったことだけ**。`deriveText` に任せると封筒(起動時刻・起きた理由)まで
           // 平らに潰して混ぜてしまい、「ユーザーの入力が未読」のような定型句が毎回の記録に紛れて、
           // 何を検索してもそれが当たるようになる。封筒は DB に残す、索引には入れない。
@@ -445,6 +461,15 @@ async function tick(): Promise<string> {
           reasonKey: d.reasonKey,
           upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
         })
+        // ── 進み具合を1行だけ出す(docs/adr/0030)。**呼びかけない。**
+        // 動くたびに出るものなので、名指しを付けると通知が鳴り続けて、鳴っても見なくなる。
+        // 出す先が指してなければ何も起きない(`Desk` の "log" は DM に落ちない)。
+        //
+        // **書いた記録をそのまま読み直して出す。** ここで数え直すと、画面で見る値と
+        // `oz journal` の値が別々に育って、食い違ったときにどちらが本当か決められなくなる。
+        // 最後に置いてあるのは、外へ出すのに失敗しても commit まで済んでいるようにするため。
+        const [entry] = yield* readJournal(1)
+        if (entry) yield* discord.post({ text: oneLine(entry), to: "log" })
       }),
     )
     if (cutOff) return `止まった(${cutOff})— 走った跡は DB に残っている`

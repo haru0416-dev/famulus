@@ -59,8 +59,13 @@ export interface Tap {
  * 出す先の種類。**チャンネルそのものではなく用途を渡す** — 呼ぶ側は id を知らないでよい。
  *
  * `talk` は会話(訊かれたら返す)。`draft` は名前が出る文で、リアクションを押させる場所。
+ * `log` は進み具合(docs/adr/0030)。**返事を求めない** — 用があるものは `talk` へ出す。
+ *
+ * `talk` と `draft` は指す先が無ければ DM に落ちるが、**`log` は落ちない**。
+ * 1回動くたびに1行出るものなので、DM に落ちると会話がそれで埋まる。
+ * 指していなければ出さない — 見たい人がチャンネルを1つ作って id を入れる、という形。
  */
-export type Desk = "talk" | "draft"
+export type Desk = "talk" | "draft" | "log"
 
 export interface Post {
   readonly text: string
@@ -109,8 +114,14 @@ const token = (): string | undefined => process.env.OPEN_ZERO_DISCORD_TOKEN
 const ownerId = (): string | undefined => process.env.OPEN_ZERO_DISCORD_OWNER_ID
 
 /** 用途ごとの出し先。空文字は「指していない」と読む(env を消さずに空にすることがある)。 */
+const ENV_CHANNEL: Readonly<Record<Desk, string>> = {
+  talk: "OPEN_ZERO_DISCORD_CH_TALK",
+  draft: "OPEN_ZERO_DISCORD_CH_DRAFT",
+  log: "OPEN_ZERO_DISCORD_CH_LOG",
+}
+
 const fixedChannel = (to: Desk): string | undefined => {
-  const raw = to === "draft" ? process.env.OPEN_ZERO_DISCORD_CH_DRAFT : process.env.OPEN_ZERO_DISCORD_CH_TALK
+  const raw = process.env[ENV_CHANNEL[to]]
   return raw === undefined || raw.trim() === "" ? undefined : raw.trim()
 }
 
@@ -222,10 +233,14 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
     /**
      * 出す先を決める。**最後に話しかけられた場所が最優先** — 返事は訊かれた場所に返す。
      * リアクションを押させるものは、指してあれば専用の場所へ出す(ミュートの単位を会話と分けるため)。
+     *
+     * `log` だけは**指してある場所にしか出さない**。落とす先を持たせると、進み具合の1行が
+     * 会話や DM に混ざる — 混ざった瞬間に、その場所は読み飛ばす場所になる(docs/adr/0030)。
      */
     const channel = (to: Desk = "talk"): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
         if (!token()) return undefined
+        if (to === "log") return fixedChannel("log")
         if (to === "draft") {
           const fixed = fixedChannel("draft") ?? fixedChannel("talk")
           if (fixed) return fixed
@@ -311,7 +326,9 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       Effect.gen(function* () {
         if (!token()) return []
         const out = new Set<string>()
-        for (const to of ["talk", "draft"] as const) {
+        // **出す先は全部聞く。log も。** こちらから返事を求めない場所でも、ユーザーが
+        // そこに書くことはある。聞かない場所に位置だけ進む形にすると、書いたものが黙って消える。
+        for (const to of ["talk", "draft", "log"] as const) {
           const fixed = fixedChannel(to)
           if (fixed) out.add(fixed)
         }
@@ -419,14 +436,16 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
      * いまどこに出て、どこを聞いているか。**人が読むためだけ**に使う。
      * 出し先は状態(最後に話しかけられた場所)で動くので、env を読むだけでは分からない。
      */
-    const where = (): Effect.Effect<{ talk?: string; draft?: string; dm?: string }, DbFailed> =>
+    const where = (): Effect.Effect<{ talk?: string; draft?: string; log?: string; dm?: string }, DbFailed> =>
       Effect.gen(function* () {
         const talk = yield* channel("talk")
         const draft = yield* channel("draft")
+        const lg = yield* channel("log")
         const d = yield* dm()
         return {
           ...(talk ? { talk } : {}),
           ...(draft ? { draft } : {}),
+          ...(lg ? { log: lg } : {}),
           ...(d ? { dm: d } : {}),
         }
       })

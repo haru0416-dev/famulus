@@ -10,6 +10,7 @@
  *   oz halt <理由>         … 全停止。自動では明けない
  *   oz resume              … 停止解除
  *   oz attention           …tick が今なにを見ているか(watch・問い・次に起きる条件)
+ *   oz journal [n]         …tick が実際に何をしたか(呼んだ道具・残った行・焼いた量)
  *   oz answer <id> <答え>  … 問いに答えて閉じる
  *   oz drop <id> <理由>    … 追わないと決めた問いを畳む(答えずに閉じる)
  *   oz watch <やること>    …watch に置く(既定は famulus = tick の起床理由になる)
@@ -37,6 +38,7 @@ import { describeRefusal } from "./core/errors.ts"
 import { selfdev } from "./core/selfdev.ts"
 import { dayRange, localStamp, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces } from "./core/workspaces.ts"
+import { readJournal, renderJournal } from "./journal.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "./model/claude-cli.ts"
 import { isRefusal, runtime } from "./runtime.ts"
 import { Attention, type NextMove, STALE_BELIEF_DAYS } from "./services/Attention.ts"
@@ -64,6 +66,8 @@ const USAGE = `oz — open-zero の承認 CLI
   oz halt <理由>           全停止(自動解除しない)
   oz resume                停止解除
   oz attention             tick の視野(watch・未解決の問い・次に起きる条件)
+  oz journal [n]           tick の実働(既定 10 回)。呼んだ道具・残った行数・実費を、
+                           自分で書いた報告文と分けて出す
   oz answer <id> <答え>    問いに答えて閉じる(ユーザーの答えは確認済みとして入る)
   oz drop <id> <理由>      問いを答えないまま取り下げる。理由は必須
   oz watch <やること>      watch に置く(既定は自分の番。--human で人待ち)
@@ -228,6 +232,11 @@ const program = (argv: readonly string[]) =>
           discord.configured()
             ? `Discord: 会話 ${place(dc.talk, dc.dm)} / 下書き ${place(dc.draft, dc.dm)} — リアクションも自由文も受けられる`
             : "Discord: 宛先が無い(.env の OPEN_ZERO_DISCORD_TOKEN が空)",
+          // **進み具合は落とす先を持たない**(docs/adr/0030)。指していなければ出ないので、
+          // ここで言わないと「動いていないのか、出す先が無いのか」が分からない。
+          dc.log
+            ? `進み具合: チャンネル ${dc.log} に1回1行(呼びかけなし)`
+            : "進み具合: 出さない(.env の OPEN_ZERO_DISCORD_CH_LOG が空)— oz journal で見る",
         ].join("\n")
       }
 
@@ -259,6 +268,16 @@ const program = (argv: readonly string[]) =>
             ? ["  なし"]
             : d.staleBeliefs.map((b) => `  ${b.slot} = ${b.value}(${localStamp(b.valid_from, false)} から)`)),
         ].join("\n")
+      }
+
+      /**
+       * **`attention` が「これから何を見るか」で、こちらは「実際に何をしたか」。**
+       * 自分で書いた報告(`言った`)だけでは進み具合を確かめられないので、
+       * 呼んだ道具の並びと、窓の中に増えた行数を別の欄に置く(docs/adr/0030)。
+       */
+      case "journal": {
+        const n = Number(rest.find((a) => /^\d+$/.test(a)) ?? 10)
+        return renderJournal(yield* readJournal(n))
       }
 
       /**

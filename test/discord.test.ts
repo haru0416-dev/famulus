@@ -129,9 +129,10 @@ const configured = Effect.gen(function* () {
 })
 
 /** 設定を立てる。値を消しっぱなしにすると、後続のテストが本物の Discord を叩きに行く。 */
-const wire = (url: string | undefined, ch?: { talk?: string; draft?: string }) => {
+const wire = (url: string | undefined, ch?: { talk?: string; draft?: string; log?: string }) => {
   delete process.env.OPEN_ZERO_DISCORD_CH_TALK
   delete process.env.OPEN_ZERO_DISCORD_CH_DRAFT
+  delete process.env.OPEN_ZERO_DISCORD_CH_LOG
   if (url === undefined) {
     process.env.OPEN_ZERO_DISCORD_TOKEN = ""
     delete process.env.OPEN_ZERO_DISCORD_TOKEN
@@ -144,6 +145,7 @@ const wire = (url: string | undefined, ch?: { talk?: string; draft?: string }) =
   process.env.OPEN_ZERO_DISCORD_API = url
   if (ch?.talk) process.env.OPEN_ZERO_DISCORD_CH_TALK = ch.talk
   if (ch?.draft) process.env.OPEN_ZERO_DISCORD_CH_DRAFT = ch.draft
+  if (ch?.log) process.env.OPEN_ZERO_DISCORD_CH_LOG = ch.log
 }
 
 test("トークンが無ければ何もしない — 叩かないし落ちない", async () => {
@@ -516,6 +518,65 @@ test("聞き続けるスレッドには上限がある — 古いものから落
       // 落ちたスレッドに書いても拾わない(叩きに行っていない)。
       dc.at(String(ids[0])).unshift({ id: "910", content: "古いスレッドへの返事", author: { id: OWNER } })
       assert.deepEqual(await h.run(inbox), [])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+const LOG = "7003"
+
+/**
+ * 進み具合は1回動くたびに1行出る。**落とす先を持たせると、会話か DM がそれで埋まる**
+ * — 埋まった場所は読み飛ばす場所になるので、指していない間は出さない(docs/adr/0030)。
+ */
+test("進み具合は指した場所にしか出ない — 指していなければ DM にも会話にも落ちない", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      assert.equal(await h.run(post({ text: "3手 41秒", to: "log" })), undefined)
+      assert.deepEqual(
+        dc.hits.filter((x) => x.method === "POST" && x.path.endsWith("/messages")),
+        [],
+      )
+      // 会話は指したままなので、そちらは出る(log を止めても他の経路は塞がない)。
+      await h.run(post({ text: "返事" }))
+      assert.equal(dc.at(TALK)[0]?.content, "返事")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("進み具合の場所を指すとそこへ出る — 呼びかけは付けない", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK, log: LOG })
+  try {
+    await withHarness(async (h) => {
+      await h.run(post({ text: "3手 41秒", to: "log" }))
+      assert.equal(dc.at(LOG)[0]?.content, "3手 41秒")
+      // 会話には出ない。**混ざった瞬間に、返事の要るものが流れる。**
+      assert.deepEqual(dc.at(TALK), [])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+/** こちらから返事を求めない場所でも、ユーザーは書く。聞かない場所は黙って消える場所になる。 */
+test("進み具合の場所に書かれたものも拾う", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK, log: LOG })
+  try {
+    await withHarness(async (h) => {
+      dc.at(LOG).unshift({ id: "400", content: "位置合わせ", author: { id: OWNER } })
+      assert.deepEqual(await h.run(inbox), [])
+      dc.at(LOG).unshift({ id: "401", content: "この回のこれ何やってるの", author: { id: OWNER } })
+      assert.deepEqual(await h.run(inbox), [{ id: "401", text: "この回のこれ何やってるの" }])
     })
   } finally {
     wire(undefined)

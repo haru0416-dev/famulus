@@ -1,0 +1,270 @@
+/**
+ * 1回ごとの進み具合を、外から確かめられる形にする(docs/adr/0030)。
+ *
+ * tick は自分で起きて自分で終わる。人が見ているのは締めの1文だけで、その文は**自分で書いた報告**
+ * なので、やったと書いてあることとやったことがずれても外からは分からない。
+ * ここが読むのは3つの別々の記録で、どれも報告文とは独立に残っている:
+ *
+ *   1. **呼ばれた道具の並び**(`content.tools`)…AI SDK の `onStepFinish` が数えた実際の呼び出し
+ *   2. **その回の窓に残ったもの**…提案・下書き・通知・コンテナ実行・確定した事実の行数
+ *   3. **焼いた量**(`ledger`)…run 数と実費
+ *
+ * 窓は `[content.tick, event.at]`。前者は digest を取った時刻、後者は記録を書いた時刻で、
+ * その間がこの回の実働そのもの。**窓の外で起きたことは数えない** — 数えると、
+ * 15分前の poll が入れたユーザー発言まで「この回の成果」として並ぶ。
+ *
+ * 1と2はずれてよい。**ずれ方が読めることが目的**で、一致させることではない
+ * (道具を呼んでも中身が残らない回はある。propose せずに終えた回、shell が失敗した回)。
+ */
+import { Effect } from "effect"
+import type { DbFailed } from "./core/errors.ts"
+import { localStamp } from "./core/time.ts"
+import { Db } from "./services/Db.ts"
+
+/** 1回ぶん。**`said` と、それ以外を混ぜない。** */
+export interface Entry {
+  /** digest を取った時刻(この回の起点)。 */
+  readonly at: string
+  /** 起きた理由。digest が付けた文言そのまま。 */
+  readonly reasons: readonly string[]
+  /** 呼ばれた道具の並び。**古い回は記録が無い**ので undefined。 */
+  readonly tools?: readonly string[]
+  readonly steps?: number
+  readonly ms?: number
+  /** 止まった理由。最後まで書けていれば undefined。 */
+  readonly cutOff?: string
+  /** 自分で書いた締めの文。**これは報告であって記録ではない。** */
+  readonly said: string
+  /** この回の窓に残ったもの。数えたのは行数で、報告文とは関係が無い。 */
+  readonly left: Left
+  /** 焼いた量。 */
+  readonly runs: number
+  /**
+   * 出したトークン。**実費より先に出す。**
+   *
+   * いま走っているモデルは定額の枠で、`usd` は 0 のまま入る(単価表に載らないので `unpriced` も
+   * 立たない)。0 だけを見せると、10手動いた回と1手で終えた回が同じ顔になる。
+   * 出力側だけを取るのは、入力がキャッシュの当たり外れで桁ごと動くため — 回どうしを比べられない。
+   */
+  readonly outTok: number
+  readonly usd: number
+}
+
+/** 窓の中に増えた行。**0 は 0 と書く** — 「何も残らなかった回」が読めるのがこの欄の値打ち。 */
+export interface Left {
+  readonly proposals: number
+  readonly drafts: number
+  readonly tells: number
+  readonly shells: number
+  readonly beliefs: number
+  readonly watchRuns: number
+}
+
+/** content から取り出す用。DB の JSON は何でも入りうるので、形が違えば黙って落とす。 */
+const arr = (v: unknown): string[] | undefined =>
+  Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined)
+const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined)
+
+/**
+ * 直近 n 回。**実際に動いた回だけ**返す(idle の回は tick の記録を書かない)。
+ *
+ * 窓ごとに数える問い合わせを投げるので、n を大きくすると SQL の本数がそのぶん増える。
+ * 読むのは人なので、既定は画面に収まる程度にしてある。
+ */
+export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, Db> =>
+  Effect.gen(function* () {
+    const db = yield* Db
+    const rows = yield* db.all(
+      `SELECT at, content FROM events
+        WHERE kind = 'observe' AND source = 'system'
+          AND content IS NOT NULL AND json_extract(content, '$.tick')IS NOT NULL
+        ORDER BY at DESC LIMIT ?`,
+      n,
+    )
+
+    const out: Entry[] = []
+    for (const row of rows) {
+      const wroteAt = String(row.at)
+      let c: Record<string, unknown>
+      try {
+        c = JSON.parse(String(row.content)) as Record<string, unknown>
+      } catch {
+        continue
+      }
+      const at = str(c.tick) ?? wroteAt
+      // 窓の終わりは記録を書いた時刻。**書く前に出したものまで入れる**ため、
+      // 起点だけで切って「以降ぜんぶ」にはしない — 次の回のぶんが混ざる。
+      const left = yield* countLeft(at, wroteAt)
+      const burn = yield* db.get(
+        `SELECT COUNT(*)runs, COALESCE(SUM(usd), 0)usd, COALESCE(SUM(out_tok), 0)out_tok
+           FROM ledger WHERE at >= ?AND at <= ?`,
+        at,
+        wroteAt,
+      )
+      const tools = arr(c.tools)
+      const steps = num(c.steps)
+      const spent = num(c.ms)
+      const cutOff = str(c.cutOff)
+      out.push({
+        at,
+        reasons: arr(c.reasons) ?? [],
+        ...(tools ? { tools } : {}),
+        ...(steps === undefined ? {} : { steps }),
+        ...(spent === undefined ? {} : { ms: spent }),
+        ...(cutOff ? { cutOff } : {}),
+        said: str(c.said) ?? "",
+        left,
+        runs: Number(burn?.runs ?? 0),
+        outTok: Number(burn?.out_tok ?? 0),
+        usd: Number(burn?.usd ?? 0),
+      })
+    }
+    return out
+  })
+
+/**
+ * 窓の中に増えた行を数える。**tick の報告を読まずに数える**のがここの役目。
+ *
+ * `ran`(watch を回した記録)だけは events に残らず watchlist の1行を上書きするので、
+ * 後の回に上書きされたぶんは数から消える。**消えることを承知で数えている** —
+ * 呼んだかどうかは道具の並びに残っているので、そちらと突き合わせれば読める。
+ */
+const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed, Db> =>
+  Effect.gen(function* () {
+    const db = yield* Db
+    const ev = yield* db.get(
+      `SELECT
+         SUM(json_extract(content, '$.drafted')IS NOT NULL)drafts,
+         SUM(json_extract(content, '$.told')   IS NOT NULL)tells,
+         SUM(json_extract(content, '$.ran')    IS NOT NULL)shells
+       FROM events
+        WHERE source = 'system' AND kind = 'observe' AND content IS NOT NULL
+          AND at >= ?AND at <= ?`,
+      fromIso,
+      toIso,
+    )
+    const bl = yield* db.get(
+      "SELECT COUNT(*)n FROM events WHERE kind = 'belief' AND at >= ?AND at <= ?",
+      fromIso,
+      toIso,
+    )
+    const pr = yield* db.get(
+      "SELECT COUNT(*)n FROM proposals WHERE created_at >= ?AND created_at <= ?",
+      fromIso,
+      toIso,
+    )
+    const wr = yield* db.get(
+      "SELECT COUNT(*)n FROM watchlist WHERE last_run_at >= ?AND last_run_at <= ?",
+      fromIso,
+      toIso,
+    )
+    return {
+      proposals: Number(pr?.n ?? 0),
+      drafts: Number(ev?.drafts ?? 0),
+      tells: Number(ev?.tells ?? 0),
+      shells: Number(ev?.shells ?? 0),
+      beliefs: Number(bl?.n ?? 0),
+      watchRuns: Number(wr?.n ?? 0),
+    }
+  })
+
+/** `shell shell ran shell` → `shell×2 → ran → shell`。**並びは崩さない** — 何の後に何を呼んだかが読める。 */
+export const runs = (tools: readonly string[]): string =>
+  tools
+    .reduce<{ name: string; n: number }[]>((acc, t) => {
+      const last = acc.at(-1)
+      if (last?.name === t) last.n += 1
+      else acc.push({ name: t, n: 1 })
+      return acc
+    }, [])
+    .map((r) => (r.n > 1 ? `${r.name}×${r.n}` : r.name))
+    .join(" → ")
+
+/**
+ * 残ったものを言葉にする。**0 の欄は並べない。**
+ *
+ * 前は6つの数を 0 も含めて全部横に並べていた。数の列は読む側が目で走査することになり、
+ * 「この回は何も残らなかった」という一番読ませたい状態が、0 が6つ並んだ形でしか出なかった。
+ * ここでは**その状態だけを文にする** — 残ったものがあるときは、あるものだけを書く。
+ */
+const leftLine = (l: Left): string => {
+  const parts = [
+    [l.proposals, "提案", "件"],
+    [l.drafts, "下書き", "本"],
+    [l.tells, "通知", "件"],
+    [l.shells, "コンテナ実行", "回"],
+    [l.beliefs, "確定した事実", "件"],
+    [l.watchRuns, "watch を回した", "本"],
+  ] as const
+  const got = parts.filter(([n]) => n > 0).map(([n, name, unit]) => `${name} ${n}${unit}`)
+  return got.length === 0 ? "何も残らなかった" : got.join(" / ")
+}
+
+/** 桁が見えれば足りるので k で丸める。 */
+const tok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
+
+/** 秒だけだと 554 秒が長いのか短いのか読めない。1分を超えたら分に繰り上げる。 */
+const took = (ms: number): string => {
+  const s = Math.round(ms / 1000)
+  return s < 60 ? `${s}秒` : `${Math.floor(s / 60)}分${String(s % 60).padStart(2, "0")}秒`
+}
+
+/** 実働の数。**手数と時間は記録が無い回がある**(記録を足す前の回)ので、0 とは書かない。 */
+const workLine = (e: Entry): string =>
+  [
+    e.steps === undefined ? "手数の記録なし" : `${e.steps}手`,
+    ...(e.ms === undefined ? [] : [took(e.ms)]),
+    `${e.runs}run 出力${tok(e.outTok)}`,
+    // **$0 は書かない。** 定額の枠で走った回に「$0.000」と出すと、無料で済んだように読める。
+    ...(e.usd > 0 ? [`$${e.usd.toFixed(3)}`] : []),
+    ...(e.cutOff ? [`**止まった: ${e.cutOff}**`] : []),
+  ].join(" / ")
+
+/** 報告文を1行に畳む。**文の途中では切らない** — 途中で切れた文は言っていないことを言わせる。 */
+const saidLine = (said: string, max = 140): string => {
+  const flat = said.replace(/\s+/g, " ").trim()
+  if (flat === "") return "(何も書かなかった)"
+  if (flat.length <= max) return flat
+  const head = flat.slice(0, max)
+  const stop = Math.max(head.lastIndexOf("。"), head.lastIndexOf("、"))
+  return `${stop > max / 3 ? head.slice(0, stop + 1) : head}…`
+}
+
+/**
+ * 1回ぶんを畳む。Discord に出すのはこの形(docs/adr/0030)。
+ *
+ * **見出しに置くのは時刻と起きた理由だけ。** 数字を見出しに混ぜると、
+ * 一番よく読む「いつ・なぜ動いたか」がその中に埋もれる。
+ */
+export const oneLine = (e: Entry): string =>
+  [
+    `**${localStamp(e.at)}**  ${e.reasons.join(" / ") || "理由の記録なし"}`,
+    `　実働　${workLine(e)}`,
+    `　道具　${e.tools?.length ? runs(e.tools) : "記録なし"}`,
+    `　残った　${leftLine(e.left)}`,
+  ].join("\n")
+
+/**
+ * 人が読む形に。**自己申告(`言った`)を最後に置く。**
+ * 上に置くと、そこだけ読んで「やった」と受け取れてしまう — 数えた欄より先に来させない。
+ */
+export const renderJournal = (entries: readonly Entry[]): string => {
+  if (entries.length === 0) return "実働の記録がまだ無い(tick が一度も動いていないか、記録より前)"
+  const body = entries.map((e) =>
+    [
+      `── ${localStamp(e.at)} ${"─".repeat(20)}`,
+      `  起きた  ${e.reasons.join(" / ") || "理由の記録なし"}`,
+      `  実働    ${workLine(e).replace(/\*\*/g, "")}`,
+      `  道具    ${e.tools?.length ? runs(e.tools) : "記録なし(この回より前)"}`,
+      `  残った  ${leftLine(e.left)}`,
+      `  言った  ${saidLine(e.said)}`,
+    ].join("\n"),
+  )
+  return [
+    `直近 ${entries.length} 回の実働(新しい順)`,
+    "  道具 = 実際に呼ばれた並び / 残った = DB に増えた行 / 言った = 自分で書いた報告",
+    "",
+    body.join("\n\n"),
+  ].join("\n")
+}
