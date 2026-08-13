@@ -117,7 +117,6 @@ const idAndText = (rest: readonly string[]): { id: string; text: string } | null
 const NEXT_MOVE_FLAG: Readonly<Record<string, NextMove>> = {
   "--famulus": "famulus",
   "--human": "human",
-  "--counterparty": "counterparty",
 }
 
 /**

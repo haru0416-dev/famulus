@@ -98,8 +98,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS proposals (
   id             TEXT PRIMARY KEY,
-  kind           TEXT NOT NULL CHECK (kind IN
-                   ('reminder','research','plan','vault-update','outbound-draft','skill-promote','skill-retire')),
+  -- **1種だけ。** 前は7種あったが、作れるのは plan だけだった(docs/adr/0033)
+  kind           TEXT NOT NULL CHECK (kind = 'plan'),
   created_at     TEXT NOT NULL,                       -- IsoUtc
   -- 承認カード面
   summary        TEXT NOT NULL,
@@ -114,9 +114,9 @@ CREATE TABLE IF NOT EXISTS proposals (
   -- 実行内容(JSON に直列化して丸ごと持つ)
   payload        TEXT NOT NULL CHECK (json_valid(payload)),
   provenance     TEXT NOT NULL CHECK (json_valid(provenance)),
-  -- **executing / executed / failed には今どの経路からも到達しない。** 実行の仕組みが無い(docs/adr/0007)。
+  -- **実行の3状態は落とした。** 承認しても動かす仕組みが無い(docs/adr/0033)。付ける日に足す。
   status         TEXT NOT NULL CHECK (status IN
-                   ('proposed','approved','deferred','denied','expired','executing','executed','failed')),
+                   ('proposed','approved','deferred','denied','expired')),
   deferred_until TEXT,                                -- later 時のみ(IsoUtc)
   expires_at     TEXT NOT NULL,                       -- created_at + MAX_PENDING_DAYS
   deny_reason    TEXT,                                -- deny 時。次の生成へ還流(学習信号)
@@ -175,7 +175,8 @@ CREATE TABLE IF NOT EXISTS watchlist (
   subject         TEXT NOT NULL,                      -- 何を watch しているか(例: 'A社 契約更新の返信')
   opened_at       TEXT NOT NULL,                      -- IsoUtc
   last_activity_at TEXT NOT NULL,                     -- 最終動き(滞留日数の起点)
-  next_move_owner TEXT NOT NULL CHECK (next_move_owner IN ('human','counterparty','famulus')),
+  -- famulus = 自分。**`counterparty` は落とした** — 実データ0件(docs/adr/0033)
+  next_move_owner TEXT NOT NULL CHECK (next_move_owner IN ('human','famulus')),
   status          TEXT NOT NULL CHECK (status IN ('open','closed')),
   source_ref      TEXT CHECK (source_ref IS NULL OR json_valid(source_ref)),  -- SourceRef
   -- 発火の記録。**登録した時刻ではなく、実際に一周回した時刻で冷却を数える。**

@@ -20,6 +20,32 @@ const columns = (d: Sqlite, table: string): string[] => {
 }
 
 /**
+ * その表を作った `CREATE TABLE` の**文そのもの**。無ければ空文字。
+ *
+ * SQLite は作られた時の文字列をそのまま保つ。列の増減は `PRAGMA table_info` で分かるが、
+ * **CHECK 制約の中身はここにしか出ない**。狭めた制約が掛かっているかはこれで見る。
+ */
+const ddl = (d: Sqlite, table: string): string => {
+  try {
+    const row = d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table) as
+      | { sql?: string }
+      | undefined
+    return row?.sql ?? ""
+  } catch {
+    return ""
+  }
+}
+
+/** その値を持つ行の数。表が無ければ 0。 */
+const countWhere = (d: Sqlite, sql: string): number => {
+  try {
+    return ((d.prepare(sql).get() as { n?: number } | undefined)?.n ?? 0) as number
+  } catch {
+    return 0
+  }
+}
+
+/**
  * belief_slots を bitemporal にする(slot ごと1行 → slot ごとに区間の並び)。
  *
  * 旧い行は「いつから真だったか」を持っていない。**そこを推測で埋めない。**
@@ -138,6 +164,129 @@ function dropNtfyCursor(d: Sqlite): boolean {
 }
 
 /**
+ * 制約の文面を入れ替えるために表を作り直す。**列は変えない。**
+ *
+ * **古いほうを `RENAME` してはいけない。** SQLite 3.25 以降の `ALTER TABLE ... RENAME` は
+ * 他の表の `REFERENCES` を追いかけて書き換える。`proposals` を `proposals_v1` に改名すると、
+ * それを指している `approvals` `decisions` `ledger` の3つが `proposals_v1` を指すようになり、
+ * 用済みの `proposals_v1` を落とした時点で参照先が消える。
+ * **実物のコピーで踏んで気付いた** — 参照する表が無い検査用の DB では通っていた。
+ *
+ * 通る順は、新しい名前で作る → 写す → 古いほうを落とす → 新しいほうを改名する。
+ * 改名で追いかけられるのは `<表>_new` への参照だけで、そんな参照は誰も持っていない。
+ * 子の側は最初から最後まで元の名前を指したまま動かない。
+ *
+ * `PRAGMA foreign_keys` はトランザクションの中では効かないので、外で落として外で戻す。
+ * 落としている間の取りこぼしは `foreign_key_check` で見て、1件でもあれば巻き戻す。
+ */
+const rebuild = (d: Sqlite, table: string, createNew: string, cols: string): void => {
+  d.exec("PRAGMA foreign_keys=OFF")
+  d.exec("BEGIN")
+  try {
+    d.exec(createNew)
+    d.exec(`INSERT INTO ${table}_new (${cols})SELECT ${cols} FROM ${table}`)
+    d.exec(`DROP TABLE ${table}`)
+    d.exec(`ALTER TABLE ${table}_new RENAME TO ${table}`)
+    const broken = d.prepare("PRAGMA foreign_key_check").all() as unknown[]
+    if (broken.length > 0) throw new Error(`${table} の作り直しで参照が ${broken.length} 件切れた`)
+    d.exec("COMMIT")
+  } catch (e) {
+    d.exec("ROLLBACK")
+    throw e
+  } finally {
+    d.exec("PRAGMA foreign_keys=ON")
+  }
+}
+
+/**
+ * famulus-zero から持ってきた、届かない枠を CHECK から落とす(docs/adr/0033)。
+ *
+ * `proposals.kind` は7種あったが、こちらのコードが作れるのは `plan` だけ。
+ * `status` の `executing`/`executed`/`failed` は、承認しても実行する仕組みが無いので誰も書けない。
+ * `watchlist.next_move_owner` の `counterparty`(第三者)は実データ0件。
+ *
+ * **作り直すのは制約の文面のため**。列は1つも変わらない。生きている DB の `CREATE TABLE` は
+ * 作られた時の文字列のままなので、`.schema` を読んだ側には7種の kind と3つの実行状態が見え続ける。
+ * 見えるものが在るものだと読まれる、というのがこれを落とす理由なので、文面ごと入れ替える。
+ *
+ * **中身が新しい制約に収まらないときは触らない。** 収まらない行があるなら、想定していない経路が
+ * 書いたということで、ここで潰してよいものではない。`counterparty` だけは寄せ先がある —
+ * 発火の判定は `famulus` かどうかしか見ておらず(src/services/Attention.ts)、
+ * `human` と `counterparty` は同じ経路を通る。**振る舞いを変えずに寄せられるのはこれだけ。**
+ */
+function narrowInheritedChecks(d: Sqlite): string[] {
+  const done: string[] = []
+
+  if (/'skill-retire'|'executing'/.test(ddl(d, "proposals"))) {
+    const odd = countWhere(
+      d,
+      `SELECT count(*)AS n FROM proposals
+       WHERE kind <> 'plan' OR status IN ('executing','executed','failed')`,
+    )
+    if (odd === 0) {
+      rebuild(
+        d,
+        "proposals",
+        `CREATE TABLE proposals_new (
+          id             TEXT PRIMARY KEY,
+          kind           TEXT NOT NULL CHECK (kind = 'plan'),
+          created_at     TEXT NOT NULL,
+          summary        TEXT NOT NULL,
+          assessment     TEXT NOT NULL,
+          ask            TEXT NOT NULL,
+          c_what         TEXT NOT NULL,
+          c_when         TEXT NOT NULL,
+          c_who          TEXT NOT NULL CHECK (c_who IN ('famulus','human')),
+          c_how          TEXT NOT NULL,
+          c_how_verified TEXT NOT NULL,
+          payload        TEXT NOT NULL CHECK (json_valid(payload)),
+          provenance     TEXT NOT NULL CHECK (json_valid(provenance)),
+          status         TEXT NOT NULL CHECK (status IN
+                           ('proposed','approved','deferred','denied','expired')),
+          deferred_until TEXT,
+          expires_at     TEXT NOT NULL,
+          deny_reason    TEXT,
+          settled_at     TEXT,
+          settled_note   TEXT
+        )`,
+        `id, kind, created_at, summary, assessment, ask, c_what, c_when, c_who, c_how,
+         c_how_verified, payload, provenance, status, deferred_until, expires_at, deny_reason,
+         settled_at, settled_note`,
+      )
+      done.push("proposals:kind+status")
+    }
+  }
+
+  if (/'counterparty'/.test(ddl(d, "watchlist"))) {
+    // 寄せてから作り直す。**寄せる前に作ると CHECK で弾かれて、掛からないまま次回も同じ所へ来る。**
+    d.exec("UPDATE watchlist SET next_move_owner = 'human' WHERE next_move_owner = 'counterparty'")
+    rebuild(
+      d,
+      "watchlist",
+      `CREATE TABLE watchlist_new (
+        id              TEXT PRIMARY KEY,
+        subject         TEXT NOT NULL,
+        opened_at       TEXT NOT NULL,
+        last_activity_at TEXT NOT NULL,
+        next_move_owner TEXT NOT NULL CHECK (next_move_owner IN ('human','famulus')),
+        status          TEXT NOT NULL CHECK (status IN ('open','closed')),
+        source_ref      TEXT CHECK (source_ref IS NULL OR json_valid(source_ref)),
+        last_run_at     TEXT,
+        cooldown_hours  REAL NOT NULL DEFAULT 24,
+        run_count       INTEGER NOT NULL DEFAULT 0,
+        last_result     TEXT,
+        last_shown_at   TEXT
+      )`,
+      `id, subject, opened_at, last_activity_at, next_move_owner, status, source_ref,
+       last_run_at, cooldown_hours, run_count, last_result, last_shown_at`,
+    )
+    done.push("watchlist:next_move_owner")
+  }
+
+  return done
+}
+
+/**
  * 読み書きする側の無いテーブルを落とす(docs/adr/0007)。
  *
  * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、テーブルは残り続ける。
@@ -176,6 +325,8 @@ export function migrate(d: Sqlite): string[] {
   if (watchlistShown(d)) applied.push("watchlist:shown")
   if (proposalsSettled(d)) applied.push("proposals:settled")
   if (dropNtfyCursor(d)) applied.push("drop:ntfy_cursor")
+  // **列を足す側より後。** 作り直す文面に、上で足したばかりの列が入っている。
+  for (const n of narrowInheritedChecks(d)) applied.push(`narrow:${n}`)
   for (const t of dropUnusedTables(d)) applied.push(`drop:${t}`)
   return applied
 }

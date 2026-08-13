@@ -347,12 +347,12 @@ test("載せたのに回さなかった watch も後ろへ回る — 進むの�
   })
 })
 
-test("相手が動く番の watch は、動きが止まって初めて起こす", async () => {
+test("自分が動く番でない watch は、動きが止まって初めて起こす", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
-        yield* att.watch("A社からの返信待ち", "counterparty", { at: "2026-08-08T09:00:00Z" })
+        yield* att.watch("A社からの返信待ち", "human", { at: "2026-08-08T09:00:00Z" })
         yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
       }),
     )

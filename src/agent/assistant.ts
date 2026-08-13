@@ -531,8 +531,8 @@ function buildTools(state: TurnState) {
             v.description("何を watch するか。一行(例: 'A社 契約更新の返信待ち')。"),
           ),
           next_move: v.pipe(
-            v.picklist(["famulus", "human", "counterparty"]),
-            v.description("次に動くのは誰か。famulus=自分、human=ユーザー、counterparty=相手。"),
+            v.picklist(["famulus", "human"]),
+            v.description("次に動くのは誰か。famulus=自分、human=ユーザー。"),
           ),
           cooldown_hours: v.optional(
             v.pipe(

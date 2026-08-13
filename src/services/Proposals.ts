@@ -25,24 +25,22 @@ import { Conflict, NotFound } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
-export type ProposalKind =
-  | "reminder"
-  | "research"
-  | "plan"
-  | "vault-update"
-  | "outbound-draft"
-  | "skill-promote"
-  | "skill-retire"
+/**
+ * 提案の種類。**`plan` の1つだけ**(docs/adr/0033)。
+ *
+ * 前は7種あった(`reminder` `research` `vault-update` `outbound-draft` `skill-promote` `skill-retire`)。
+ * 全部 famulus-zero から持ってきた枠で、こちらのコードが作れるのは `plan` だけだった
+ * — 実データも8件全部 `plan`。種別が7つあると、読んだ側は「6つの経路がある」と読む。
+ */
+export type ProposalKind = "plan"
 
-export type ProposalStatus =
-  | "proposed"
-  | "approved"
-  | "deferred"
-  | "denied"
-  | "expired"
-  | "executing"
-  | "executed"
-  | "failed"
+/**
+ * 提案の状態。**実行の3つ(`executing` `executed` `failed`)は落とした**(docs/adr/0033)。
+ *
+ * 承認しても実行する仕組みが無い。到達しない状態を残すと、`oz list` を読んだ側が
+ * 「承認すれば動く」と読む。実行を付ける日が来たら、そのときに足す。
+ */
+export type ProposalStatus = "proposed" | "approved" | "deferred" | "denied" | "expired"
 
 export interface CreateInput {
   readonly kind?: ProposalKind

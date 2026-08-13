@@ -17,7 +17,13 @@ import { Conflict, NotFound } from "../core/errors.ts"
 import { dayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
-export type NextMove = "human" | "counterparty" | "famulus"
+/**
+ * 次に動くのは誰か。**`famulus` は自分**(SOUL.md の名前)。
+ *
+ * 3つ目に `counterparty`(第三者)があったが、実データ0件のまま落とした(docs/adr/0033)。
+ * 持っている仕事は AI の動向を追うことと外に出す文を書くことの2つで、返事を待つ第三者が出てこない。
+ */
+export type NextMove = "human" | "famulus"
 
 export interface WatchRow {
   readonly id: string

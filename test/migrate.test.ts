@@ -210,3 +210,143 @@ test("空の DB では移行するものが無い(新規は schema.sql がその
     await rt.dispose()
   }
 })
+
+/**
+ * 継いだ枠を CHECK から落とす(docs/adr/0033)。
+ *
+ * ここで見るのは**制約の文面**で、列は1つも動かない。`PRAGMA table_info` では差が出ないので、
+ * `sqlite_master` の文を読む。列で見ていると、掛かっていないのに掛かったことになる。
+ */
+const tableSql = (d: ReturnType<typeof openDb>, name: string): string =>
+  (
+    d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(name) as
+      | { sql?: string }
+      | undefined
+  )?.sql ?? ""
+
+test("届かない kind と実行状態は CHECK から落ちる — 提案そのものは残る", () => {
+  const path = join(ROOT, "narrow-proposals.db")
+  const d = openDb(path)
+  // **提案を指している表を一緒に立てる。** これが無いと、作り直しの手順を間違えても検査は通る
+  // — 実物では `approvals` `decisions` `ledger` の3つが指していて、そこで落ちた(docs/adr/0033)。
+  d.exec("PRAGMA foreign_keys=ON")
+  d.exec(`
+    CREATE TABLE proposals (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN
+        ('reminder','research','plan','vault-update','outbound-draft','skill-promote','skill-retire')),
+      created_at TEXT NOT NULL, summary TEXT NOT NULL, assessment TEXT NOT NULL, ask TEXT NOT NULL,
+      c_what TEXT NOT NULL, c_when TEXT NOT NULL,
+      c_who TEXT NOT NULL CHECK (c_who IN ('famulus','human')),
+      c_how TEXT NOT NULL, c_how_verified TEXT NOT NULL,
+      payload TEXT NOT NULL CHECK (json_valid(payload)),
+      provenance TEXT NOT NULL CHECK (json_valid(provenance)),
+      status TEXT NOT NULL CHECK (status IN
+        ('proposed','approved','deferred','denied','expired','executing','executed','failed')),
+      deferred_until TEXT, expires_at TEXT NOT NULL, deny_reason TEXT
+    );
+    INSERT INTO proposals
+      (id, kind, created_at, summary, assessment, ask, c_what, c_when, c_who, c_how,
+       c_how_verified, payload, provenance, status, expires_at, deny_reason)
+      VALUES ('p1','plan','2026-08-08T09:00:00Z','題','根拠','判断','w','t','famulus','h','v',
+              '{}','[]','denied','2026-08-15T09:00:00Z','向きが変わった');
+    CREATE TABLE decisions (
+      id TEXT PRIMARY KEY,
+      proposal_id TEXT NOT NULL REFERENCES proposals(id),
+      at TEXT NOT NULL
+    );
+    INSERT INTO decisions (id, proposal_id, at)VALUES ('d1', 'p1', '2026-08-09T09:00:00Z');
+  `)
+  // **列を足す側が先、文面を入れ替える側が後。** 逆だと、作り直した表に settled_at が無い。
+  assert.deepEqual(migrate(d), ["proposals:settled", "narrow:proposals:kind+status"], "1回目は掛かる")
+  assert.deepEqual(migrate(d), [], "2回目は何もしない")
+
+  const sql = tableSql(d, "proposals")
+  assert.doesNotMatch(sql, /skill-retire|outbound-draft|executing/, "落としたはずの枠が文面に残っている")
+  assert.match(sql, /settled_at/, "先に足した列が作り直しで消えた")
+
+  const row = d.prepare("SELECT id, kind, status, deny_reason, settled_at FROM proposals").get() as Record<
+    string,
+    unknown
+  >
+  // **中身は1文字も変えない。** 落としたのは届かない枠だけで、書かれた提案はそのまま残る。
+  assert.deepEqual(
+    { ...row },
+    {
+      id: "p1",
+      kind: "plan",
+      status: "denied",
+      deny_reason: "向きが変わった",
+      settled_at: null,
+    },
+  )
+  // **指している側が生きたままか。** 作り直しの順を間違えると、決定は残るのに指す先が消える。
+  assert.deepEqual(d.prepare("PRAGMA foreign_key_check").all(), [], "参照が切れた")
+  assert.equal(
+    (d.prepare("SELECT proposal_id FROM decisions").get() as { proposal_id: string }).proposal_id,
+    "p1",
+  )
+  d.close()
+})
+
+/**
+ * `counterparty` だけは寄せ先がある。**発火の判定は `famulus` かどうかしか見ていない**ので、
+ * `human` と `counterparty` は同じ経路を通る。寄せても起き方が変わらないことを、ここで固定する。
+ */
+test("counterparty の watch は human に寄る — 起き方は変わらない", () => {
+  const path = join(ROOT, "narrow-watchlist.db")
+  const d = openDb(path)
+  d.exec(`
+    CREATE TABLE watchlist (
+      id TEXT PRIMARY KEY, subject TEXT NOT NULL, opened_at TEXT NOT NULL,
+      last_activity_at TEXT NOT NULL,
+      next_move_owner TEXT NOT NULL CHECK (next_move_owner IN ('human','counterparty','famulus')),
+      status TEXT NOT NULL CHECK (status IN ('open','closed')),
+      source_ref TEXT, last_run_at TEXT, cooldown_hours REAL NOT NULL DEFAULT 24,
+      run_count INTEGER NOT NULL DEFAULT 0, last_result TEXT, last_shown_at TEXT
+    );
+    INSERT INTO watchlist (id, subject, opened_at, last_activity_at, next_move_owner, status, run_count)
+      VALUES ('w1','A社からの返信待ち','2026-08-01T00:00:00Z','2026-08-05T00:00:00Z','counterparty','open',3),
+             ('w2','AI追跡','2026-08-01T00:00:00Z','2026-08-05T00:00:00Z','famulus','open',1);
+  `)
+  assert.deepEqual(migrate(d), ["narrow:watchlist:next_move_owner"], "1回目は掛かる")
+  assert.deepEqual(migrate(d), [], "2回目は何もしない")
+
+  assert.doesNotMatch(tableSql(d, "watchlist"), /counterparty/)
+  const rows = d.prepare("SELECT id, next_move_owner, run_count FROM watchlist ORDER BY id").all()
+  assert.deepEqual(rows, [
+    { id: "w1", next_move_owner: "human", run_count: 3 },
+    { id: "w2", next_move_owner: "famulus", run_count: 1 },
+  ])
+  d.close()
+})
+
+/**
+ * **収まらない行があるなら触らない。** 誰も書けないはずの状態が書かれているということは、
+ * 想定していない経路が在るということで、ここで潰すと在ることの証拠ごと消える。
+ */
+test("新しい CHECK に収まらない行があれば、作り直さずに残す", () => {
+  const path = join(ROOT, "narrow-refuse.db")
+  const d = openDb(path)
+  d.exec(`
+    CREATE TABLE proposals (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('plan','skill-retire')),
+      created_at TEXT NOT NULL, summary TEXT NOT NULL, assessment TEXT NOT NULL, ask TEXT NOT NULL,
+      c_what TEXT NOT NULL, c_when TEXT NOT NULL, c_who TEXT NOT NULL,
+      c_how TEXT NOT NULL, c_how_verified TEXT NOT NULL,
+      payload TEXT NOT NULL, provenance TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('proposed','executing')),
+      deferred_until TEXT, expires_at TEXT NOT NULL, deny_reason TEXT,
+      settled_at TEXT, settled_note TEXT
+    );
+    INSERT INTO proposals
+      (id, kind, created_at, summary, assessment, ask, c_what, c_when, c_who, c_how,
+       c_how_verified, payload, provenance, status, expires_at)
+      VALUES ('p1','skill-retire','2026-08-08T09:00:00Z','題','根拠','判断','w','t','famulus','h','v',
+              '{}','[]','executing','2026-08-15T09:00:00Z');
+  `)
+  assert.deepEqual(migrate(d), [], "収まらない行があるのに掛かった")
+  assert.match(tableSql(d, "proposals"), /skill-retire/, "触らないはずの表が作り直された")
+  assert.equal((d.prepare("SELECT count(*)AS n FROM proposals").get() as { n: number }).n, 1, "行が消えた")
+  d.close()
+})

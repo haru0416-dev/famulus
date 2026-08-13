@@ -38,6 +38,10 @@ const NOT_TOOLS = new Set([
   "tools", // 記録の欄。実際に呼ばれた道具の名前の並び
   "steps", // 記録の欄。手数
   "ms", // 記録の欄。その回に掛かったミリ秒
+  // 自分を指す語と、それが入っている列(SOUL.md の「名前」/ docs/adr/0033)。**呼べるものではない。**
+  "famulus", // 名前。DB の中では `next_move_owner` / `c_who` の値として「自分」を指す
+  "next_move_owner", // watchlist の列名(次に動くのは誰か)
+  "c_who", // proposals の列名(誰がやるか)
 ])
 
 /**
