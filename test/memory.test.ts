@@ -2,8 +2,9 @@
  * DB の検査。append-only が SQL 側で強制されていることを、アプリを経由せずに直接叩いて確かめる。
  * (アプリが行儀よく書いているだけなら、別経路が一つ増えた時点で不変条件は消える)
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import { Db } from "../src/services/Db.ts"
 import { Memory, renderRecall } from "../src/services/Memory.ts"

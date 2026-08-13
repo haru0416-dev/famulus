@@ -6,8 +6,9 @@
  * 必須の `reason` は `undefined` のまま道具が走り、結果は「成功」として記録された。
  * valibot のスキーマは JSON Schema を作るためだけに使われていた(docs/adr/0025)。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import type { LanguageModelV4, LanguageModelV4StreamPart } from "@ai-sdk/provider"
 import { Experimental_Agent as Agent, stepCountIs, tool } from "ai"
 import * as v from "valibot"

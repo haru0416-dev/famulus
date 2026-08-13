@@ -6,11 +6,12 @@
  * ここに残すのは、モデルが書いた文字列がそのまま境界を広げうる2か所:
  * 作業場の名前と、docker に渡す引数。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
-import { test } from "node:test"
 import { TZ } from "../src/core/time.ts"
 import { cacheRoot, dockerArgs, orphanNames, runDir, runsRoot } from "../src/services/Sandbox.ts"
 

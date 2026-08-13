@@ -4,8 +4,9 @@
  * とくに「quota の run が USD 上限を飛ばす」は、飛ばさない実装でもテストは書けてしまうので
  * 意図的に「今日の USD が上限を超えている状態」を作った上で quota が通ることを見ている。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import { Db } from "../src/services/Db.ts"
 import { type BudgetConfig, buildFencedPrompt, EGRESS_ALLOW, Governance } from "../src/services/Governance.ts"

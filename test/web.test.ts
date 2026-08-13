@@ -5,8 +5,9 @@
  * 検査したいのは、モデルが書いた URL がこのホストの内側へ向いたときに止まるかどうか。
  * 名前解決を伴う判定は外に依存するので、ここでは解決を要らない形の判定だけを対象にする。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import {
   decodeBody,
   deniedByName,

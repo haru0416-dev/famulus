@@ -5,8 +5,9 @@
  * 回したことの証拠にはならない。ここが押さえるのは、報告文を1文字も読まずに
  * 「何を呼んだか」「何行増えたか」が出ること、そしてその2つが食い違ったときに食い違って見えること。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import { logPost, readJournal, renderJournal, runs, tally } from "../src/journal.ts"
 import { Db } from "../src/services/Db.ts"

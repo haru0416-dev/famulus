@@ -4,11 +4,12 @@
  * ここがずれる経路は2つある。コンテナは DB を通さずにホストのファイルを書き換えるし、
  * 掃除はファイルを消しても登録は消さないことがある。在るのは実体のほうに倒す。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
 import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import {
   keepWorkspace,
@@ -122,7 +123,7 @@ test("scanTree は子孫を含む最大 mtime と合計サイズを返す", asyn
 
 /**
  * 同じ実体を2回数えない。作業場の中身はほとんどが `node_modules` で、
- * pnpm はそこを symlink と hard link で組む。数え直すと大きさが数倍に出る(docs/adr/0026)。
+ * bun の isolated はそこを symlink と hard link で組む。数え直すと大きさが数倍に出る(docs/adr/0026)。
  */
 test("scanTree は symlink の先へ降りない", () => {
   const dir = mkdtempSync(join(tmpdir(), "oz-scan-sym-"))

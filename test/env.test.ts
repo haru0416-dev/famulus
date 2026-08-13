@@ -8,11 +8,12 @@
  * 読み込み済みフラグはモジュール単位なので、1テスト1インスタンス
  * (`?case=` を付けた動的 import)で読み込み直している。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { test } from "node:test"
 
 const dir = mkdtempSync(join(tmpdir(), "oz-env-"))
 

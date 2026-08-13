@@ -10,9 +10,10 @@
  * それを数え落として実在する道具を幻だと判定したことがある(docs/adr/0010)。
  * いまは `buildTools()` が返す表と、子に渡す表がすべてなので、両方を同じ正規表現で拾う。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 
 const read = (rel: string): string =>

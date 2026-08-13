@@ -5,8 +5,9 @@
  * 疑わしいものまで弾けば一度も出せなくなり、出せない検査は外される。
  * 実際に1本目の下書きに何が混ざったかを標本にしてある。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import { findLeaks, findShape, findSmells, keepQuoted, reviewOutcome } from "../src/agent/drafting.ts"
 
 const SECRETS = [

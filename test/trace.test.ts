@@ -5,8 +5,9 @@
  * `{"text":…,"toolCalls":[…]}` の順なので、発話が長い回ほど道具呼び出しが丸ごと消える。
  * 実際に tick を1回走らせたとき、`task` を2つ投げた記録が読めなかった。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import { traceOf } from "../src/model/trace.ts"
 
 test("発話が長くても道具呼び出しが残る", () => {

@@ -8,8 +8,9 @@
  * フィクスチャの欄名は同日に実際に返ってきた応答から取った(npm の `updated` のように
  * 項の外側にある欄も含む)。TZ は import より先に差す(`time.ts` が読み込み時に確定する)。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
 // `OPEN_ZERO_TZ` は `new Date()` には届かない。帯の付いていない日付

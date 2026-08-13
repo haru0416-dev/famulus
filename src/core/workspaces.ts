@@ -56,17 +56,18 @@ const entriesOf = (dir: string) => {
  * 使用中の作業場が「古い」と表示される。配下を走査して最も新しい更新時刻を採る。
  *
  * ## 同じ実体を2回数えない
- * 作業場の内容はほとんどが `node_modules` で、pnpm はそこを symlink と hard link で構成する。
+ * 作業場の内容はほとんどが `node_modules` で、bun の isolated と pnpm はそこを
+ * symlink と hard link で構成する(bun は `node_modules/.bun/` へ、pnpm は `.pnpm/` へ張る)。
  *
  * - `readdirSync(recursive: true)` は symlink の参照先を走査する(Bun / Node どちらも)。
- *   pnpm の構造では同じディレクトリを繰り返し走査し、走査件数もサイズも数倍になる。
+ *   この構造では同じディレクトリを繰り返し走査し、走査件数もサイズも数倍になる。
  *   symlink の循環があれば `ELOOP` を投げ、一覧取得全体が失敗する。
  * - hard link では同じ inode が複数のパスに現れる。パスごとに加算すると、
  *   消しても空かない分を数えることになる。
  *
  * 明示的に再帰走査して `lstat` で確認する。symlink は辿らず、容量にも含めない。
  * regular file の hard link は `dev:ino` で1回だけ数え、同じ実体の重複加算を避ける。
- * この方針は pnpm のリンク構造で走査量と容量が膨らむのを防ぐためのもの(docs/adr/0026)。
+ * この方針はリンク構造で走査量と容量が膨らむのを防ぐためのもの(docs/adr/0026)。
  */
 export const scanTree = (dir: string): TreeStat => {
   let bytes = 0

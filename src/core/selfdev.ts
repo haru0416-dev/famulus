@@ -36,13 +36,12 @@ export const repoRoot = (): string => fileURLToPath(new URL("../..", import.meta
  *
  * 中身は package.json の `gate` に置いてある。定義を2か所に持たない —
  * ここに並べ直すと、ホストで通しているものとコンテナで通しているものが黙って食い違う。
- * `corepack` を頭に付けるのは、コンテナの image に pnpm が入っていないから(corepack は入っている)。
  *
- * 検査を回す bun も image には入っていない。`bun` を devDependency に置いてあるので、
- * `pnpm run` が `node_modules/.bin` を PATH に載せた先で引ける。image を差し替えずに済み、
- * ホストとコンテナで同じ版が走る(docs/adr/0024)。
+ * 呼ぶ手は bun だけ。image に実体が入っているので(docker/run.Dockerfile)、
+ * 依存を取る前から引ける。前は corepack で pnpm を起こし、その pnpm が node_modules に置いた
+ * bun を引いていた — 依存の取得が失敗した回はゲートを呼ぶ手ごと無くなっていた。
  */
-export const GATE = `cd ${CLONE} && corepack pnpm run gate`
+export const GATE = `cd ${CLONE} && bun run gate`
 
 export const SELFDEV_PURPOSE =
   `open-zero 自身のソース(${repoRoot()} の clone)。自分の欠陥はここで直す。` +
@@ -51,7 +50,7 @@ export const SELFDEV_PURPOSE =
   `**ここでの変更は動いている本体には入らない。**`
 
 /** 依存の取得。`--frozen-lockfile` は lockfile と package.json のずれをその場で落とす。 */
-const INSTALL = "corepack pnpm install --frozen-lockfile"
+const INSTALL = "bun install --frozen-lockfile"
 
 /** 依存の取得は分単位。tick の中では走らせないので、コンテナの既定(3分)より長く取る。 */
 const INSTALL_MS = 10 * 60_000

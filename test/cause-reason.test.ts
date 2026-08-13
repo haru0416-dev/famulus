@@ -5,8 +5,9 @@
  * 実際に自律実行上限へ到達して 211 秒で止まった回も、DB には時間切れとして残っていて、
  * 記録を読んでも何を直せばいいか分からなかった(docs/adr/0011)。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import { causeReason } from "../src/core/errors.ts"
 
 /** Flue ランタイムが投げていた形。理由は外側に出ず、内側の `meta.reason` にだけあった。 */

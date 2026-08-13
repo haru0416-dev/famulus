@@ -1,7 +1,0 @@
-# 依存パッケージの install/build script 許可。`allowBuilds` に無いものは既定で拒否される。
-# 設定先は `pnpm-workspace.yaml`。`package.json` の `pnpm` フィールドには置かない。
-#
-# `bun` は実行環境の実体で、postinstall が走らないと
-# `Bun's postinstall script was not run` となり起動できないため許可する。
-allowBuilds:
-  bun: true

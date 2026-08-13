@@ -2,8 +2,9 @@
  * Runner の検査。ゲートを通さずにモデルへ届く道が無いことを、実行本体を差し替えて確かめる。
  * Stub は precheck・枠の計上・会計の骨格を本番と共有しているので、ここで通る配線は本番でも同じ。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import {
   baseModel,

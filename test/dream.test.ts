@@ -5,8 +5,9 @@
  * ここで見るのは、渡してはいけないものが材料に混ざらないことと、
  * 同じ材料を毎晩読み直さないこと。混ざると確定値が汚れ、読み直すと履歴が寿命1日の行で埋まる。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 
 // 回す時刻の判定はユーザーの時計で切る。TZ はモジュール読み込み時に確定するので、import より先に差す。

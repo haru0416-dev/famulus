@@ -2,8 +2,9 @@
  * 承認の検査。「承認したのに承認記録が無い」状態を作れないことが主眼。
  * 実行の仕組みはまだ無いので、ここで守るのは「実行の前提条件が揃っているか」だけ。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import { Db } from "../src/services/Db.ts"
 import { type CreateInput, Proposals, payloadHash } from "../src/services/Proposals.ts"

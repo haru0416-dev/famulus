@@ -672,7 +672,7 @@ function buildTools(state: TurnState) {
         "隔離されたコンテナ(docker)の中で走るので、**ユーザーのファイルにも DB にも触れない**。" +
         "書けるのは作業場だけで、コンテナは毎回捨てられる — 残るのは作業場に置いたファイルだけ。" +
         "既定では外に出られない。clone や install が要るときだけ net を true にする。" +
-        "入っているもの: node / npm / npx / python3 / pip / venv / uv / git / curl / jq / rg / make / gcc。" +
+        "入っているもの: bun / node / npm / npx / python3 / pip / venv / uv / git / curl / jq / rg / make / gcc。" +
         "**apt は通らない**(非 root)。python は uv か pip、それ以外は npx で足りる範囲でやる。" +
         "取得したパッケージのキャッシュ(npm / pip / uv)は作業場をまたいで共有されるので、二度目は取得し直さない。" +
         "上限は3分 / メモリ 2GB。返るのは出力の末尾 12,000字。" +

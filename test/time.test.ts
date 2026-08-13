@@ -2,8 +2,9 @@
  * 日付境界の検査。ユーザーの1日で切れているかだけを見る。
  * TZ はモジュール読み込み時に確定するので、import より先に環境変数を差す。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
 const { TZ, dayRange, localStamp, monthRange } = await import("../src/core/time.ts")

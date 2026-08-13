@@ -5,8 +5,9 @@
  * 根拠の無いものが上がることのほう。引用の照合はコード側にあり(`keepGrounded`)、
  * 指示が守られなかったときに落ちる場所がそこしかない — そこを固定する。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import { keep, keepGrounded } from "../src/agent/keeper.ts"
 import { Memory } from "../src/services/Memory.ts"

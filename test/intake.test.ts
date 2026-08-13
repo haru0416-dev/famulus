@@ -6,11 +6,12 @@
  * 出来上がった要約はそれらしく読める。だから「何を捨て、何を1文字も削らないか」を
  * 素材の段階で直接確かめる。要約の中身ではなく素材の境界が検査対象。
  */
+
+import { afterAll, beforeAll, test } from "bun:test"
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { after, before, test } from "node:test"
 import * as Effect from "effect/Effect"
 import { Db } from "../src/services/Db.ts"
 import { Intake } from "../src/services/Intake.ts"
@@ -76,7 +77,7 @@ const LONG_ASK =
   "歯医者の予約は水曜の18時にしたい。ただし来週は出張なので、その週だけは金曜に寄せてほしい。" +
   "あと、予約の確認メールは自分宛てには要らない。"
 
-before(() => {
+beforeAll(() => {
   ROOT = mkdtempSync(join(tmpdir(), "oz-intake-"))
   process.env.OPEN_ZERO_TRANSCRIPT_ROOT = ROOT
 
@@ -204,7 +205,7 @@ before(() => {
   )
 })
 
-after(() => {
+afterAll(() => {
   if (prev === undefined) delete process.env.OPEN_ZERO_TRANSCRIPT_ROOT
   else process.env.OPEN_ZERO_TRANSCRIPT_ROOT = prev
   if (prevExport === undefined) delete process.env.OPEN_ZERO_EXPORT_ROOT

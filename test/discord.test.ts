@@ -5,10 +5,11 @@
  * 誰も押していない通知が全部「押された」になり、tick が勝手に進む。
  * 既読位置の扱いも見る — 初回に全部拾うと、DM に残っている過去の一言が今日の指示になる。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
 import { createServer, type IncomingMessage, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import { Db } from "../src/services/Db.ts"
 import { Discord, type Post } from "../src/services/Discord.ts"

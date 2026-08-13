@@ -5,8 +5,9 @@
  * 自分の書き込みで自分を起こす / 解消しない理由で永久に起こす、の2つは実装を見ても気づきにくく、
  * 気づくのは「一晩で枠を使い切っていた」ときになる。だからここで固定する。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import {
   ACTIVE_COOLDOWN_HOURS,

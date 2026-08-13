@@ -5,11 +5,12 @@
  * 同じように「通ってしまう」。壊れるのは既に行がある DB のときだけで、しかも壊れ方は静かで、
  * 気付くのはユーザーが古い事実を喋られたときになる。だから旧スキーマを明示的に作ってから適用する。
  */
+
+import { afterAll, beforeAll, test } from "bun:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { after, before, test } from "node:test"
 import * as Effect from "effect/Effect"
 import { migrate } from "../src/db/migrate.ts"
 import { openDb } from "../src/db/sqlite.ts"
@@ -19,10 +20,10 @@ import { Db, DbLive } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
 
 let ROOT = ""
-before(() => {
+beforeAll(() => {
   ROOT = mkdtempSync(join(tmpdir(), "oz-migrate-"))
 })
-after(() => {
+afterAll(() => {
   if (ROOT) rmSync(ROOT, { recursive: true, force: true })
 })
 

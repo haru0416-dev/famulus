@@ -5,8 +5,9 @@
  * 対話には締切が無く、そこで `Infinity` 以外が返ると `shell` が呼ぶ前に降りるようになる。
  * 数ミリ秒の誤差を突く検査は書かない(時計を止められないので、書けば揺れる検査になる)。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import { clearDeadline, remainingLabel, remainingMs, startDeadline } from "../src/core/deadline.ts"
 
 test("締切を宣言していなければ無限。対話は時間で切られない", () => {

@@ -4,8 +4,9 @@
  *   usd で金額が来ていない → 単価不明(unpriced=1)
  * ここを同じ 0 にすると、USD 上限が意味を失うか、定額 run を金額で止め始める。
  */
+
+import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { test } from "node:test"
 import * as Effect from "effect/Effect"
 import { Db } from "../src/services/Db.ts"
 import { Ledger } from "../src/services/Ledger.ts"
