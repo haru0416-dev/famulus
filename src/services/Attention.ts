@@ -12,7 +12,7 @@
  * 「回す価値があるか」をまず SQL だけで判定する(定額枠でも窓は有限)。
  */
 import { randomUUID } from "node:crypto"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { Conflict, NotFound } from "../core/errors.ts"
 import { dayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"

@@ -17,7 +17,7 @@
  * 拾ってきた文が事実として DB に入る道ができる。引用がコード側で照合できるのも、
  * 材料をユーザーの入力に限っているから成り立つ。
  */
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { causeReason } from "../core/errors.ts"
 import { Runner } from "../model/Runner.ts"
 import { Memory } from "../services/Memory.ts"

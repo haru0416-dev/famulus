@@ -13,7 +13,7 @@
  * 締切は付けない — 待っているのは人で、切る判断はその人がする(Ctrl-C)。
  */
 import { createInterface } from "node:readline/promises"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { createAssistant } from "./agent/assistant.ts"
 import { loadEnv } from "./core/env.ts"
 import { run, runtime } from "./runtime.ts"

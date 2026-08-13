@@ -30,7 +30,9 @@
  * **承認しても実行はされない**。コネクタ(送信・予約)が1つも無いので、approved は
  * 「承認済み・未実行」で止まる。ここを実行したことにするのが一番大きい嘘なので、そうしない。
  */
-import { Cause, Effect, Exit } from "effect"
+import * as Cause from "effect/Cause"
+import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
 import { DREAM_DAYS, dream } from "./agent/dream.ts"
 import { CLEANUP_DAYS, cleanup } from "./core/cleanup.ts"
 import { loadEnv } from "./core/env.ts"

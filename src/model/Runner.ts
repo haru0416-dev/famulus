@@ -7,7 +7,9 @@
  *
  * 役割→モデルは**静的表**。LLM にモデル選択と課金経路を開かない。
  */
-import { Context, Effect, Layer } from "effect"
+import * as Context from "effect/Context"
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown, UnpricedModel } from "../core/errors.ts"
 import { RunnerFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"

@@ -30,7 +30,7 @@
 
 import { existsSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { Db } from "../services/Db.ts"
 import { cacheRoot, runsRoot, sweepOrphans } from "../services/Sandbox.ts"
 import { dayRange, localHour, nowIso } from "./time.ts"

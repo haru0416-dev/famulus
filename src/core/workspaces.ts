@@ -18,7 +18,7 @@
 
 import { existsSync, lstatSync, readdirSync } from "node:fs"
 import { join } from "node:path"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { Db } from "../services/Db.ts"
 import { runsRoot } from "../services/Sandbox.ts"
 import { nowIso } from "./time.ts"

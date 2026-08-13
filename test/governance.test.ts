@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { Db } from "../src/services/Db.ts"
 import { type BudgetConfig, buildFencedPrompt, EGRESS_ALLOW, Governance } from "../src/services/Governance.ts"
 import { withHarness } from "./helpers.ts"

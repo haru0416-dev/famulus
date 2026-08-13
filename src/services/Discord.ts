@@ -31,7 +31,7 @@
  * 設定が無ければ**黙って何もしない**。経路が塞がっていることで tick を止めない
  * — 届かないより、動かないほうが困る。
  */
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import type { DbFailed } from "../core/errors.ts"
 import { Db } from "./Db.ts"
 
@@ -137,6 +137,20 @@ const MAX_PENDING = 20
  * 古いものから落ちる。1つ増えるごとに、poll が30秒ごとに叩く先が1つ増える。
  */
 const MAX_THREADS = 3
+
+/**
+ * `inbox()` で同時に出す GET の数。読む先は最大 7(talk / draft / log / DM / thread × `MAX_THREADS`)。
+ * Discord のレート制限は `/channels/{id}/messages` がチャンネル別なので、7 本同時でも当たらない。
+ */
+const FETCH_AT_ONCE = 8
+
+/** `GET /channels/{id}/messages` の応答のうち使うフィールド。 */
+interface RawMessage {
+  readonly id: string
+  readonly content: string
+  readonly author: { id: string }
+  readonly reactions?: { emoji: { name: string }; count: number; me: boolean }[]
+}
 
 /** snowflake は数として単調増加する。文字列比較では桁が変わったときに壊れる。 */
 const newer = (a: string, b: string): boolean => BigInt(a) > BigInt(b)
@@ -370,15 +384,19 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         const marks: Record<string, string> = {}
         let heard: string | undefined
 
-        for (const ch of yield* listening()) {
-          const msgs = yield* readJson<
-            {
-              id: string
-              content: string
-              author: { id: string }
-              reactions?: { emoji: { name: string }; count: number; me: boolean }[]
-            }[]
-          >(`/channels/${ch}/messages?limit=50`)
+        // GET だけ並列にする。逐次だとチャンネル数ぶん往復が加算される(3 本で実測 1082〜2349ms、
+        // 並列で 325〜932ms)。下のループは直列のまま — `pending` の消し込み、`heard`、`marks` の
+        // 並びがチャンネルの順序に依存する。`Effect.all` は入力順で返す。
+        const fetched = yield* Effect.all(
+          (yield* listening()).map((ch) =>
+            readJson<RawMessage[]>(`/channels/${ch}/messages?limit=50`).pipe(
+              Effect.map((msgs) => ({ ch, msgs })),
+            ),
+          ),
+          { concurrency: FETCH_AT_ONCE },
+        )
+
+        for (const { ch, msgs } of fetched) {
           if (!msgs?.length) continue
 
           const cursor = yield* cursorOf(ch)

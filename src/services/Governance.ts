@@ -10,7 +10,7 @@
  * `meter === "quota"` の run は限界費用 0 なので USD 層を**飛ばす**。ここを飛ばさないと
  * 「窓が空いているのに金額で止まる」= サブスクを買った意味を捨てることになる。
  */
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { DailyRunLimit, EgressDenied, Halt, QuotaCooldown, UnpricedModel } from "../core/errors.ts"
 import { dayRange, monthRange } from "../core/time.ts"
 import { Db } from "./Db.ts"

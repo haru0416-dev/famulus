@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { Db } from "../src/services/Db.ts"
 import { type CreateInput, Proposals, payloadHash } from "../src/services/Proposals.ts"
 import { withHarness } from "./helpers.ts"

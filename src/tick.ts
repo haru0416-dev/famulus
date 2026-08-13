@@ -18,7 +18,7 @@
  * 枠は `OPEN_ZERO_LANE=autonomous` で自走側に付け替える。日次 run 数の内訳が対話と分かれ、
  * tick が暴れても対話の取り分は残る(Governance.BUDGET.autonomousRuns)。
  */
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"

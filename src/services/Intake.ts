@@ -25,7 +25,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { nowIso } from "../core/time.ts"
 import { Runner } from "../model/Runner.ts"
 import { Db } from "./Db.ts"

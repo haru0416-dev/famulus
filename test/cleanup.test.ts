@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 
 // 回す時刻の判定はユーザーの時計で切る。TZ はモジュール読み込み時に確定するので、import より先に差す。
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"

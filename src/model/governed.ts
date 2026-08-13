@@ -17,7 +17,7 @@
 
 import type { LanguageModelV4, LanguageModelV4Middleware } from "@ai-sdk/provider"
 import { wrapLanguageModel } from "ai"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { describeRefusal } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { isRefusal, run } from "../runtime.ts"

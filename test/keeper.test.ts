@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { keep, keepGrounded } from "../src/agent/keeper.ts"
 import { Memory } from "../src/services/Memory.ts"
 import { withHarness } from "./helpers.ts"

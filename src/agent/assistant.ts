@@ -18,7 +18,7 @@
 
 import { basename } from "node:path"
 import { Experimental_Agent as Agent, type ModelMessage, stepCountIs, tool } from "ai"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import * as v from "valibot"
 import { remainingLabel, remainingMs } from "../core/deadline.ts"
 import { loadEnv } from "../core/env.ts"

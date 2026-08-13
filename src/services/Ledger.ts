@@ -10,7 +10,7 @@
  * モデルを呼んだ run は必ず role を入れる(入れないと歯止めが効かない)。
  */
 import { randomUUID } from "node:crypto"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { dayRange, monthRange, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 import type { Meter } from "./Governance.ts"

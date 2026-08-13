@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process"
 import { existsSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { runDir, runInSandbox } from "../services/Sandbox.ts"
 import { keepWorkspace } from "./workspaces.ts"
 

@@ -8,7 +8,9 @@
  * Db を Layer の一番下に置いてあるので、テストは `makeRuntime(DbLive(":memory:"))` で
  * 実 DB に触らずに同じ配線を走らせられる(スキーマもトリガも本物のまま)。
  */
-import { Effect, Layer, ManagedRuntime } from "effect"
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
+import * as ManagedRuntime from "effect/ManagedRuntime"
 import { type DbFailed, describeRefusal, type Refusal } from "./core/errors.ts"
 import { type Runner, RunnerClaudeCli } from "./model/Runner.ts"
 import { Attention } from "./services/Attention.ts"

@@ -5,7 +5,8 @@
  * (append-only トリガも FTS5 trigram も本物)。Runner だけ Stub 層に差し替える。
  * つまり「ゲートが実際にモデル呼び出しを止めるか」を、モデルを呼ばずに端から端まで検査できる。
  */
-import { Effect, ManagedRuntime } from "effect"
+import * as Effect from "effect/Effect"
+import * as ManagedRuntime from "effect/ManagedRuntime"
 import { RunnerStub, type StubReply } from "../src/model/Runner.ts"
 import { type AppServices, makeAppLayer } from "../src/runtime.ts"
 import { DbLive } from "../src/services/Db.ts"

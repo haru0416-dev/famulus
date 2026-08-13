@@ -16,7 +16,7 @@
  * 1と2はずれてよい。**ずれ方が読めることが目的**で、一致させることではない
  * (道具を呼んでも中身が残らない回はある。propose せずに終えた回、shell が失敗した回)。
  */
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import type { DbFailed } from "./core/errors.ts"
 import { localStamp } from "./core/time.ts"
 import { Db } from "./services/Db.ts"

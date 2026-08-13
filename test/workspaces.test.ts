@@ -9,7 +9,7 @@ import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writ
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import {
   keepWorkspace,
   listWorkspaces,

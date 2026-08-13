@@ -21,7 +21,7 @@
  */
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { loadEnv } from "./core/env.ts"
 import { nowIso } from "./core/time.ts"
 import { drainInbox } from "./inbox.ts"

@@ -20,6 +20,16 @@
       "preset": "recommended",
       "suspicious": {
         "noExplicitAny": "warn"
+      },
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "effect": "起動ごとに未使用分まで評価される(実測 CPU 0.25s、サブモジュール直読みは 0.09s)。`import * as Effect from \"effect/Effect\"` と書く。"
+            }
+          }
+        }
       }
     }
   },

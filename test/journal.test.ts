@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { logPost, readJournal, renderJournal, runs, tally } from "../src/journal.ts"
 import { Db } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"

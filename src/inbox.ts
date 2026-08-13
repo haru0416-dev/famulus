@@ -8,7 +8,7 @@
  * チャンネル)。**書いた人が誰かは author id で見る**ので、場所に他人が入ってきても owner には
  * ならない。仮に別の端末から投げられても、外に出る行為は予告を経るので実行前にユーザーの目を通る。
  */
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import type { DbFailed } from "./core/errors.ts"
 import { nowIso } from "./core/time.ts"
 import { Discord } from "./services/Discord.ts"

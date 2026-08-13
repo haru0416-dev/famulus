@@ -20,7 +20,7 @@
  * **照合する側はまだ無い。** 今あるのは記録だけ。
  */
 import { createHash, randomUUID } from "node:crypto"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { Conflict, NotFound } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"

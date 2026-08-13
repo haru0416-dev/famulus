@@ -15,7 +15,7 @@
  * 進んだところは `dream:through` に置く。次の回はそこから先だけを見る —
  * 同じ材料を毎晩読み直すと、同じ値を毎晩上げ直して、履歴が寿命1日の行で埋まる。
  */
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { dayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "../services/Db.ts"
 import { KEEP_MS, keep } from "./keeper.ts"

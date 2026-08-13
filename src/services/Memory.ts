@@ -8,7 +8,7 @@
  * 溜まらない原因が API の摩擦なら、それは設計の側で消せる。
  */
 import { randomUUID } from "node:crypto"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import { localStamp, nowIso } from "../core/time.ts"
 import { Db, type Row } from "./Db.ts"
 

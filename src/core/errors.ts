@@ -10,7 +10,7 @@
  *   - `QuotaCooldown` … 窓が明ければ自動で戻る。**その枠だけ**避ける。朝会を殺さないため halt にしない。
  * この2つを同じ `Error` にすると、フォールバック実装がうっかり halt をリトライしてしまう。
  */
-import { Data } from "effect"
+import * as Data from "effect/Data"
 
 /** 予算ブレーカーの停止。schema_meta の 'halt' が立っている。自動解除しない。 */
 export class Halt extends Data.TaggedError("Halt")<{
