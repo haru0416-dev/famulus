@@ -56,6 +56,8 @@ export function stateLine(path: string = DEFAULT_DB_PATH): string | undefined {
   try {
     const db = new Database(path, { readonly: true })
     try {
+      // 最初に置く。これより前に読むと、他が WAL を開き直している間は locked で表示が消える。
+      db.exec("PRAGMA busy_timeout = 2000;")
       const cursor = Number(
         (db.query("SELECT value v FROM schema_meta WHERE key='tick:cursor'").get() as { v?: string } | null)
           ?.v ?? 0,

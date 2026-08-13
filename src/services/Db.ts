@@ -50,16 +50,23 @@ export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed
           try: () => {
             if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true })
             const d = openDb(path)
+            // busy_timeout が先。これより前の文はロック待ちをせず、その場で locked になる。
+            // poll と tick が同じ瞬間に開くと journal_mode が WAL の復旧ロックに当たって落ちていた。
+            d.exec("PRAGMA busy_timeout = 5000;")
             // WAL は並行読み取りのため。foreign_keys は approvals→proposals の FK を効かせるため。
             if (path !== ":memory:") d.exec("PRAGMA journal_mode = WAL;")
             d.exec("PRAGMA foreign_keys = ON;")
-            d.exec("PRAGMA busy_timeout = 5000;")
             // schema.sql より先。旧い形を寄せてから `IF NOT EXISTS` を通す(src/db/migrate.ts)。
             migrate(d)
             d.exec(readFileSync(SCHEMA_PATH, "utf8"))
-            d.prepare("INSERT OR REPLACE INTO schema_meta (key, value)VALUES ('version', ?)").run(
-              SCHEMA_VERSION,
-            )
+            // 同じ値なら書かない。開くたびに書き込みロックを取ると、同時に開いた側を待たせる。
+            const cur = d.prepare("SELECT value FROM schema_meta WHERE key = 'version'").get() as
+              | { value?: string }
+              | undefined
+            if (cur?.value !== SCHEMA_VERSION)
+              d.prepare("INSERT OR REPLACE INTO schema_meta (key, value)VALUES ('version', ?)").run(
+                SCHEMA_VERSION,
+              )
             return d
           },
           catch: (e) => new DbFailed({ op: `open ${path}`, message: String(e) }),
