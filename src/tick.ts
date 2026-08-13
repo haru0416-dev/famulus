@@ -66,6 +66,64 @@ function renderEvent(e: ObservedEvent): string {
   return `[${e.at}] ${e.source}: ${body.slice(0, 500)}`
 }
 
+function renderWatchSection(d: Digest): string | undefined {
+  if (d.stalled.length === 0) return undefined
+  return [
+    "## 対応対象の watch",
+    // 前回の結果を一緒に渡す。無いと毎回まっさらな状態で同じ一覧を読み直すことになり、
+    // 先週を踏まえた文が一度も出ない。実際に AI追跡の watch がそうなっていた。
+    ...d.stalled.map((w) => {
+      const head = `- ${short(w.id)} ${w.subject}(最後の動きから ${w.stalledDays} 日 / 次に動くのは ${w.next_move_owner}`
+      const runs = w.run_count > 0 ? ` / 通算 ${w.run_count} 回` : " / まだ一度も回していない"
+      const prev = w.last_result ? `\n  前回: ${w.last_result}` : ""
+      return `${head}${runs})${prev}`
+    }),
+    "",
+    // 残りの件数だけ出す。中身は出さない — 出すと結局全部読むことになり、絞った意味が消える。
+    ...(d.stalledHeld > 0
+      ? [
+          `他に ${d.stalledHeld} 件が冷却明けで待っているが、**この回は上の ${d.stalled.length} 件だけ見る。**`,
+          "残りは次回の処理対象になる。全部を見ようとしない — 一覧を読み直すだけで終わった回が実際に続いた。",
+          "",
+        ]
+      : []),
+    "状態を確認するか自分の担当作業を進めたら `ran` で結果を残す。**変化が無くても残す** — 呼ばないと次の tick でも対応対象になる。",
+    "**以前対応した結果を記録し忘れているなら、そのときの時刻を `at` に渡して今記録する。**",
+    "冷却はその時刻から数えるので後ろへずれない。件名に走行記録を書き込むのではなく、ここを使う。",
+  ].join("\n")
+}
+
+function renderPendingSection(d: Digest): string | undefined {
+  if (d.pending.length === 0) return undefined
+  return [
+    "## 返事待ちの提案(あなたは決められない。ユーザーが見るのを待っている)",
+    // 前回の結論を一緒に渡す。watch の `前回:` と同じ形(docs/adr/0017)。
+    ...d.pending.map((p) => {
+      const expiry = p.daysLeft >= 0 ? `あと ${p.daysLeft} 日で期限切れ` : "期限切れ"
+      const head = `- ${short(p.id)} ${p.summary}(${expiry})`
+      return p.settled_note ? `${head}\n  前回: ${p.settled_note}` : head
+    }),
+    "",
+    "**今回できることが無いなら `settle` で一行残す。** 残すとこの件は次回の実行条件から外れる",
+    "(一覧には残る — 承認はまだ要る)。呼ばないと、期限が近いというだけで毎回起きて、",
+    "毎回同じ「あなた待ちです」を書き直すことになる。**前回の結論が既に載っているなら、",
+    "同じことをもう一度書かない。**状況が動いたときだけ `settle` を上書きする。",
+  ].join("\n")
+}
+
+function renderRefusedSection(d: Digest): string | undefined {
+  if (d.refused.length === 0) return undefined
+  return [
+    // watch に前回の結果を渡すのと同じ(docs/adr/0017)。断られた側を渡さないと、
+    // まっさらな状態で同じ相手に同じ用件を出し直す。
+    "## 断られた提案(同じ形をもう一度出さない)",
+    ...d.refused.map((p) => `- ${p.summary}\n  → ${p.reason}`),
+    "",
+    "**理由が「前提が変わった」「その用件自体を中止した」なら、その用件は出さない。**",
+    "日付や文面を差し替えて出し直してよいのは、断られた理由がその一点だけだったとき。",
+  ].join("\n")
+}
+
 /**
  * tick のプロンプト。「何もしない」を正解として明示するのが要点。
  * 実行された以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を出す。
@@ -97,33 +155,8 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
   if (trusted.length > 0) {
     sections.push(["## まだ見ていない入力", ...trusted.map((e) => `- ${renderEvent(e)}`)].join("\n"))
   }
-  if (d.stalled.length > 0) {
-    sections.push(
-      [
-        "## 対応対象の watch",
-        // 前回の結果を一緒に渡す。無いと毎回まっさらな状態で同じ一覧を読み直すことになり、
-        // 先週を踏まえた文が一度も出ない。実際に AI追跡の watch がそうなっていた。
-        ...d.stalled.map((w) => {
-          const head = `- ${short(w.id)} ${w.subject}(最後の動きから ${w.stalledDays} 日 / 次に動くのは ${w.next_move_owner}`
-          const runs = w.run_count > 0 ? ` / 通算 ${w.run_count} 回` : " / まだ一度も回していない"
-          const prev = w.last_result ? `\n  前回: ${w.last_result}` : ""
-          return `${head}${runs})${prev}`
-        }),
-        "",
-        // 残りの件数だけ出す。中身は出さない — 出すと結局全部読むことになり、絞った意味が消える。
-        ...(d.stalledHeld > 0
-          ? [
-              `他に ${d.stalledHeld} 件が冷却明けで待っているが、**この回は上の ${d.stalled.length} 件だけ見る。**`,
-              "残りは次回の処理対象になる。全部を見ようとしない — 一覧を読み直すだけで終わった回が実際に続いた。",
-              "",
-            ]
-          : []),
-        "状態を確認するか自分の担当作業を進めたら `ran` で結果を残す。**変化が無くても残す** — 呼ばないと次の tick でも対応対象になる。",
-        "**以前対応した結果を記録し忘れているなら、そのときの時刻を `at` に渡して今記録する。**",
-        "冷却はその時刻から数えるので後ろへずれない。件名に走行記録を書き込むのではなく、ここを使う。",
-      ].join("\n"),
-    )
-  }
+  const watchSection = renderWatchSection(d)
+  if (watchSection) sections.push(watchSection)
   if (d.openQuestions.length > 0) {
     sections.push(
       [
@@ -132,37 +165,10 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
       ].join("\n"),
     )
   }
-  if (d.pending.length > 0) {
-    sections.push(
-      [
-        "## 返事待ちの提案(あなたは決められない。ユーザーが見るのを待っている)",
-        // 前回の結論を一緒に渡す。watch の `前回:` と同じ形(docs/adr/0017)。
-        ...d.pending.map((p) => {
-          const expiry = p.daysLeft >= 0 ? `あと ${p.daysLeft} 日で期限切れ` : "期限切れ"
-          const head = `- ${short(p.id)} ${p.summary}(${expiry})`
-          return p.settled_note ? `${head}\n  前回: ${p.settled_note}` : head
-        }),
-        "",
-        "**今回できることが無いなら `settle` で一行残す。** 残すとこの件は次回の実行条件から外れる",
-        "(一覧には残る — 承認はまだ要る)。呼ばないと、期限が近いというだけで毎回起きて、",
-        "毎回同じ「あなた待ちです」を書き直すことになる。**前回の結論が既に載っているなら、",
-        "同じことをもう一度書かない。**状況が動いたときだけ `settle` を上書きする。",
-      ].join("\n"),
-    )
-  }
-  if (d.refused.length > 0) {
-    sections.push(
-      [
-        // watch に前回の結果を渡すのと同じ(docs/adr/0017)。断られた側を渡さないと、
-        // まっさらな状態で同じ相手に同じ用件を出し直す。
-        "## 断られた提案(同じ形をもう一度出さない)",
-        ...d.refused.map((p) => `- ${p.summary}\n  → ${p.reason}`),
-        "",
-        "**理由が「前提が変わった」「その用件自体を中止した」なら、その用件は出さない。**",
-        "日付や文面を差し替えて出し直してよいのは、断られた理由がその一点だけだったとき。",
-      ].join("\n"),
-    )
-  }
+  const pendingSection = renderPendingSection(d)
+  if (pendingSection) sections.push(pendingSection)
+  const refusedSection = renderRefusedSection(d)
+  if (refusedSection) sections.push(refusedSection)
 
   // 在る作業場は毎回載せる。道具(`workspaces`)を置いただけでは引かれない —
   // 引くかどうかを判断するには、まず在ることを知っていなければならない。数行で済む。
