@@ -61,8 +61,8 @@ loadEnv()
 const workModel = () => process.env.OPEN_ZERO_WORK_MODEL ?? "gpt-5.6-luna"
 
 /**
- * 外を見る役のモデル。`-web` が付いた id だけが検索に出られる(src/model/claude-cli.ts の isWebModel)。
- * 外向きは既定で閉じていて、この役を通る以外に外へ出る道は無い。
+ * researcher 子に使うモデル。`-web` は rmod の hosted web_search を有効にする目印。
+ * researcher には別途 `search` と `fetch` も渡す。
  */
 const researchModel = () => process.env.OPEN_ZERO_RESEARCH_MODEL ?? "gpt-5.6-luna-web"
 
@@ -103,7 +103,7 @@ const recallTool = (state: TurnState) =>
   tool({
     // どう読むかまで書く。検索結果は日付と層(確定/取り込み/自分の記録)を頭に付けて返るが、
     // 今の事実として読むかその時点の記録として読むかは書き手の側で決まる。
-    // DB の8割は過去の会話の要約で、当時は真でも今は違いうる(転職・住まい・進行中の案件)。
+    // [取り込み] はその時点の記録で、現在値とは限らない。
     // 言わずに渡すと、1年前の要約を現在形でユーザーに喋り返す。
     description: `DB を全文検索する。3文字以上のクエリで部分一致する。
 各行の頭に [日時 層] が付く。読み方:
@@ -201,7 +201,7 @@ ${SOURCE_MENU.map((s) => `  - \`${s.name}\` — ${s.what}`).join("\n")}
 })
 
 /**
- * 一次資料を1ページ読む道具。外を見る役の中だけに置く(ここが唯一の取得点)。
+ * researcher に渡す URL 取得道具。検索索引の値を一次資料で確認するために使う。
  * 検索だけだと動きの速い値(版番号・価格・順位)が索引の古いまま返る。
  *
  * 取ってよい先の判定は src/services/Web.ts。宛先を列挙できない読み取りなので allowlist ではなく
@@ -335,7 +335,7 @@ const childOpts = (maxSteps: number) => ({ stopWhen: stepCountIs(maxSteps), maxR
 
 function buildTools(state: TurnState) {
   return {
-    // ── 外を見る役。唯一の外向きの経路で、枠は検索役と同じ chatgpt-rmod。
+    // ── 外を見る役。明示的な search / fetch と hosted web_search を使う子。
     researcher: tool({
       description:
         "web を調べる役。今の値・仕様・相場・営業時間のように**外にしか無いこと**はこれに投げる。" +
@@ -406,11 +406,8 @@ function buildTools(state: TurnState) {
         run(
           Effect.gen(function* () {
             const mem = yield* Memory
-            // この道具を呼ぶのは常に自分であって、ユーザーではない。
-            // ユーザーの発言は取り込みの側(Discord の poll / Intake)が `owner` で入れる。
-            // ここが `owner` だった間に書いた 18 行が DB に残っていて、ユーザーが言ったことと
-            // 自分の推測が同じ `source` に混ざっている。keeper と dream は材料を
-            // ユーザーの発言に限るのに列で判定するので、混ざるとその判定が効かない。
+            // この道具の書き手はモデル自身なので source は system。
+            // owner は Discord / Intake から取り込んだユーザー発言に限る。
             const id = slot
               ? yield* mem.believe(slot, content)
               : yield* mem.remember({ kind: "observe", source: "system", content })
@@ -675,8 +672,6 @@ function buildTools(state: TurnState) {
         "隔離されたコンテナ(docker)の中で走るので、**ユーザーのファイルにも DB にも触れない**。" +
         "書けるのは作業場だけで、コンテナは毎回捨てられる — 残るのは作業場に置いたファイルだけ。" +
         "既定では外に出られない。clone や install が要るときだけ net を true にする。" +
-        // 入っているものを先に言う。実測で、走行 30回のうち4回が中身を調べるだけ・
-        // apt で入れようとして落ちるだけで終わっていた(非 root なので apt は通らない)。
         "入っているもの: node / npm / npx / python3 / pip / venv / uv / git / curl / jq / rg / make / gcc。" +
         "**apt は通らない**(非 root)。python は uv か pip、それ以外は npx で足りる範囲でやる。" +
         "落としたパッケージ(npm / pip / uv)は作業場をまたいで共有されるので、二度目は取り直さない。" +
@@ -1024,16 +1019,8 @@ export interface AssistantOptions {
 }
 
 /**
- * エージェントを1つ作る。モデル id は作る時点で確定する — 呼ぶ側が env を立てる順に
- * 依存させない(前の形はモジュール評価時に固まっていたので、import の順が意味を持っていた)。
- *
- * 会話はこのオブジェクトの中にしか無く、プロセスが終われば消える。
- * 前の形は会話を SQLite に落として `tick-<その日>` で継いでいたが、それは継がない:
- * tick のプロンプトは毎回 digest から組み直され(未読の入力・動いていない watch と
- * その前回の結果・未解決の問い・断られた提案)、前の回の文脈はそこに入っている。
- * 15分ごとの起床が1日ぶん同じ会話に積むと、96回ぶんの道具の出力を毎回運ぶことになり、
- * 折り畳みを自前で書かない限り中身は digest と重複する。
- * 対話(src/chat.ts)は1つのプロセスの中なので、そちらは積む。
+ * エージェントを1つ作る。モデル id は作成時に確定する。
+ * chat は同じオブジェクトで会話履歴を継ぎ、tick は起動ごとに新しく作って digest から文脈を再構成する。
  */
 export function createAssistant(opts: AssistantOptions = {}) {
   const modelId = opts.model ?? process.env.OPEN_ZERO_MODEL ?? "claude-opus-5"
@@ -1088,8 +1075,10 @@ export function createAssistant(opts: AssistantOptions = {}) {
     async respond(input: string, o: { signal?: AbortSignal | undefined } = {}): Promise<Turn> {
       state.lastInputEventId = await observe(input)
       const sent: ModelMessage[] = [...history, { role: "user", content: input }]
-      // 途中の step で書かれた文を拾っておく。切られたときに返すのはこれ。
-      let partial = ""
+      // step ごとに書かれた文を全部積む。SDK の res.text は最後の step のぶんだけで
+      // (ai 7.0.62 の text: lastStep.text)、道具を挟んで書き足した回は前半が消える。
+      // 実測: 対話経路20回のうち2回、本文が消えて「〜を説明した」の一言だけが残った。
+      const said: string[] = []
       let steps = 0
       // 呼ばれた道具は step ごとに積む。最後に res から取ると、切られた回のぶんが残らない。
       const tools: string[] = []
@@ -1100,15 +1089,16 @@ export function createAssistant(opts: AssistantOptions = {}) {
           onStepFinish: (s) => {
             steps += 1
             for (const c of s.toolCalls ?? []) tools.push(c.toolName)
-            if (s.text.trim()) partial = s.text
+            const t = s.text.trim()
+            if (t && t !== said.at(-1)) said.push(t)
           },
         })
         history = [...sent, ...res.response.messages]
-        return { text: res.text, steps: res.steps.length, tools }
+        return { text: said.join("\n\n"), steps: res.steps.length, tools }
       } catch (e) {
         // 切られた回の途中経過は継がない。道具呼び出しに結果が付いていない列を次のターンへ
         // 渡すと、以後そのターンごと弾かれる。書けた文だけ返して、会話は前の回のまま置く。
-        return { text: partial, steps, tools, cutOff: causeReason(e) }
+        return { text: said.join("\n\n"), steps, tools, cutOff: causeReason(e) }
       }
     },
   }
