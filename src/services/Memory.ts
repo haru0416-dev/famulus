@@ -16,6 +16,9 @@ export type EventKind = "observe" | "belief" | "forget" | "redact" | "import"
 export type EventSource = "owner" | "calendar" | "gmail" | "web" | "system"
 export type Exposure = "private" | "public"
 
+/** 現在区間の `valid_from` がこの日数より古い belief を棚卸し候補として表示する。 */
+export const STALE_BELIEF_DAYS = 90
+
 export interface SourceRef {
   readonly kind: string
   readonly ref?: string

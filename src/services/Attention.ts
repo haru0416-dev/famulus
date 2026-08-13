@@ -94,7 +94,6 @@ export interface Digest {
   /** 冷却は明けているが、この回は載せなかった件数。プロンプトに数だけ出す。 */
   readonly stalledHeld: number
   readonly openQuestions: readonly QuestionRow[]
-  readonly staleBeliefs: readonly StaleBelief[]
   readonly pending: readonly PendingProposal[]
   readonly refused: readonly RefusedProposal[]
   readonly sinceLastActiveHours: number
@@ -106,13 +105,6 @@ export interface Digest {
   /** 今日ぶんの下書きがまだ出ていない。冷却を無視して実行条件になる(1日1回しか立たない)。 */
   readonly draftDue: boolean
   readonly idle: boolean
-}
-
-/** 現在区間の `valid_from` が古い belief。確認からの経過時間ではない。 */
-export interface StaleBelief {
-  readonly slot: string
-  readonly value: string
-  readonly valid_from: string
 }
 
 /** human-owned watch を滞留とみなす日数。famulus-owned はこの日数を待たず、個別冷却だけを見る。 */
@@ -146,15 +138,6 @@ export const EXPIRING_DAYS = 2
 export const IDLE_WAKE_HOURS = 24
 /** tick のプロンプトに載せる「断られたぶん」の数。実行条件には数えない。 */
 export const REFUSED_LIMIT = 5
-/**
- * 現在区間の `valid_from` がこの日数より古い belief を、棚卸しの材料にする。
- *
- * これは確認鮮度ではなく、事実が真になった時点からの経過を見る。古いだけで誤りとは限らないため、
- * 実行条件には数えず、別の条件で実行した回に確認候補として渡す。
- *
- * 実行条件には数えない。条件にすると、答えが返るまで毎回同じ slot で実行し続ける。
- */
-export const STALE_BELIEF_DAYS = 90
 
 /**
  * 一度動いたら、この時間は新しい入力が無いかぎり動かない。
@@ -420,16 +403,6 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         const stalled = queued.slice(0, STALLED_SHOW_MAX)
         const stalledHeld = queued.length - stalled.length
         const questions = yield* openQuestions()
-        // 現在区間の valid_from が古い事実。確認鮮度ではないので、消さずに棚卸し材料として渡す。
-        const staleBefore = new Date(nowMs - STALE_BELIEF_DAYS * 86_400_000)
-          .toISOString()
-          .replace(/\.\d{3}Z$/, "Z")
-        const staleBeliefs = (yield* db.all(
-          `SELECT slot, value, valid_from FROM belief_slots
-            WHERE valid_until IS NULL AND valid_from < ?
-            ORDER BY valid_from ASC LIMIT 10`,
-          staleBefore,
-        )) as unknown as StaleBelief[]
         const pendingRows = yield* db.all(
           `SELECT id, summary, created_at, expires_at, settled_note FROM proposals
             WHERE status = 'proposed' ORDER BY expires_at ASC`,
@@ -512,7 +485,6 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           stalled,
           stalledHeld,
           openQuestions: questions,
-          staleBeliefs,
           pending,
           refused,
           sinceLastActiveHours,

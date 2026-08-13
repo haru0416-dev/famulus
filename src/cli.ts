@@ -40,13 +40,13 @@ import { listWorkspaces, renderWorkspaces } from "./core/workspaces.ts"
 import { readJournal, renderJournal } from "./journal.ts"
 import { CLAUDE_POOL, RMOD_POOL } from "./model/claude-cli.ts"
 import { isRefusal, runtime } from "./runtime.ts"
-import { Attention, type NextMove, STALE_BELIEF_DAYS } from "./services/Attention.ts"
+import { Attention, type NextMove } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
 import { AUTONOMOUS_ROLE, BUDGET, Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
-import { Memory, renderRecall } from "./services/Memory.ts"
+import { Memory, renderRecall, STALE_BELIEF_DAYS } from "./services/Memory.ts"
 import { type ProposalRow, type ProposalStatus, Proposals } from "./services/Proposals.ts"
 import { runsRoot } from "./services/Sandbox.ts"
 
@@ -240,8 +240,13 @@ const program = (argv: readonly string[]) =>
 
       case "attention": {
         const att = yield* Attention
+        const memory = yield* Memory
         const d = yield* att.digest()
         const watches = yield* att.openWatches()
+        const staleBefore = new Date(Date.parse(d.at) - STALE_BELIEF_DAYS * 86_400_000)
+          .toISOString()
+          .replace(/\.\d{3}Z$/, "Z")
+        const staleBeliefs = yield* memory.staleBeliefs(staleBefore, 10)
         return [
           `いま ${d.at}`,
           d.idle
@@ -261,10 +266,12 @@ const program = (argv: readonly string[]) =>
             ? ["  なし"]
             : d.openQuestions.map((q) => `  ${short(q.id)} ${q.question}`)),
           "",
-          `確かめてから ${STALE_BELIEF_DAYS} 日以上たった事実(${d.staleBeliefs.length} 件)`,
-          ...(d.staleBeliefs.length === 0
+          `確かめてから ${STALE_BELIEF_DAYS} 日以上たった事実(${staleBeliefs.length} 件)`,
+          ...(staleBeliefs.length === 0
             ? ["  なし"]
-            : d.staleBeliefs.map((b) => `  ${b.slot} = ${b.value}(${localStamp(b.valid_from, false)} から)`)),
+            : staleBeliefs.map(
+                (b) => `  ${b.slot} = ${JSON.stringify(b.value)}(${localStamp(b.validFrom, false)} から)`,
+              )),
         ].join("\n")
       }
 
