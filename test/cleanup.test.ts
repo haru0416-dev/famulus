@@ -28,15 +28,23 @@ const age = (path: string, daysAgo: number): void => {
   utimesSync(path, t, t)
 }
 
+/** コンテナを数える手の差し替え。**検査からホストの docker には触らない。** */
+const noOrphans = async (): Promise<{ removed: string[]; kept: string[] }> => ({ removed: [], kept: [] })
+
 const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): Promise<void> => {
   const dir = mkdtempSync(join(tmpdir(), "oz-cleanup-"))
   const runs = process.env.OPEN_ZERO_RUNS
+  const cache = process.env.OPEN_ZERO_RUN_CACHE
   process.env.OPEN_ZERO_RUNS = join(dir, "runs")
+  // **既定のままだと本物の `.data/run-cache` を見に行く。** 上限を超えていたら検査が消してしまう。
+  process.env.OPEN_ZERO_RUN_CACHE = join(dir, "cache")
   try {
     await withHarness((h) => Promise.resolve(fn(dir, h)))
   } finally {
     if (runs === undefined) delete process.env.OPEN_ZERO_RUNS
     else process.env.OPEN_ZERO_RUNS = runs
+    if (cache === undefined) delete process.env.OPEN_ZERO_RUN_CACHE
+    else process.env.OPEN_ZERO_RUN_CACHE = cache
     rmSync(dir, { recursive: true, force: true })
   }
 }
@@ -57,7 +65,7 @@ test("しばらく触られていない作業場だけ落ちる", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "old", 10)
     workspace(dir, "fresh", 1)
-    const line = await h.run(cleanup({ at: AT, days: DAYS }))
+    const line = await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans }))
     assert.match(line, /作業場 1 件/)
     assert.equal(existsSync(join(dir, "runs", "old")), false)
     assert.equal(existsSync(join(dir, "runs", "fresh")), true)
@@ -71,7 +79,7 @@ test("しばらく触られていない作業場だけ落ちる", async () => {
 test("下の階だけ書き換えた作業場は残る", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "working", 10, 1)
-    const line = await h.run(cleanup({ at: AT, days: DAYS }))
+    const line = await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans }))
     assert.match(line, /落とすものは無かった/)
     assert.equal(existsSync(join(dir, "runs", "working")), true)
   })
@@ -80,7 +88,7 @@ test("下の階だけ書き換えた作業場は残る", async () => {
 test("--dry は数えるだけで消さない", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "old", 10)
-    const line = await h.run(cleanup({ at: AT, days: DAYS, dry: true }))
+    const line = await h.run(cleanup({ at: AT, days: DAYS, dry: true, orphans: noOrphans }))
     assert.match(line, /数えただけ/)
     assert.match(line, /作業場 1 件/)
     assert.equal(existsSync(join(dir, "runs", "old")), true)
@@ -89,7 +97,29 @@ test("--dry は数えるだけで消さない", async () => {
 
 test("作業場が1つも無くても落ちない", async () => {
   await withTmp(async (_dir, h) => {
-    assert.match(await h.run(cleanup({ at: AT, days: DAYS })), /落とすものは無かった/)
+    assert.match(await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans })), /落とすものは無かった/)
+  })
+})
+
+/**
+ * 共有キャッシュは**古さで切らない**。使い回すために置いてあるので、
+ * 触られていないことは消してよい理由にならない。切るのは上限だけ。
+ */
+test("共有キャッシュは上限を超えたときだけ落ちる", async () => {
+  await withTmp(async (dir, h) => {
+    const cache = join(dir, "cache", "uv")
+    mkdirSync(cache, { recursive: true })
+    const blob = join(cache, "big")
+    writeFileSync(blob, "x".repeat(64 * 1024))
+    age(blob, 90) // 90 日前。作業場ならとうに落ちている年
+    const kept = await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans }))
+    assert.match(kept, /落とすものは無かった/)
+    assert.equal(existsSync(blob), true, "上限内のキャッシュが古さで落ちた")
+
+    // 上限を跨いだときだけ落ちる。**古さでは動かない**ことを、同じ木で続けて見る。
+    const line = await h.run(cleanup({ at: AT, days: DAYS, cacheMaxMb: 0, orphans: noOrphans }))
+    assert.match(line, /共有キャッシュ/)
+    assert.equal(existsSync(blob), false)
   })
 })
 
@@ -127,7 +157,7 @@ test("keep を立てた作業場は古くても残る", async () => {
     const line = await h.run(
       Effect.gen(function* () {
         yield* keepWorkspace("selfdev", "自分のソース")
-        return yield* cleanup({ at: AT, days: DAYS })
+        return yield* cleanup({ at: AT, days: DAYS, orphans: noOrphans })
       }),
     )
     assert.match(line, /作業場 1 件/)
@@ -143,9 +173,9 @@ test("落とした作業場の登録も消える(--dry では消えない)", asy
     const after = await h.run(
       Effect.gen(function* () {
         yield* noteWorkspace("old", "もう使っていない調べ物")
-        yield* cleanup({ at: AT, days: DAYS, dry: true })
+        yield* cleanup({ at: AT, days: DAYS, dry: true, orphans: noOrphans })
         const kept = yield* purposeOf("old")
-        yield* cleanup({ at: AT, days: DAYS })
+        yield* cleanup({ at: AT, days: DAYS, orphans: noOrphans })
         return { kept, gone: yield* purposeOf("old") }
       }),
     )

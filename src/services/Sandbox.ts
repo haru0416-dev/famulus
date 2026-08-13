@@ -15,14 +15,22 @@
  */
 import { spawn } from "node:child_process"
 import { mkdirSync } from "node:fs"
-import { isAbsolute, join, resolve } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { TZ } from "../core/time.ts"
 
 /**
- * 走らせるコンテナ。`node` と `git` と `python3` が最初から入っている必要がある(拾い物は大抵どれかで動く)。
- * 中身の実測は docs/adr/0001 — jq・cargo・go・uv は**入っていない**ので、要るなら中で取る。
+ * 走らせるコンテナ。docker/run.Dockerfile で組む(素の `node:24-bookworm` に
+ * pip・venv・uv・jq・ripgrep を足したもの)。**無ければ最初の走行が組む** — `ensureImage`。
+ *
+ * 足すものを決めたのは走行記録 30回の実測で、呼ばれた道具は
+ * git 11 / python3 7 / npx 7 / pip 6 / uv 4 / node 4 / curl 3 / apt 4 / jq 1 / go 1 / cargo 1。
+ * このうち pip・uv・jq が素のイメージに無く、**apt の4回は全部それを入れようとして落ちた回**
+ * (非 root なので通らない)。go と cargo は「何が入っているか」を調べる走行の中でだけ呼ばれている。
  */
-const DEFAULT_IMAGE = "node:24-bookworm"
+const RUN_IMAGE = "open-zero-run:1"
+/** 組めなかったときの落ち先。ここでも走りはするが、pip も uv も jq も無い。 */
+const BASE_IMAGE = "node:24-bookworm"
 /**
  * 1回の走行の上限。**依存の取得は分単位で掛かる**ので、web の 20 秒とは桁が違う。
  *
@@ -59,6 +67,18 @@ export interface RunResult {
 
 /** 走行の置き場。`.data/` の下に置くので gitignore 済みで、DB と同じく外には出ない。 */
 export const runsRoot = (): string => resolve(process.env.OPEN_ZERO_RUNS ?? ".data/runs")
+
+/**
+ * 落としたパッケージの共有置き場。**作業場の外に置く。**
+ *
+ * `HOME=/work` なので、既定のままだと npm も pip も uv も作業場ごとにキャッシュを作る。
+ * 実測(2026-08-13、このホスト): `uv` で requests を入れる走行は、作業場を変えると
+ * 2041ms → 3274ms に伸びて、両方の作業場が 57MB ずつ同じものを持っていた。
+ *
+ * **`runsRoot()` の下に置いてはいけない。** `sweepRuns` は `.data/runs` の直下を全部
+ * 作業場として数えるので、キャッシュが作業場の一覧に出て、14日で消される側に回る。
+ */
+export const cacheRoot = (): string => resolve(process.env.OPEN_ZERO_RUN_CACHE ?? ".data/run-cache")
 
 /**
  * 名前から作業場を1つ作って絶対パスを返す。
@@ -108,15 +128,124 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     // 日付を読む検査1件が中でだけ 9 時間ずれて落ちた(src/services/Search.ts の publishedDate)。
     "-e",
     `TZ=${TZ}`,
+    // **落としたものは作業場をまたいで使い回す。** 置き場は作業場の外(cacheRoot)。
+    // イメージ側にも同じ値を焼いてあるが、ここでも渡す — 落ち先の素のイメージには入っていないので、
+    // 組めなかった回だけキャッシュが効かない、という差ができる。
+    "-e",
+    "npm_config_cache=/cache/npm",
+    "-e",
+    "PIP_CACHE_DIR=/cache/pip",
+    "-e",
+    "UV_CACHE_DIR=/cache/uv",
+    "-e",
+    "XDG_CACHE_HOME=/cache/xdg",
+    // uv は既定でキャッシュから hardlink する。/cache と /work は別のマウントなので張れず、
+    // 走行のたびに警告を出して copy へ落ちる。最初から copy と言っておく。
+    "-e",
+    "UV_LINK_MODE=copy",
     "-v",
     `${opts.workDir}:/work`,
+    "-v",
+    `${cacheRoot()}:/cache`,
     "-w",
     "/work",
-    opts.image ?? process.env.OPEN_ZERO_RUN_IMAGE ?? DEFAULT_IMAGE,
+    opts.image ?? process.env.OPEN_ZERO_RUN_IMAGE ?? RUN_IMAGE,
     "bash",
     "-lc",
     command,
   ]
+}
+
+/** docker を1回叩いて終了コードと出力を取る。走行そのものではなく、周りの世話(組む・数える・消す)用。 */
+function docker(args: readonly string[], timeoutMs = 5 * 60_000): Promise<{ code: number; out: string }> {
+  return new Promise((done) => {
+    const child = spawn("docker", args as string[], { stdio: ["ignore", "pipe", "pipe"] })
+    let out = ""
+    const take = (c: Buffer): void => {
+      if (out.length < 8_000) out += c.toString("utf8")
+    }
+    child.stdout.on("data", take)
+    child.stderr.on("data", take)
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs)
+    child.on("error", (e) => {
+      clearTimeout(timer)
+      done({ code: 127, out: e.message })
+    })
+    child.on("close", (code) => {
+      clearTimeout(timer)
+      done({ code: code ?? -1, out })
+    })
+  })
+}
+
+/** 一度組んだら二度と見に行かない(`docker image inspect` でも 30ms 掛かるので、走行ごとには払わない)。 */
+let imagePromise: Promise<string> | undefined
+
+/**
+ * 走行用のイメージを**無ければ組む**。返すのは実際に使えるイメージ名。
+ *
+ * 組むのは初回だけで、実測 15.6 秒 / 素のイメージ +110MB(2026-08-13、このホスト)。
+ * 走行の持ち時間から引かれるので、`ensureImage` は tick の締切より前に呼ぶ側で吸収する
+ * — いまは `runInSandbox` の中で待つ。1回きりなので、二度目からは 0 秒。
+ *
+ * **組めなかったら素のイメージへ落ちる。** ここで例外を投げると、Dockerfile の書き損じ1つで
+ * 走行の道が丸ごと閉じる。落ちたことは走行の出力の頭に書いて、読む側に見せる。
+ */
+export function ensureImage(): Promise<string> {
+  imagePromise ??= (async () => {
+    const has = await docker(["image", "inspect", RUN_IMAGE], 30_000)
+    if (has.code === 0) return RUN_IMAGE
+    const file = join(dirname(fileURLToPath(import.meta.url)), "../../docker/run.Dockerfile")
+    // 文脈は Dockerfile の在るディレクトリだけ渡す。リポジトリの根を渡すと `.data/` ごと
+    // daemon へ送ることになる(実測で 1.4GB あった)。
+    const built = await docker(["build", "-q", "-f", file, "-t", RUN_IMAGE, dirname(file)])
+    return built.code === 0 ? RUN_IMAGE : BASE_IMAGE
+  })()
+  return imagePromise
+}
+
+/**
+ * 主のいないコンテナを消す。**名前に持ち主の pid が入っている**ことだけを頼りにする
+ * (`oz-run-<時刻36進>-<pid>`)。時間切れの片付けは `docker rm -f` を投げた時点で終わりだが、
+ * tick 自身が落ちた回・ホストが落ちた回はそれが飛ばないので、`--rm` の付いたコンテナが残る。
+ *
+ * 生きている pid のものは触らない。**pid は使い回される**ので「死んでいる」以上の判定はできず、
+ * 別のプロセスが同じ番号を拾っていれば消し損ねる。消しすぎる側には倒さない。
+ */
+export function orphanNames(
+  names: readonly string[],
+  isAlive: (pid: number) => boolean,
+): { removed: string[]; kept: string[] } {
+  const removed: string[] = []
+  const kept: string[] = []
+  for (const name of names) {
+    const pid = Number(name.split("-").at(-1))
+    // pid が読めない名前は**残す**。ここへ来るのは手で立てたコンテナか、名前の付け方を変えた後の残り。
+    ;(!Number.isInteger(pid) || pid <= 0 || isAlive(pid) ? kept : removed).push(name)
+  }
+  return { removed, kept }
+}
+
+/** 上の判定を docker に繋いだもの。`dry` なら数えるだけ。 */
+export async function sweepOrphans(dry = false): Promise<{ removed: string[]; kept: string[] }> {
+  const ls = await docker(["ps", "-a", "--filter", "name=^oz-run-", "--format", "{{.Names}}"], 30_000)
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const out = orphanNames(
+    ls.out
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean),
+    alive,
+  )
+  if (!dry) for (const name of out.removed) await docker(["rm", "-f", name], 30_000)
+  return out
 }
 
 /**
@@ -127,14 +256,20 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
  */
 export async function runInSandbox(command: string, opts: RunOptions): Promise<RunResult> {
   if (!isAbsolute(opts.workDir)) throw new Error(`作業場は絶対パスで渡す: ${opts.workDir}`)
+  mkdirSync(cacheRoot(), { recursive: true })
+  // 名前を明に渡された回(検査・実験)は組みに行かない。
+  const image = opts.image ?? process.env.OPEN_ZERO_RUN_IMAGE ?? (await ensureImage())
+  const fellBack = image === BASE_IMAGE && opts.image === undefined && !process.env.OPEN_ZERO_RUN_IMAGE
   const startedAt = Date.now()
   // コンテナの名前。**時刻で作る**(同じ走行を続けて呼んでも衝突しない)。時間切れのとき外から消すのに要る。
   const name = `oz-run-${startedAt.toString(36)}-${process.pid}`
-  const child = spawn("docker", dockerArgs(command, { ...opts, name }), {
+  const child = spawn("docker", dockerArgs(command, { ...opts, image, name }), {
     stdio: ["ignore", "pipe", "pipe"],
   })
 
-  let out = ""
+  // **走行の道具立てが違うことは、走る前に伝える。** 落ちたことを黙っていると、
+  // 読む側は `uv: command not found` から「この環境には uv が無い」と学んでしまう。
+  let out = fellBack ? `[走行用イメージを組めなかった — pip / uv / jq は無い]\n` : ""
   let timedOut = false
   const take = (chunk: Buffer): void => {
     // 上限を超えた分は捨てる。全部溜めてから切ると、暴走した install でこちら側の記憶が先に尽きる。
