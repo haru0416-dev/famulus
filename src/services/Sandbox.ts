@@ -21,18 +21,20 @@ import { TZ } from "../core/time.ts"
 
 /**
  * 走らせるコンテナ。docker/run.Dockerfile で組む(素の `node:24-bookworm` に
- * pip・venv・uv・jq・ripgrep・bun を足したもの)。無ければ最初の走行が組む — `ensureImage`。
+ * pip・venv・uv・jq・ripgrep を足したもの)。無ければ最初の走行が組む — `ensureImage`。
  *
  * 足すものを決めたのは走行記録 30回の実測で、呼ばれた道具は
  * git 11 / python3 7 / npx 7 / pip 6 / uv 4 / node 4 / curl 3 / apt 4 / jq 1 / go 1 / cargo 1。
  * このうち pip・uv・jq が素のイメージに無く、apt の4回は全部それを入れようとして失敗した回
  * (非 root なので通らない)。go と cargo は「何が入っているか」を調べる走行の中でだけ呼ばれている。
- * bun はこの記録に無いが、自分のソースを直す走行がゲートに要るので入れてある。
+ *
+ * **記録に無いものは足さない。**1つ足すたびに全部の走行が重くなる。ここに無い実体が要る走行は、
+ * その走行の中で取る(`oz selfdev` が bun を npx で引くのがそれ — src/core/selfdev.ts)。
  *
  * **札を上げたら、走っているホストでは古いイメージが残る。**`ensureImage` は名前で存在を見るので、
  * 上げた回だけ組み直しが1回入る。古いほうは自動では消えない。
  */
-const RUN_IMAGE = "open-zero-run:2"
+const RUN_IMAGE = "open-zero-run:1"
 /** ビルド失敗時のフォールバックイメージ。ここでも実行できるが、pip も uv も jq も無い。 */
 const BASE_IMAGE = "node:24-bookworm"
 /**

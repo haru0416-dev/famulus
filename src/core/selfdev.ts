@@ -31,17 +31,24 @@ const CLONE = "open-zero"
 export const repoRoot = (): string => fileURLToPath(new URL("../..", import.meta.url))
 
 /**
+ * コンテナの中で bun を引く手。イメージには入っていない — 入れるのは走行記録で呼ばれたものだけで、
+ * bun が要るのはこの作業場1つだけだから(src/services/Sandbox.ts)。
+ *
+ * 版は動いているこちらに合わせる。固定の文字列を書くと、mise が上げた日から
+ * 「コンテナで通ったゲート」がホストで通る保証にならなくなる。
+ * npx の取得物は共有キャッシュ(`/cache/npm/_npx`)に残るので、二度目からは 1.4 秒で、
+ * net を閉じた回でも引ける。
+ */
+const BUN = `npx -y bun@${Bun.version}`
+
+/**
  * 次の tick がこれを読んで「ここで何ができるか」を決める。通し方を本文に書く。
  * 一覧に出るのは名前とこの一行だけなので、ここに無い手順は次の回には存在しない。
  *
  * 中身は package.json の `gate` に置いてある。定義を2か所に持たない —
  * ここに並べ直すと、ホストで通しているものとコンテナで通しているものが黙って食い違う。
- *
- * 呼ぶ手は bun だけ。image に実体が入っているので(docker/run.Dockerfile)、
- * 依存を取る前から引ける。前は corepack で pnpm を起こし、その pnpm が node_modules に置いた
- * bun を引いていた — 依存の取得が失敗した回はゲートを呼ぶ手ごと無くなっていた。
  */
-export const GATE = `cd ${CLONE} && bun run gate`
+export const GATE = `cd ${CLONE} && ${BUN} run gate`
 
 export const SELFDEV_PURPOSE =
   `open-zero 自身のソース(${repoRoot()} の clone)。自分の欠陥はここで直す。` +
@@ -50,7 +57,7 @@ export const SELFDEV_PURPOSE =
   `**ここでの変更は動いている本体には入らない。**`
 
 /** 依存の取得。`--frozen-lockfile` は lockfile と package.json のずれをその場で落とす。 */
-const INSTALL = "bun install --frozen-lockfile"
+const INSTALL = `${BUN} install --frozen-lockfile`
 
 /** 依存の取得は分単位。tick の中では走らせないので、コンテナの既定(3分)より長く取る。 */
 const INSTALL_MS = 10 * 60_000
