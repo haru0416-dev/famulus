@@ -24,7 +24,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { Effect } from "effect"
 import { nowIso } from "../core/time.ts"
 import { Runner } from "../model/Runner.ts"
@@ -49,6 +49,19 @@ const EXCLUDE = [/cache-agent-exp/, /(^|\/)-tmp-/]
 
 /** 人が実際にキーボードで打った発話だけを選ぶ目印。補完や system 注入と区別が付く唯一の場所。 */
 const TYPED = "typed"
+const TYPED_MARK = `"promptSource":"${TYPED}"`
+
+/**
+ * 生ログを1本読む。人が打った跡が無ければ `undefined`。
+ *
+ * **含有判定は Buffer のままやる。** utf8 の文字列に起こす手間は読み取り自体より重く、
+ * 実測(0.63G / 295 本)で 161ms → 1,544ms になる。生ログの大半は道具の入出力で、
+ * その中身をこちらは一度も読まない(docs/adr/0026)。
+ */
+function readTypedRaw(path: string): string | undefined {
+  const buf = readFileSync(path)
+  return buf.includes(TYPED_MARK) ? buf.toString("utf8") : undefined
+}
 
 /** 応答1件から残す長さの上限と下限。結論は最後に出るので、最後の1件だけ別枠で厚く取る。 */
 const REPLY_HEAD = 400
@@ -126,9 +139,9 @@ function plainText(content: unknown): string {
 
 /** JSONL を1本読んで、人の発話とエージェントの地の文だけに落とす。道具の入出力はここで消える。 */
 function readSession(path: string): { ref: SessionRef; turns: Turn[]; rawBytes: number } | undefined {
-  const raw = readFileSync(path, "utf8")
   // 全文パースは高いので、人が打った跡が無いファイルはここで捨てる。
-  if (!raw.includes(`"promptSource":"${TYPED}"`)) return undefined
+  const raw = readTypedRaw(path)
+  if (raw === undefined) return undefined
 
   const turns: Turn[] = []
   let sessionId = ""
@@ -165,6 +178,49 @@ function readSession(path: string): { ref: SessionRef; turns: Turn[]; rawBytes: 
     ref: { kind: "claude-code", sessionId, path, label: cwd, at: at.replace(/\.\d{3}Z$/, "Z"), turns: owner },
     turns,
     rawBytes: Buffer.byteLength(raw),
+  }
+}
+
+/**
+ * 走査用に `ref` だけを作る。**全行を JSON にしない。**
+ *
+ * `scan` が要るのは「どの回がまだ入っていないか」だけで、応答の地の文は一度も見ない。
+ * owner の発話になり得るのは `TYPED_MARK` を含む行だけなので、そこだけ解く —
+ * 実測で 223,864 行 → 1,891 行(docs/adr/0026)。数え方は `readSession` と同じ条件なので、
+ * 返る `turns` は全行を解いたときと一致する。
+ */
+function readSessionRef(path: string): SessionRef | undefined {
+  const raw = readTypedRaw(path)
+  if (raw === undefined) return undefined
+
+  let sessionId = ""
+  let cwd = ""
+  let at = ""
+  let owner = 0
+  for (const line of raw.split("\n")) {
+    if (!line.includes(TYPED_MARK)) continue
+    let j: Record<string, unknown>
+    try {
+      j = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (j.isSidechain === true || j.type !== "user" || j.promptSource !== TYPED) continue
+    if (plainText((j.message as { content?: unknown } | undefined)?.content).trim().length === 0) continue
+    sessionId ||= String(j.sessionId ?? "")
+    cwd ||= String(j.cwd ?? "")
+    at ||= String(j.timestamp ?? nowIso())
+    owner += 1
+  }
+
+  if (sessionId === "" || owner === 0) return undefined
+  return {
+    kind: "claude-code",
+    sessionId,
+    path,
+    label: cwd,
+    at: at.replace(/\.\d{3}Z$/, "Z"),
+    turns: owner,
   }
 }
 
@@ -584,33 +640,36 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
       return out
     })
 
-    /** 取り込み元をまたいで、読めるものを全部 Read の形に揃える。 */
-    const readAll = Effect.gen(function* () {
-      const out: Read[] = []
-      for (const p of yield* files) {
-        try {
-          const s = readSession(p)
-          if (s) out.push(s)
-        } catch {
-          // 読めない1本で残り全部を落とさない。
-        }
-      }
-      try {
-        out.push(...readWebChats(), ...readWebDesign())
-      } catch {
-        // 書き出しが無い・壊れているだけなら、作業ログ側は通す。
-      }
-      return out
-    })
-
     /**
      * まだ取り込んでいない会話を**古い順**に返す。
      * 新しい順にしないのは、判断の履歴は順番に読めないと理由が繋がらないから。
+     *
+     * **済んだ回は、開く前に外す。** Claude Code の作業ログはファイル名が sessionId なので、
+     * 中を読まなくても取り込み済みかどうかが分かる。読み終えてから `sessionId` で外す形だと、
+     * 生ログの大半を占める「もう入っている回」を毎回開き直すことになる —
+     * 実測で 295 本 0.63G のうち 81 本が済みで、その 81 本がほぼ全部の量だった(docs/adr/0026)。
+     * 名前が sessionId と違うファイルは済みの集合に当たらないので、これまで通り開いて読む。
      */
     const scan = (limit = 20) =>
       Effect.gen(function* () {
         const done = yield* ingestedIds
-        const refs = (yield* readAll).map((r) => r.ref).filter((r) => !done.has(r.sessionId))
+        const refs: SessionRef[] = []
+        for (const p of yield* files) {
+          if (done.has(basename(p, ".jsonl"))) continue
+          try {
+            const r = readSessionRef(p)
+            if (r && !done.has(r.sessionId)) refs.push(r)
+          } catch {
+            // 読めない1本で残り全部を落とさない。
+          }
+        }
+        try {
+          for (const r of [...readWebChats(), ...readWebDesign()]) {
+            if (!done.has(r.ref.sessionId)) refs.push(r.ref)
+          }
+        } catch {
+          // 書き出しが無い・壊れているだけなら、作業ログ側は通す。
+        }
         return refs.sort((a, b) => a.at.localeCompare(b.at)).slice(0, limit)
       })
 

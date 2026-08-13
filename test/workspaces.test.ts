@@ -5,7 +5,7 @@
  * 掃除はファイルを消しても登録は消さないことがある。**在るのは実体のほう**に倒す。
  */
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -117,6 +117,46 @@ test("scanTree は木の中で一番新しい刻と合計の大きさを返す",
     const t = scanTree(dir)
     assert.equal(t.bytes, 150)
     assert.ok(Date.now() - t.newestMs < 60_000, "深いところの刻を拾う")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+/**
+ * **同じ実体を2回数えない。** 作業場の中身はほとんどが `node_modules` で、
+ * pnpm はそこを symlink と hard link で組む。数え直すと大きさが数倍に出る(docs/adr/0026)。
+ */
+test("scanTree は symlink の先へ降りない", () => {
+  const dir = mkdtempSync(join(tmpdir(), "oz-scan-sym-"))
+  try {
+    mkdirSync(join(dir, "real"))
+    writeFileSync(join(dir, "real", "f.bin"), "x".repeat(100))
+    symlinkSync(join(dir, "real"), join(dir, "link"), "dir")
+    assert.equal(scanTree(dir).bytes, 100)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("scanTree は hard link を1回だけ数える", () => {
+  const dir = mkdtempSync(join(tmpdir(), "oz-scan-hard-"))
+  try {
+    writeFileSync(join(dir, "f.bin"), "x".repeat(100))
+    linkSync(join(dir, "f.bin"), join(dir, "g.bin"))
+    assert.equal(scanTree(dir).bytes, 100)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+/** 輪があっても落ちない。**投げると一覧そのものが出なくなる** — tick のプロンプトも作れない。 */
+test("scanTree は symlink の輪で落ちない", () => {
+  const dir = mkdtempSync(join(tmpdir(), "oz-scan-loop-"))
+  try {
+    mkdirSync(join(dir, "a"))
+    writeFileSync(join(dir, "a", "f.bin"), "x".repeat(100))
+    symlinkSync(dir, join(dir, "a", "up"), "dir")
+    assert.equal(scanTree(dir).bytes, 100)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
