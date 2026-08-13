@@ -1,5 +1,5 @@
 /**
- * owner 入力があり、tick の応答が最後まで完了した回で、主処理が保存しなかった確定値を補完する。
+ * keeper は、owner 入力があり tick の応答が最後まで完了した回で、主処理が保存しなかった確定値を補完する後処理。
  * dream も同じ判定を複数日ぶんの材料に再利用する。
  *
  * DB には2つの層がある。`import`(過去の会話から起こした要約)は「その日時点でそう書かれていた」
@@ -8,10 +8,10 @@
  * ユーザーが話した回にモデルがそれを呼ぶかどうかに全部かかっていた。呼ばれないと、
  * 行は増えるのに引ける値は増えない。実際にそうなっていた(docs/adr/0014)。
  *
- * 材料はユーザーの入力だけ。外から来たもの(web / gmail)は確定値として保存しない。
- * 確定値は「今の事実」として後の回に無検査で使われるので、ここを外に開くと、
+ * 判定対象はユーザーの入力だけ。外部取得データ(web / gmail)は確定値として保存しない。
+ * 確定値は「今の事実」として後の回に無検査で使われるので、外部取得データを対象に含めると、
  * 取得した文が事実として DB に入る経路ができる。引用がコード側で照合できるのも、
- * 材料をユーザーの入力に限っているから成り立つ。
+ * 判定対象をユーザーの入力に限っているから成り立つ。
  */
 import * as Effect from "effect/Effect"
 import { causeReason } from "../core/errors.ts"
@@ -96,7 +96,7 @@ export interface KeptValue {
 const bare = (s: string): string => s.replace(/\s/g, "")
 
 /**
- * 材料に無い引用を付けたものを除外する。指示ではなくコードが弾く。
+ * 判定対象に無い引用を付けたものを除外する。指示ではなくコードが弾く。
  *
  * 「ユーザーが言ったことだけ」は書いておけば守られる類の制約ではない。守られなかったときに
  * 残るのが確定値(後の回が今の事実として無検査で使う)なので、通してから気づく形にしない。
@@ -118,7 +118,7 @@ export const keepGrounded = (values: readonly KeptValue[] | undefined, material:
 }
 
 /**
- * 締めの keeper を1回通す。失敗しても回全体は失敗させない。
+ * 回の終了時に確定値補完処理(keeper)を1回実行する。失敗しても回全体は失敗させない。
  *
  * 戻り値は DB に残す1行。呼び出し側はこれを tick の記録に添えるだけで、経路の分岐には使わない
  * — keeper の処理失敗によって返信や既読位置が変わると、直す場所が分からなくなる。
@@ -127,7 +127,7 @@ export const keep = (opts: {
   material: string
   since?: string
   signal?: AbortSignal
-  /** 材料の見出し。対象期間を広げて呼ぶ側(dream)が「1回ぶんではない」と書けるようにする。 */
+  /** 判定対象の見出し。対象期間を広げて呼ぶ側(dream)が「1回ぶんではない」と書けるようにする。 */
   header?: string
   /** 記録に付ける名前。既定は keeper。 */
   label?: string
@@ -138,7 +138,7 @@ export const keep = (opts: {
     const runner = yield* Runner
     const mem = yield* Memory
     const tag = opts.label ?? "keeper"
-    if (bare(opts.material).length === 0) return `${tag}: 材料が無い(ユーザーの発言がこの回に無い)`
+    if (bare(opts.material).length === 0) return `${tag}: 判定対象が無い(ユーザーの発言がこの回に無い)`
 
     // 既存の slot を見せる。別名を作らせないため — 同じ事柄が2つの名前で入ると、
     // どちらを引いても片方しか出てこない DB になる。
@@ -149,7 +149,7 @@ export const keep = (opts: {
         : slots.map((s) => `- ${s.slot} = ${JSON.stringify(s.value)}`).join("\n")
 
     // この回で既に確定した slot には触らない。keeper は主処理が保存しなかった値を補完する側であって、
-    // 二人目の書き手ではない。触ると、本体が書いた値を数十秒で言い換えた区間が上に乗り、
+    // 同じ値を再保存する処理ではない。触ると、主処理が書いた値を数十秒後に言い換えた区間が追加され、
     // 履歴が寿命1分未満の行で埋まる(実際にそうなった)。
     const since = opts.since
     const already = new Set(
@@ -185,7 +185,7 @@ export const keep = (opts: {
     // 除外した数も残す。引用が写せずに除外したのと、本体が先に書いていたのと、
     // そもそも保存対象が無かったのは全部別の話。混ぜると、どれが起きているか読めない。
     const tail = [
-      dropped > 0 ? `(引用が材料に無く ${dropped} 件を除外した)` : "",
+      dropped > 0 ? `(引用が判定対象に無く ${dropped} 件を除外した)` : "",
       late > 0 ? `(${late} 件はこの回で確定済み)` : "",
     ]
       .filter(Boolean)

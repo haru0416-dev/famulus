@@ -54,7 +54,7 @@ test("同じ slot を1回で2度上げない(区間が同じ瞬間に2本立つ)
 test("ユーザーの発言が無い回はモデルを呼ばない", async () => {
   await withHarness(async (h) => {
     const line = await h.run(keep({ material: "  \n " }))
-    assert.match(line, /材料が無い/)
+    assert.match(line, /判定対象が無い/)
     assert.equal(h.calls.length, 0, "枠を1回も食わない")
   })
 })
@@ -81,7 +81,7 @@ test("上げたものは確定値になり、既存の slot は区間が継が�
       assert.equal(out.hist[0]?.validUntil, "2026-08-08T00:00:00Z")
       // 引用が写せずに除外した件数は、保存対象が無かったのとは別に残す。
       assert.match(out.line, /1 件を確定値として保存/)
-      assert.match(out.line, /引用が材料に無く 1 件を除外した/)
+      assert.match(out.line, /引用が判定対象に無く 1 件を除外した/)
     },
     [
       {

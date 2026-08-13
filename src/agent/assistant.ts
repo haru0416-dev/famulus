@@ -101,7 +101,7 @@ interface TurnState {
 // DB に何を書くかは承認の側の話で、検索してきた側が決めてよいことではない。
 const recallTool = (state: TurnState) =>
   tool({
-    // どう読むかまで書く。検索結果は日付と層(確定/取り込み/自分の記録)を頭に付けて返るが、
+    // どう読むかまで書く。検索結果は日付と層(確定/取り込み/システム記録)を頭に付けて返るが、
     // 今の事実として読むかその時点の記録として読むかは書き手の側で決まる。
     // [取り込み] はその時点の記録で、現在値とは限らない。
     // 言わずに渡すと、1年前の要約を現在形でユーザーに喋り返す。
@@ -111,13 +111,13 @@ const recallTool = (state: TurnState) =>
 - [確定(旧版)] … 同じ事柄の古い値。今はもう違う。過去形でしか使わない
 - [取り込み] … 過去の会話から起こした要約。**その日時点でそう書かれていた、というだけ**。
   日時が古いものを現在形で語らない。今どうかは belief で確かめるか、ユーザーに聞く
-- [自分の記録] … 自分が書いた独り言。裏は取れていない`,
+- [システム記録] … open-zero が保存した記録。実行結果・送信結果・調査メモなどを含み、確認状態は内容ごとに異なる`,
     inputSchema: vs(v.object({ query: v.pipe(v.string(), v.description("検索語。3文字以上。")) })),
     execute: async ({ query }) =>
       run(
         Effect.gen(function* () {
           const mem = yield* Memory
-          // 第3引数は今のターンの入力。渡さないと自分の発言を過去の記録として読む。
+          // 第3引数は今のターンの入力。渡さないと現在の入力を過去の記録として読む。
           return renderRecall(yield* mem.recall(query, 10, state.lastInputEventId))
         }),
       ),
@@ -156,7 +156,7 @@ ${SOURCE_MENU.map((s) => `  - \`${s.name}\` — ${s.what}`).join("\n")}
   1索引のものは1つの索引にしか出ていない。**中身の正しさではない。**
 - 返るのは題・URL・書き手・日付・目印(★星 ♡いいね 点数)だけ。**中身が要るものだけ \`fetch\` で開く。**
 - **\`x\` の要約だけは捨てない。** 他の先の要約はページの紹介文だが、あそこのそれは**投稿の文字そのもの**で、x.com は開けない
-  (robots で断られている)。開いて確かめる道が無いのに要約を捨てると、**手元にある本文を捨てる**
+  (robots で断られている)。開いて確かめる道が無いのに要約を捨てると、**取得済みの本文を捨てる**
   ことになる。読み方は結果の \`## x\` の下に出る。
 - 0件で返る先がある。そのときは語を変えるか、別の先を名指しする。**埋めない。**
 - 「回数制限中」と出た先は、その時刻まで何度呼んでも返らない。**他の先で進める。**`,
@@ -338,7 +338,7 @@ function buildTools(state: TurnState) {
     // ── 外を見る役。明示的な search / fetch と hosted web_search を使う子。
     researcher: tool({
       description:
-        "web を調べる役。今の値・仕様・相場・営業時間のように**外にしか無いこと**はこれに投げる。" +
+        "web を調べる役。今の値・仕様・相場・営業時間のように**Web上の情報が必要なこと**はこれに依頼する。" +
         "検索に加えて一次資料のページも開けるので、動く値(版番号・価格・営業時間)は元を当たって返る。" +
         "出典 URL 付きで返る。答えの末尾に『開いたページ』の1行が付く — そこが『無し』なら、" +
         "中の数字は検索の索引を写しただけで**確かめていない**。そのまま断定して返さず、" +
@@ -387,7 +387,7 @@ function buildTools(state: TurnState) {
         ),
     }),
 
-    // ── 記憶。エージェントが自分で書く/引く。
+    // ── 記録。エージェントが DB へ保存し、後のターンで検索する。
     remember: tool({
       description:
         "覚えておくべきことを DB に1件追記する。追記のみで、後から書き換えも削除もできない(訂正は新しい追記で行う)。",
@@ -411,7 +411,7 @@ function buildTools(state: TurnState) {
             const id = slot
               ? yield* mem.believe(slot, content)
               : yield* mem.remember({ kind: "observe", source: "system", content })
-            return slot ? `belief '${slot}' を確定した(event ${id})` : `覚えた(event ${id})`
+            return slot ? `確定事実 '${slot}' を保存した(event ${id})` : `記録した(event ${id})`
           }),
         ),
     }),
@@ -421,7 +421,7 @@ function buildTools(state: TurnState) {
     belief: tool({
       // 状態を表す事実は、検索ではなくここから引かせる。検索は古い値も同じ強さで当ててしまう。
       description:
-        "確定した事実の**今の値と変遷**を見る。住まい・仕事・進行中の案件のように動く事柄は、" +
+        "確定事実(belief)の**現在値と履歴**を見る。住まい・仕事・進行中の案件のように変わる事柄は、" +
         "検索ではなくここで確かめる(検索は古い値も同じ強さで当てるので、今かどうかが分からない)。",
       inputSchema: vs(
         v.object({
@@ -506,20 +506,20 @@ function buildTools(state: TurnState) {
         ),
     }),
 
-    // ── 次回の自律実行で何を見るかを自分で登録するための道具。
+    // ── 次回の自律実行で確認する項目を登録する道具。
     // これが無いと、tick が実行されても参照対象が無く、毎回ゼロから考え直すことになる。
     watch: tool({
       description:
-        "決着していない件を watch に登録する。famulus が次に動く未対応の watch は次回の自律実行時、human が次に動く watch は一定期間動きが無いときに提示される。`ran` で対応結果を記録した後は、設定時間が経過すると再び提示される。**同じ件を登録し直さない** — 状態を確認するか自分の担当作業を進めたら ran を使う。",
+        "決着していない件を継続確認項目(watch)として登録する。famulus(open-zero) が次に対応する未処理項目は次回の自律実行時、human(ユーザー) が次に対応する項目は一定期間更新が無いときに提示される。`ran` で対応結果を記録した後は、設定時間が経過すると再び提示される。**同じ件を登録し直さない** — 状態を確認するか open-zero 側の担当作業を進めたら ran を使う。",
       inputSchema: vs(
         v.object({
           subject: v.pipe(
             v.string(),
-            v.description("何を watch するか。一行(例: 'A社 契約更新の返信待ち')。"),
+            v.description("継続して確認する内容。一行(例: 'A社 契約更新の返信待ち')。"),
           ),
           next_move: v.pipe(
             v.picklist(["famulus", "human"]),
-            v.description("次に動くのは誰か。famulus=自分、human=ユーザー。"),
+            v.description("次に対応する主体。famulus=open-zero、human=ユーザー。"),
           ),
           cooldown_hours: v.optional(
             v.pipe(
@@ -547,7 +547,7 @@ function buildTools(state: TurnState) {
 
     ran: tool({
       description:
-        "watch の状態確認または自分の担当作業を進めた結果を記録する。**対応したら必ず呼ぶ** — 呼ばないと同じ watch が次の tick でもプロンプトに載る。変化が無くても呼ぶ(変化なしも次回の判断材料になる)。result は次回対応の基準になるので、実施内容と結果を具体的に書く。**以前の対応結果を記録し忘れていたなら、そのときの時刻を `at` で渡して今から記録してよい** — 冷却は渡した時刻から数えるので、後ろへずれない。",
+        "継続確認項目(watch)の状態確認、または open-zero 側の担当作業の結果を記録する。**対応したら必ず呼ぶ** — 呼ばないと同じ項目が次の tick でもプロンプトに載る。変化が無くても呼ぶ(変化なしも次回の判断材料になる)。result は次回対応の基準になるので、実施内容と結果を具体的に書く。**以前の対応結果を記録し忘れていたなら、そのときの時刻を `at` で渡して今から記録してよい** — 再提示待機時間は渡した時刻から数えるので、後ろへずれない。",
       inputSchema: vs(
         v.object({
           id: v.pipe(v.string(), v.description("watch の id(先頭8文字でよい)。")),
@@ -578,7 +578,7 @@ function buildTools(state: TurnState) {
     }),
 
     unwatch: tool({
-      description: "決着した watch を閉じる。",
+      description: "決着した継続確認項目(watch)を完了状態にする。",
       inputSchema: vs(
         v.object({
           id: v.pipe(v.string(), v.description("watch の id(先頭8文字でよい)。")),
@@ -604,20 +604,20 @@ function buildTools(state: TurnState) {
 
     ask: tool({
       description:
-        "確認できていないことを問いとして立てる。**推測を事実として覚えないための置き場**。ユーザーに直接訊けないときはこれを使って先に進む。",
+        "確認できていないことを未確認事項として登録する。**推測を確定事実として保存しないための記録先**。ユーザーに直接訊けないときはこれを使って先に進む。",
       inputSchema: vs(v.object({ question: v.pipe(v.string(), v.description("確認したいこと。一行。")) })),
       execute: async ({ question }) =>
         run(
           Effect.gen(function* () {
             const att = yield* Attention
             const id = yield* att.ask(question)
-            return `問いを立てた(${id.slice(0, 8)})。確認が取れるまで事実としては扱わない。`
+            return `未確認事項を登録した(${id.slice(0, 8)})。確認が取れるまで事実としては扱わない。`
           }),
         ),
     }),
 
     answer: tool({
-      description: "立てておいた問いに答えが出たとき閉じる。",
+      description: "登録済みの未確認事項に答えが出たとき、回答済みにする。",
       inputSchema: vs(
         v.object({
           id: v.pipe(v.string(), v.description("問いの id(先頭8文字でよい)。")),
@@ -640,7 +640,7 @@ function buildTools(state: TurnState) {
 
     drop: tool({
       description:
-        "答えの出ないまま意味を失った問いを取り下げる。**追わないと決めたものは閉じる** — 開いたままだと tick のプロンプトを埋め続け、新しい問いが載らなくなる。",
+        "答えの出ないまま意味を失った未確認事項を取り下げる。**追わないと決めたものは取消済みにする** — 未処理のままだと tick のプロンプトを占有し続け、新しい未確認事項が載らなくなる。",
       inputSchema: vs(
         v.object({
           id: v.pipe(v.string(), v.description("問いの id(先頭8文字でよい)。")),
@@ -658,7 +658,7 @@ function buildTools(state: TurnState) {
     }),
 
     /**
-     * 取得したコードや手順を実行検証する経路。下書きの材料は、ここを通ったものだけが自分の言葉になる。
+     * 取得したコードや手順を実行検証する経路。下書きの根拠にできるのは、この経路で検証したものだけ。
      *
      * 境界と、他の道を落とした理由は src/services/Sandbox.ts の頭。
      * ここで足しているのは止める条件だけ: halt が立っているなら走らせない。
@@ -670,27 +670,29 @@ function buildTools(state: TurnState) {
         "コマンドを走らせて、出力をそのまま受け取る。**読むのではなく動かすための道具**。" +
         "取得したコードや手順を実際に動かし、停止した処理段階・失敗した実行経路・要った時間を記録するのに使う。" +
         "隔離されたコンテナ(docker)の中で走るので、**ユーザーのファイルにも DB にも触れない**。" +
-        "書けるのは作業場だけで、コンテナは毎回捨てられる — 残るのは作業場に置いたファイルだけ。" +
-        "既定では外に出られない。clone や install が要るときだけ net を true にする。" +
+        "書けるのは永続作業ディレクトリ(workspace)だけで、コンテナは毎回捨てられる — 残るのは workspace に置いたファイルだけ。" +
+        "既定では外部ネットワークへ接続できない。clone や install が要るときだけ net を true にする。" +
         "入っているもの: bun / node / npm / npx / python3 / pip / venv / uv / git / curl / jq / rg / make / gcc。" +
         "**apt は通らない**(非 root)。python は uv か pip、それ以外は npx で足りる範囲でやる。" +
-        "取得したパッケージのキャッシュ(npm / pip / uv)は作業場をまたいで共有されるので、二度目は取得し直さない。" +
+        "取得したパッケージのキャッシュ(npm / pip / uv)は workspace 間で共有されるので、二度目は取得し直さない。" +
         "上限は3分 / メモリ 2GB。返るのは出力の末尾 12,000字。" +
         "**短い単位に割る** — 返り値に載る残り時間を見て、尽きる前に切り上げる。" +
-        "同じ作業場の名前を渡せば置いたファイルは残るので、続きは次の tick でやればよい。" +
-        "**どんな作業場が在るかは `workspaces` で引ける。新しく作る前に引く。**",
+        "同じ workspace 名を渡せば置いたファイルは残るので、続きは次の tick でやればよい。" +
+        "**利用可能な workspace は `workspaces` で確認できる。新しく作る前に確認する。**",
       inputSchema: vs(
         v.object({
           command: v.pipe(v.string(), v.description("走らせるコマンド。bash -lc に渡す。複数行でよい。")),
           workspace: v.pipe(
             v.string(),
-            v.description("作業場の名前(英数字)。同じ名前を渡すと前回置いたファイルの続きから走る。"),
+            v.description(
+              "永続作業ディレクトリ(workspace)の名前(英数字)。同じ名前を渡すと前回置いたファイルの続きから走る。",
+            ),
           ),
           purpose: v.optional(
             v.pipe(
               v.string(),
               v.description(
-                "その作業場は何のための場所か、一行。**新しく作るときは必ず書く。** " +
+                "その workspace は何のための場所か、一行。**新しく作るときは必ず書く。** " +
                   "一覧に出て、次の tick が「どれを使えばいいか」をここから読む。既にあるものは省いてよい。",
               ),
             ),
@@ -698,7 +700,9 @@ function buildTools(state: TurnState) {
           net: v.optional(
             v.pipe(
               v.boolean(),
-              v.description("外に出るか。clone / install が要るときだけ true。既定は false。"),
+              v.description(
+                "外部ネットワークへの接続を許可するか。clone / install が要るときだけ true。既定は false。",
+              ),
             ),
           ),
         }),
@@ -716,7 +720,7 @@ function buildTools(state: TurnState) {
               return (
                 `走らせない: この tick の残りが ${Math.max(0, Math.round(left / 1000))} 秒しかない。\n` +
                 `ここで手を止めて、いま分かっていることを書いて終える。` +
-                `続きは次の tick で、同じ作業場(${workspace})を渡せば置いたファイルから再開できる。`
+                `続きは次の tick で、同じ workspace(${workspace})を渡せば置いたファイルから再開できる。`
               )
             }
             const mem = yield* Memory
@@ -745,23 +749,23 @@ function buildTools(state: TurnState) {
               content: { ran: command, workspace, exitCode: r.exitCode, ms: r.elapsedMs, output: r.output },
               text: `${command}\n${r.output}`,
             })
-            // 説明の無い作業場は、次の回から名前しか読めない。作った本人がまだいるこの回で訊く。
+            // 説明の無い workspace は、次の回から名前しか読めない。作成したターンで用途を記録する。
             const nudge = unnamed
-              ? `\n(この作業場には説明が無い。何のための場所か purpose に一行渡すと、次の tick が一覧から選べる)`
+              ? `\n(この workspace には説明が無い。何のための場所か purpose に一行渡すと、次の tick が一覧から選べる)`
               : ""
-            return `${head} / ${remainingLabel()}\n作業場: ${dir}${nudge}\n\n${r.output || "(出力なし)"}`
+            return `${head} / ${remainingLabel()}\nworkspace: ${dir}${nudge}\n\n${r.output || "(出力なし)"}`
           }),
         ),
     }),
 
     /**
-     * 作業場の一覧。`shell` の続きをどこでやるか選ぶための読み取り専用の口。
+     * workspace の一覧。`shell` の続きをどこでやるか選ぶための読み取り専用API。
      * 自分のソースの在り処や、先週の調べ物の途中が残っているかを、プロンプトに毎回書かずに引く。
      * 書き込みは `shell` の `purpose` 側にしかない。
      */
     workspaces: tool({
       description:
-        "作業場の一覧。名前・何のための場所か・大きさ・最後に触った時刻が返る。" +
+        "永続作業ディレクトリ(workspace)の一覧。名前・用途・大きさ・最終更新時刻が返る。" +
         "**`shell` に渡す名前はここから選ぶ。** 続きをやれるものが在るのに新しく作ると、" +
         "依存の取得からやり直しになって、その回の持ち時間がそれで終わる。",
       inputSchema: vs(v.object({})),
@@ -837,7 +841,7 @@ function buildTools(state: TurnState) {
       description:
         "外に出す文の下書きをユーザーに渡す。**そのまま公開できる本文だけ**を入れる — " +
         "「こういう記事はどうか」という提案や、箇条書きの材料は入れない。書けないなら呼ばない。" +
-        "材料は DB にある自分の実測に限る。他人の記事の要約は本文にしない。**1日に1本まで。**" +
+        "根拠は DB にある open-zero 自身の実測に限る。他人の記事の要約は本文にしない。**1日に1本まで。**" +
         "**書いていない読み手が精査してから届く** — 規律に当たる箇所は引用付きで返るので、そこを直して呼び直す。",
       inputSchema: vs(
         v.object({
@@ -890,7 +894,7 @@ function buildTools(state: TurnState) {
               return (
                 `出していない。本文が ${body.length}字ある(上限 ${DRAFT_MAX}字)。\n` +
                 "削るのではなく、**話を1つに絞り直す。** 見つけたことが複数あるなら、いちばん強い1つで" +
-                "書いて残りは次の日に回す。経緯・過程・網羅した限界の列挙は落とす — 読む側は求めていない。"
+                "書いて残りは次の日に回す。経緯・過程・網羅した限界の列挙は削除する — 読む側は求めていない。"
               )
             }
             // 中身を持たない語も同じ扱いにする。規律に並べても、書いている途中の一文までは届かない。
@@ -898,7 +902,7 @@ function buildTools(state: TurnState) {
             if (smells.length > 0) {
               return (
                 `出していない。**中身を持たない語が残っている**: ${smells.map((s) => `「${s}」`).join(" ")}\n` +
-                "その語を消したときに何も残らない文は、主張ごと落とす。残すなら「何が・どの対象で・" +
+                "その語を消したときに何も残らない文は、主張ごと削除する。残すなら「何が・どの対象で・" +
                 "どう変わったか」に書き換える。直してから、もう一度呼ぶ。"
               )
             }
@@ -909,11 +913,11 @@ function buildTools(state: TurnState) {
             }
             // ここから先は機械では見えない。上の3つが見ているのは語と密度で、規律の本体
             // (材料が自分の実測か・話が1つか・測ったことと見立てが分かれているか)には当たらない。
-            // 書いた本人には読み直させない。機械の検査を先に置くのは、正規表現で落ちるものに枠を使わないため。
+            // 生成したモデル自身には読み直させない。機械の検査を先に置くのは、正規表現で除外できる本文にレビュー用クォータを使わないため。
             //
             // この呼び出しにも締切を渡す。渡さないと精査役だけが tick の持ち時間の外で走る。
             // 実測した回は、締切が切れた後もここで待ち続けて外から殺すまで終わらなかった。
-            // そうなると `commit` に届かず冷却の起点が進まないので、次のタイマーが同じ理由で
+            // そうなると `commit` に届かず再実行抑止の起点が進まないので、次のタイマーが同じ理由で
             // 起きて同じところで止まる(ADR 0002 が塞いだはずの輪がここから開く)。
             const left = remainingMs()
             if (left < REVIEW_MS + RUN_RESERVE_MS) {
@@ -932,7 +936,7 @@ function buildTools(state: TurnState) {
                 signal: AbortSignal.timeout(Math.min(REVIEW_MS, left - RUN_RESERVE_MS)),
               }),
             )
-            // 検査役が落ちたときに素通りさせると、枠が閉じている日だけ無検査の文が外に出る。
+            // レビュー呼び出しが失敗したときに素通りさせると、クォータ利用不能の日だけ無検査の文が公開候補として出る。
             // 日付のフラグはまだ立てていないので、次の回でそのまま出し直せる。
             if (review._tag === "Left") {
               return `出していない。精査役を呼べなかった(${causeReason(review.left)})。本文は捨てずに、次の回でもう一度呼ぶ。`

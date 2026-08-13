@@ -139,7 +139,7 @@ test("保存候補は keeper と同じ照合を通る(写せない引用は除�
         }),
       )
       assert.match(out.line, /1 件を確定値として保存/)
-      assert.match(out.line, /引用が材料に無く 1 件を除外した/)
+      assert.match(out.line, /引用が判定対象に無く 1 件を除外した/)
       assert.equal(out.cur?.value, "月曜と火曜に同じ話をしている")
     },
     [

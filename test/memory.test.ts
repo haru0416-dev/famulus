@@ -183,11 +183,11 @@ test("抹消したイベントは recall に出てこない", async () => {
 // ── 置き方(何が上位に来るか)の検査。
 //
 // 検索が「一致するか」だけを見ていた頃は、並びが `at DESC` = 一致した中の新着順だった。
-// tick は起きるたびに長い自己言及を書くので、新しさだけで独り言が上位を占め、
-// 探している事実を押し下げていた(`recall 予約` の上位10件のうち5件が自分の独り言)。
+// tick は起きるたびに長い自己言及を書くので、新しさだけでシステム記録が上位を占め、
+// 探している事実を押し下げていた(`recall 予約` の上位10件のうち5件がシステム記録)。
 // 引けるかどうかと同じくらい、何が先に見えるかが記憶の質を決める。
 
-test("recall は関連度と層で並ぶ — 新しいだけの独り言が確定した事実を押し下げない", async () => {
+test("recall は関連度と層で並ぶ — 新しいだけのシステム記録が確定した事実を押し下げない", async () => {
   await withHarness(async (h) => {
     const rows = await h.run(
       Effect.gen(function* () {
@@ -202,7 +202,7 @@ test("recall は関連度と層で並ぶ — 新しいだけの独り言が確�
     )
     assert.equal(rows.length, 2)
     assert.equal(rows[0]?.kind, "belief", "確定した事実が先頭に来る")
-    assert.equal(rows[1]?.source, "system", "自分の記録は後ろに下がる")
+    assert.equal(rows[1]?.source, "system", "システム記録は後ろに下がる")
   })
 })
 
@@ -268,6 +268,19 @@ test("recall の描画は JSON 構造を出さず、どの層の1行かを示す
     assert.doesNotMatch(out, /\{"said"/)
     assert.match(out, /owner\]/)
     assert.match(out, /歯医者は8月12日/)
+  })
+})
+
+test("system 由来の記録はシステム記録と表示する", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ source: "system", content: "次回予約はまだ確認していない" })
+        return renderRecall(yield* mem.recall("次回予約"))
+      }),
+    )
+    assert.match(out, /システム記録/)
   })
 })
 

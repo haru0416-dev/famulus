@@ -1,7 +1,7 @@
 /**
  * memory サービス。記録の基準は append-only の `events` で、`belief_slots` と `events_fts` は projection。
  *
- * 消せないことは SQL 側で強制する。忘却は DELETE ではなく `forget` イベントの追記、
+ * 消せないことは SQL 側で強制する。検索対象からの除外は DELETE ではなく `forget` イベントの追記、
  * 抹消は `content := NULL` の UPDATE だけ(それ以外の UPDATE はトリガが ABORT する)。
  *
  * `remember` は引数を最小・既定値を厚くしてある。仕組みがあっても記録が溜まらなければ DB は無いのと同じで、
@@ -16,7 +16,7 @@ export type EventKind = "observe" | "belief" | "forget" | "redact" | "import"
 export type EventSource = "owner" | "calendar" | "gmail" | "web" | "system"
 export type Exposure = "private" | "public"
 
-/** 現在区間の `valid_from` がこの日数より古い belief を棚卸し候補として表示する。 */
+/** 現在区間の `valid_from` がこの日数より古い確定事実(belief)を再確認候補として表示する。 */
 export const STALE_BELIEF_DAYS = 90
 
 export interface SourceRef {
@@ -64,7 +64,7 @@ export interface EventRow {
  * どちらが今なのかは projection(`belief_slots`)だけが知っている。
  *
  * 区間が閉じているかまで見る。`resolved_from` の一致だけで判定していると、
- * 「転職活動中」を確定した行は上書きされた後も一致し続け、検索の最上位に居座る。
+ * 「転職活動中」を確定した行は上書きされた後も一致し続け、検索結果の最上位に残る。
  */
 const IS_CURRENT =
   "EXISTS (SELECT 1 FROM belief_slots b WHERE b.resolved_from = e.id AND b.valid_until IS NULL)"
@@ -72,12 +72,12 @@ const IS_CURRENT =
 /**
  * 層の重み。bm25 は「小さいほど関連が強い」負の値なので、引くと前に出る。
  *
- * DB は平らに1本だが、読む価値は平らではない。確定した事実(belief)はユーザーに確かめた1行、
- * `source='system'` は自分が書いた記録。同じ語を含んでいても、探しものとして役に立つ度合いが違う。
+ * DB は1つの events 表だが、記録種別によって検索順位を変える。確定事実(belief)はユーザーに確認した1行、
+ * `source='system'` は open-zero が保存した記録。同じ語を含んでいても、検索結果としての優先度が違う。
  *
  * `kind` と `source` は別の問いに答えている。source は誰が書いたか、kind はどんな記録か。
  * 取り込み(`import`)は自分が書くので source は system だが、中身はユーザーの判断の要約であって
- * 独り言ではない。source だけで下げると、入口から入れたものが全部検索の底に沈む。
+ * open-zero 自身の実行記録ではない。source だけで下げると、取り込んだ会話要約がすべて検索結果の下位になる。
  * だから `import` を `source='system'` より先に判定する。順序がそのまま意味になっている。
  */
 const LAYER_BIAS = `CASE
@@ -93,7 +93,7 @@ const LAYER_BIAS = `CASE
  *
  * 生の `content` をそのまま出すと `{"said":"…` という JSON 構造がモデルにも人にも見える。
  * JSON 構造は保存形式であって本文ではない。索引に入れた素のテキストのほうを見せる。
- * 併せてどの層の1行なのかを頭に付ける — 確定した事実と自分の独り言を、
+ * 併せてどの層の1行なのかを頭に付ける — 確定した事実とシステム記録を、
  * 読む側が区別できないまま並べない。
  *
  * 時刻はユーザーの時計で出す(`localStamp`)。UTC のまま帯なしで渡すと、
@@ -112,7 +112,7 @@ export function renderRecall(rows: readonly EventRow[], perRow = 180): string {
             ? // 由来が要約であることを隠さない。ユーザーが直接そう言った1行と混ぜて読ませない。
               "取り込み"
             : r.source === "system"
-              ? "自分の記録"
+              ? "システム記録"
               : r.source
       const body = (r.text && r.text.length > 0 ? r.text : safeText(r.content)).replace(/\s+/g, " ").trim()
       const shown = body.length > perRow ? `${body.slice(0, perRow)}…` : body

@@ -62,7 +62,7 @@ const envInt = (key: string, fallback: number): number => {
  */
 export const BUDGET: BudgetConfig = {
   dailyRuns: envInt("OPEN_ZERO_DAILY_RUNS", 2000),
-  // 割って投げる tick は1回で 20 run 使う(子の1ターンも1行として数えるため)。docs/adr/0011。
+  // 探索を観点別に分割して委譲する tick は1回で 20 run 使う(子の1ターンも1行として数えるため)。docs/adr/0011。
   autonomousRuns: envInt("OPEN_ZERO_AUTONOMOUS_RUNS", 500),
   dailyUsd: envInt("OPEN_ZERO_DAILY_USD", 20),
   monthlyUsd: envInt("OPEN_ZERO_MONTHLY_USD", 200),
