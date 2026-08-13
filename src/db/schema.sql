@@ -119,7 +119,11 @@ CREATE TABLE IF NOT EXISTS proposals (
                    ('proposed','approved','deferred','denied','expired','executing','executed','failed')),
   deferred_until TEXT,                                -- later 時のみ(IsoUtc)
   expires_at     TEXT NOT NULL,                       -- created_at + MAX_PENDING_DAYS
-  deny_reason    TEXT                                 -- deny 時。次の生成へ還流(学習信号)
+  deny_reason    TEXT,                                -- deny 時。次の生成へ還流(学習信号)
+  -- **決着ではなく、決着待ちについての結論。** 承認はユーザーしか出せないので、tick 側は
+  -- 「今回できることは無い」で終わる。それを一度書いたら、同じ件で起こさない(docs/adr/0028)。
+  settled_at     TEXT,                                -- tick が結論を置いた時刻。NULL = まだ何も言っていない
+  settled_note   TEXT                                 -- そのとき何と結論したか。次の回のプロンプトに渡す
 );
 CREATE INDEX IF NOT EXISTS idx_proposals_status  ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_expires ON proposals(expires_at)WHERE status = 'proposed';
@@ -178,7 +182,10 @@ CREATE TABLE IF NOT EXISTS watchlist (
   last_run_at     TEXT,                               -- 最後に回した時刻。NULL = 一度も回していない
   cooldown_hours  REAL NOT NULL DEFAULT 24,           -- 回した後、次にプロンプトに載せるまで
   run_count       INTEGER NOT NULL DEFAULT 0,         -- 通算で何周回したか
-  last_result     TEXT                                -- 前回回して分かったこと。次の回に渡す
+  last_result     TEXT,                               -- 前回回して分かったこと。次の回に渡す
+  -- 順番の記録。**回した時刻とは別**。冷却が同時に明けた watch を全部載せずに、
+  -- 載せた時刻の古い順に少数だけ出す。回さずに終えたぶんは次の回で後ろへ回る(docs/adr/0028)。
+  last_shown_at   TEXT                                -- 最後にプロンプトに載せた時刻。NULL = 一度も載せていない
 );
 CREATE INDEX IF NOT EXISTS idx_watchlist_open ON watchlist(status)WHERE status = 'open';
 

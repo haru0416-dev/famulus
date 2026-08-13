@@ -81,6 +81,9 @@ export interface ProposalRow {
   readonly deferred_until: string | null
   readonly expires_at: string
   readonly deny_reason: string | null
+  /** tick が「今回できることは無い」と結論を置いた時刻。null = まだ何も言っていない。 */
+  readonly settled_at: string | null
+  readonly settled_note: string | null
 }
 
 /** 未承認のまま置ける日数。過ぎたものは list の前に expired に落とす。 */
@@ -239,10 +242,28 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
         return { id: p.id, at }
       })
 
+    /**
+     * 承認待ちについて、tick 側の結論を置く。**提案の状態は動かさない。**
+     *
+     * 承認を出せるのはユーザーだけなので、tick に決着はつけられない。つけられるのは
+     * 「今回できることは無い」まで — それを書く場所が無いと、期限が近いというだけで毎回起きて、
+     * 毎回同じ結論を書き直す(実測で4回、いずれも道具呼び出し4回以下)。
+     *
+     * 書いた後は `digest` が起こす理由に数えない。**一覧からは消さない** — 承認はまだ要る。
+     * `ranWatch` と同じ形(docs/adr/0013 / 0017)。上書きしてよい: 状況が動けば結論も変わる。
+     */
+    const settle = (idOrPrefix: string, note: string, opts?: { at?: string }) =>
+      Effect.gen(function* () {
+        const p = yield* get(idOrPrefix)
+        const at = opts?.at ?? nowIso()
+        yield* db.run("UPDATE proposals SET settled_at = ?, settled_note = ?WHERE id = ?", at, note, p.id)
+        return { ...p, settled_at: at, settled_note: note } satisfies ProposalRow
+      })
+
     /** 承認記録。payload_hash を照合する側を作ったときに、ここを引く。 */
     const approvalOf = (proposalId: string) =>
       db.get("SELECT * FROM approvals WHERE proposal_id = ?ORDER BY at DESC LIMIT 1", proposalId)
 
-    return { create, get, list, expireDue, approve, deny, approvalOf } as const
+    return { create, get, list, expireDue, approve, deny, settle, approvalOf } as const
   }),
 }) {}

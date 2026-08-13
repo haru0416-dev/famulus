@@ -109,6 +109,14 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
           return `${head}${runs})${prev}`
         }),
         "",
+        // 残りの件数だけ出す。**中身は出さない** — 出すと結局全部読むことになり、絞った意味が消える。
+        ...(d.stalledHeld > 0
+          ? [
+              `他に ${d.stalledHeld} 件が冷却明けで待っているが、**この回は上の ${d.stalled.length} 件だけ見る。**`,
+              "残りは次の回に上がる。全部を見ようとしない — 一覧を読み直すだけで終わった回が実際に続いた。",
+              "",
+            ]
+          : []),
         "回したら `ran` で結果を残す。**何も出てこなかった回も残す** — 呼ばないと次の tick でまた上がる。",
         "**前に回したのに記録し忘れているなら、そのときの時刻を `at` に渡して今記録する。**",
         "冷却はその時刻から数えるので後ろへずれない。件名に走行記録を書き込むのではなく、ここを使う。",
@@ -127,7 +135,16 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
     sections.push(
       [
         "## 返事待ちの提案(あなたは決められない。ユーザーが見るのを待っている)",
-        ...d.pending.map((p) => `- ${short(p.id)} ${p.summary}(あと ${p.daysLeft} 日で流れる)`),
+        // 前回の結論を一緒に渡す。watch の `前回:` と同じ形(docs/adr/0017)。
+        ...d.pending.map((p) => {
+          const head = `- ${short(p.id)} ${p.summary}(あと ${p.daysLeft} 日で流れる)`
+          return p.settled_note ? `${head}\n  前回: ${p.settled_note}` : head
+        }),
+        "",
+        "**今回できることが無いなら `settle` で一行残す。** 残すとこの件では起こされなくなる",
+        "(一覧には残る — 承認はまだ要る)。呼ばないと、期限が近いというだけで毎回起きて、",
+        "毎回同じ「あなた待ちです」を書き直すことになる。**前回の結論が既に載っているなら、",
+        "同じことをもう一度書かない。**状況が動いたときだけ `settle` を上書きする。",
       ].join("\n"),
     )
   }
@@ -208,15 +225,27 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
       "  落ちたものを名指せない物差しは何でも通すので、通ったことが証拠にならない。",
       "- 材料が揃ったらそこで打ち切って、`tell` なり `remember` なりで形にして終える。",
       "",
+      // 「何もしないでよい」は**載せるものが無い回にだけ**言う。無条件に書くと、冷却の明けた
+      // watch を並べておきながら同じ文で「動かなくてよい」と言うことになる。実測(直近40回の実働)では
+      // watch で起きた9回のうち7回が道具呼び出し4回以下だった。逆に「必ず何かやれ」と書くと
+      // 用の無い watch と提案が増える。**分けるのは件数ではなく、載っているかどうか。**
+      // **この分岐そのものの効き目は測れていない**(前後1回ずつでは差が出なかった。docs/adr/0028)。
       ...(spokenTo
         ? [
             "**訊き返してよい。** 相手はいま画面の前にいる。分岐が決められないなら、",
             "選べる形にして1つだけ訊く(ask で置くのは、その場で答えが要らないものだけ)。",
           ]
-        : [
-            "**何もしないのが正解であることが多い。** 動かす必要が無ければ道具を1つも呼ばず、",
-            "「今は動かない。理由は〜」と一行で書いて終えてよい。それは失敗ではない。",
-          ]),
+        : d.stalled.length > 0
+          ? [
+              "**上の「動いていない watch」から、この回で少なくとも1件は回す。** 載っているのは",
+              "冷却が明けたものだけで、読み直すために出しているのではない。回して `ran` に残せば、",
+              "**何も出てこなかった回でもこの回の成果になる。** 一覧を眺めて終えた回だけが何も残さない。",
+              "そのうえで**新しく仕事を作らない。** 用が無いのに watch を増やしたり提案を出したりしない。",
+            ]
+          : [
+              "**何もしないのが正解であることが多い。** 動かす必要が無ければ道具を1つも呼ばず、",
+              "「今は動かない。理由は〜」と一行で書いて終えてよい。それは失敗ではない。",
+            ]),
     ].join("\n"),
   )
 
@@ -340,9 +369,19 @@ async function tick(): Promise<string> {
     // 次のタイマーが同じ理由で起きて同じだけ焼いて同じように落ちる。落ちた回も1回動いた回として
     // 締める — 実際にモデルは走り、道具も動いて、その跡は DB に残っている。
     const deadline = AbortSignal.timeout(TIMEOUT_MS)
-    const turn = await assistant.respond(buildPrompt(d, spokenTo, await run(listWorkspaces)), {
-      signal: deadline,
-    })
+    const prompt = buildPrompt(d, spokenTo, await run(listWorkspaces))
+    // **「載せた」を記録するのはここ**。digest の中ではない — digest は起きる理由が無い回にも
+    // 走るので、そこで印を付けると誰も読んでいない一覧を載せたことにして順番だけが進む。
+    // 切られた回でも記録は残す。載ったことは事実で、次は他のものに順番を渡す(docs/adr/0028)。
+    if (d.stalled.length > 0) {
+      await run(
+        Effect.gen(function* () {
+          const att = yield* Attention
+          yield* att.noteShown(d.stalled.map((w) => w.id))
+        }),
+      )
+    }
+    const turn = await assistant.respond(prompt, { signal: deadline })
     // **時間切れと、それ以外の止まり方を混ぜない。** 混ぜると「420秒で切られた」だけが DB に残り、
     // 自走枠の使い切りもモデル側の落ちも同じ顔になる。次の回で何を直せばいいか読めなくなる。
     const cutOff = turn.cutOff

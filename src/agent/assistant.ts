@@ -494,6 +494,32 @@ function buildTools(state: TurnState) {
         ),
     }),
 
+    /**
+     * 承認待ちについて「今回できることは無い」を1回だけ書く道具。**提案の状態は動かさない。**
+     * `ran` と同じ形で、呼ばないと同じ件が期限まで毎回起こしてくる(docs/adr/0028)。
+     */
+    settle: tool({
+      description:
+        "返事待ちの提案について、今回できることが無いという結論を残す。**提案は取り下げられない** — 承認を出せるのはユーザーだけで、これは「自分の側では進まない」と記録するだけ。呼ぶとこの件では起こされなくなり、一覧には残り続ける。呼ばないと、期限が近いというだけで毎回起きて同じ結論を書き直すことになる。状況が動いたら上書きしてよい。",
+      inputSchema: vs(
+        v.object({
+          id: v.pipe(v.string(), v.description("提案の id(先頭8文字でよい)。")),
+          note: v.pipe(
+            v.string(),
+            v.description("なぜ今回は進まないのか。一行。次に載るときそのまま「前回:」として出る。"),
+          ),
+        }),
+      ),
+      execute: async ({ id, note }) =>
+        run(
+          Effect.gen(function* () {
+            const proposals = yield* Proposals
+            const p = yield* proposals.settle(id, note)
+            return `提案 ${p.id.slice(0, 8)}「${p.summary}」に結論を残した: ${note}。これでこの件では起こされない(承認待ちのままで、一覧には残る)。`
+          }),
+        ),
+    }),
+
     // ── 自走に要る2枚。**次に起きたとき何を見るか**を自分で置いていくための道具。
     // これが無いと、tick で起きても手掛かりが無く、毎回ゼロから考え直すことになる。
     watch: tool({

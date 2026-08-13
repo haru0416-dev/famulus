@@ -14,9 +14,11 @@ import {
   IDLE_WAKE_HOURS,
   MAX_COOLDOWN_HOURS,
   REFUSED_LIMIT,
+  STALLED_SHOW_MAX,
 } from "../src/services/Attention.ts"
 import { Db } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
+import { Proposals } from "../src/services/Proposals.ts"
 import { withHarness } from "./helpers.ts"
 
 const T0 = Date.parse("2026-08-08T09:00:00Z")
@@ -260,6 +262,91 @@ test("回した時刻を渡して後から記録できる。先の時刻は取�
   })
 })
 
+/**
+ * 順番の検査。**冷却は「いつまで載せないか」しか決めない。**
+ *
+ * 同じ日に登録した watch は同じ日に明けるので、明けたぶんが全部そろって上がる。実測では6件が
+ * 毎回そろって載り、tick はその一覧を読み直すだけで1件も回さずに終えていた(34回中20回が
+ * 呼び出し2回以下)。載せる数に上限を置き、載せた順に後ろへ回す — docs/adr/0028。
+ */
+const sixWatches = Effect.gen(function* () {
+  const att = yield* Attention
+  const ids: string[] = []
+  // 1件も回していない = 全部いま明けている。順番を決めるのは last_shown_at だけ。
+  for (let i = 0; i < 6; i++)
+    ids.push(yield* att.watch(`件 ${i}`, "famulus", { at: `2026-08-0${i + 1}T09:00:00Z` }))
+  yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+  return ids
+})
+
+test("冷却が同時に明けても、1回に載せるのは上限まで。残りは件数だけ渡す", async () => {
+  await withHarness(async (h) => {
+    const ids = await h.run(sixWatches)
+    const d = await h.run(digestAt(T0 + hours(2)))
+
+    assert.equal(d.stalled.length, STALLED_SHOW_MAX, "載せるのは上限まで")
+    assert.equal(d.stalledHeld, 6 - STALLED_SHOW_MAX, "残りは落とすのではなく預かる")
+    // **起こす理由は明けた全部の数。**載せた数で書くと、6件待っている回と3件しかない回が
+    // 同じ文になり、後ろに何件溜まっているかがどこにも出なくなる。
+    assert.match(d.reasons.join(), /watch が 6 件/)
+    // 一度も載せていないものどうしは、最後に動いたのが古い順。
+    assert.deepEqual(
+      d.stalled.map((w) => w.id),
+      ids.slice(0, STALLED_SHOW_MAX),
+    )
+  })
+})
+
+test("載せたのに回さなかった watch も後ろへ回る — 進むのは noteShown を呼んだときだけ", async () => {
+  await withHarness(async (h) => {
+    const ids = await h.run(sixWatches)
+    const first = await h.run(digestAt(T0 + hours(2)))
+
+    // **digest だけでは進まない。** digest は起きる理由が無い回にも走るので、ここで印を付けると
+    // 誰も読んでいない一覧を載せたことにして順番だけが回る。
+    const again = await h.run(digestAt(T0 + hours(3)))
+    assert.deepEqual(
+      again.stalled.map((w) => w.id),
+      first.stalled.map((w) => w.id),
+      "digest を引き直しただけでは順番は動かない",
+    )
+
+    await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        yield* att.noteShown(
+          first.stalled.map((w) => w.id),
+          "2026-08-08T11:00:00Z",
+        )
+      }),
+    )
+
+    // **`ran` は1件も呼んでいない。**それでも次は別の3件が載る — 回さずに終えた watch が
+    // 枠を占め続けるのを、ここで止めている。
+    const second = await h.run(digestAt(T0 + hours(4)))
+    assert.deepEqual(
+      second.stalled.map((w) => w.id),
+      ids.slice(STALLED_SHOW_MAX),
+    )
+
+    await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        yield* att.noteShown(
+          second.stalled.map((w) => w.id),
+          "2026-08-08T12:00:00Z",
+        )
+      }),
+    )
+    const third = await h.run(digestAt(T0 + hours(5)))
+    assert.deepEqual(
+      third.stalled.map((w) => w.id),
+      ids.slice(0, STALLED_SHOW_MAX),
+      "一巡したら先頭へ戻る",
+    )
+  })
+})
+
 test("相手が動く番の watch は、動きが止まって初めて起こす", async () => {
   await withHarness(async (h) => {
     await h.run(
@@ -426,6 +513,20 @@ test("期限が近い承認待ちは起こす理由になる", async () => {
     assert.equal(d.idle, false)
     assert.equal(d.pending.length, 1)
     assert.match(d.reasons.join(), /期限が近い承認待ち/)
+
+    // **結論を1回書いたら、同じ件では起こさない。**承認を出せるのはユーザーだけなので、
+    // ここで起きても進むのは「あなた待ちです」をもう一度書くところまで(docs/adr/0028)。
+    await h.run(
+      Effect.gen(function* () {
+        const proposals = yield* Proposals
+        yield* proposals.settle("p1", "承認はユーザーしか出せない。こちらからは進まない。")
+      }),
+    )
+    const after = await h.run(digestAt(T0 + hours(8)))
+    assert.equal(after.idle, true, "結論を置いた提案では起きない")
+    // **一覧からは消さない。** 承認はまだ要るので、別件で起きた回のプロンプトには載る。
+    assert.equal(after.pending.length, 1)
+    assert.equal(after.pending[0]?.settled_note, "承認はユーザーしか出せない。こちらからは進まない。")
   })
 })
 

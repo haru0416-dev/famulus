@@ -121,14 +121,37 @@ test("発火の記録を持たない watchlist は列が足され、既存の wa
     INSERT INTO watchlist (id, subject, opened_at, last_activity_at, next_move_owner, status)
       VALUES ('w1', 'AI追跡', '2026-08-01T00:00:00Z', '2026-08-05T00:00:00Z', 'famulus', 'open');
   `)
-  assert.deepEqual(migrate(d), ["watchlist:firing"], "1回目は掛かる")
+  assert.deepEqual(migrate(d), ["watchlist:firing", "watchlist:shown"], "1回目は掛かる")
   assert.deepEqual(migrate(d), [], "2回目は何もしない")
   const row = d
-    .prepare("SELECT last_run_at, cooldown_hours, run_count, last_result FROM watchlist")
+    .prepare("SELECT last_run_at, cooldown_hours, run_count, last_result, last_shown_at FROM watchlist")
     .get() as Record<string, unknown> | null
   assert.ok(row, "移行したはずの行が引けない")
-  // **回した跡はどこにも残っていない。** `opened_at` で埋めると、回していないものを回したことにする。
-  assert.deepEqual({ ...row }, { last_run_at: null, cooldown_hours: 24, run_count: 0, last_result: null })
+  // **回した跡も載せた跡もどこにも残っていない。** `opened_at` で埋めると、
+  // 回していないものを回したことにし、載せていないものを載せたことにする。
+  assert.deepEqual(
+    { ...row },
+    { last_run_at: null, cooldown_hours: 24, run_count: 0, last_result: null, last_shown_at: null },
+  )
+  d.close()
+})
+
+test("結論の置き場を持たない proposals は列が足され、既存の提案は「まだ何も言っていない」になる", () => {
+  const path = join(ROOT, "proposals-v1.db")
+  const d = openDb(path)
+  d.exec(`
+    CREATE TABLE proposals (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at TEXT NOT NULL,
+      summary TEXT NOT NULL, status TEXT NOT NULL, expires_at TEXT NOT NULL
+    );
+    INSERT INTO proposals (id, kind, created_at, summary, status, expires_at)
+      VALUES ('p1', 'plan', '2026-08-08T09:00:00Z', '歯医者に変更依頼', 'proposed', '2026-08-15T09:00:00Z');
+  `)
+  assert.deepEqual(migrate(d), ["proposals:settled"], "1回目は掛かる")
+  assert.deepEqual(migrate(d), [], "2回目は何もしない")
+  const row = d.prepare("SELECT settled_at, settled_note FROM proposals").get() as Record<string, unknown>
+  // **言った跡はどこにも残っていない。** created_at で埋めると、言っていないものを言ったことにする。
+  assert.deepEqual({ ...row }, { settled_at: null, settled_note: null })
   d.close()
 })
 

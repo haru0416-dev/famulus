@@ -85,6 +85,42 @@ function watchlistFiring(d: Sqlite): boolean {
 }
 
 /**
+ * watchlist に「プロンプトに載せた時刻」を足す(docs/adr/0028)。
+ *
+ * `last_run_at` だけでは順番が付かない。冷却が同時に明けた watch は全部同じ回に載り、
+ * 実測では6件が毎回そろって上がって、tick は一覧を読み直すだけで1件も回さずに終えていた。
+ * 「回した」と「載せた」は別の出来事なので、列も別に持つ — 回さずに終えた watch を
+ * 後ろへ回すには、載せたことだけを記録できなければならない。
+ *
+ * 既存行は NULL のまま置く。**「まだ一度も載せていない」と読むのが記録として正しい**
+ * — 載せた跡はどこにも残っていない。NULL は先頭に並ぶので、最初の数回で一巡する。
+ */
+function watchlistShown(d: Sqlite): boolean {
+  const cols = columns(d, "watchlist")
+  if (cols.length === 0 || cols.includes("last_shown_at")) return false
+  d.exec("ALTER TABLE watchlist ADD COLUMN last_shown_at TEXT")
+  return true
+}
+
+/**
+ * proposals に「tick 側の結論」を足す(docs/adr/0028)。
+ *
+ * 承認はユーザーしか出せないので、期限が近い提案で起きた tick は毎回「あなた待ちです」で終わる。
+ * 実測(2026-08-13 / 直近40回の実働)では、期限が近い承認待ちで起きた回が4回あり、
+ * **4回とも道具呼び出し4回以下**で終わっていた。中身は全部 `.example` 宛の試験データで、
+ * 決着のしようが最初から無い。結論を1回書ける場所が無いので、同じ結論を書き直し続けていた。
+ *
+ * 既存行は NULL。「まだ何も言っていない」と読む — 言った跡はどこにも残っていない。
+ */
+function proposalsSettled(d: Sqlite): boolean {
+  const cols = columns(d, "proposals")
+  if (cols.length === 0 || cols.includes("settled_at")) return false
+  d.exec("ALTER TABLE proposals ADD COLUMN settled_at TEXT")
+  d.exec("ALTER TABLE proposals ADD COLUMN settled_note TEXT")
+  return true
+}
+
+/**
  * 読み書きする側の無いテーブルを落とす(docs/adr/0007)。
  *
  * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、テーブルは残り続ける。
@@ -120,6 +156,8 @@ export function migrate(d: Sqlite): string[] {
   if (bitemporalBeliefSlots(d)) applied.push("belief_slots:bitemporal")
   if (ledgerCacheWrite(d)) applied.push("ledger:cache_write")
   if (watchlistFiring(d)) applied.push("watchlist:firing")
+  if (watchlistShown(d)) applied.push("watchlist:shown")
+  if (proposalsSettled(d)) applied.push("proposals:settled")
   for (const t of dropUnusedTables(d)) applied.push(`drop:${t}`)
   return applied
 }

@@ -32,6 +32,11 @@ export interface WatchRow {
   readonly run_count: number
   /** 前回回して分かったこと。次に回すときの起点になる。 */
   readonly last_result: string | null
+  /**
+   * 最後に**プロンプトに載せた**時刻。null = 一度も載せていない。
+   * 回した時刻(`last_run_at`)とは別。載せたが回さなかった回も、ここだけが進む。
+   */
+  readonly last_shown_at: string | null
 }
 
 /** watch している件に、経過日数と冷却の残りを添えたもの。プロンプトに載せるかの判断材料。 */
@@ -58,6 +63,8 @@ export interface PendingProposal {
   readonly created_at: string
   readonly expires_at: string
   readonly daysLeft: number
+  /** tick が前に置いた結論。**あるものは起こす理由に数えない**(承認はユーザーしか出せない)。 */
+  readonly settled_note: string | null
 }
 
 /**
@@ -90,7 +97,10 @@ export interface Digest {
   readonly at: string
   readonly cursor: number
   readonly newEvents: readonly ObservedEvent[]
+  /** **この回に載せるぶんだけ**(最大 `STALLED_SHOW_MAX` 件)。冷却明けの全部ではない。 */
   readonly stalled: readonly WatchView[]
+  /** 冷却は明けているが、この回は載せなかった件数。プロンプトに数だけ出す。 */
+  readonly stalledHeld: number
   readonly openQuestions: readonly QuestionRow[]
   readonly staleBeliefs: readonly StaleBelief[]
   readonly pending: readonly PendingProposal[]
@@ -129,6 +139,21 @@ export const STALLED_DAYS = 3
  * `fire_count` を見る `canFire`)と同じ形。docs/adr/0013。
  */
 export const WATCH_COOLDOWN_HOURS = 24
+/**
+ * 1回の tick で載せる watch の上限(docs/adr/0028)。
+ *
+ * 冷却は「その watch をいつまで載せないか」しか決めない。同じ日に登録したものは同じ日に明けるので、
+ * **明けたぶんが全部そろって上がる。** 実測(2026-08-13 / `.data/open-zero.db` / 直近40回の実働)では
+ * 6件が同時に載る状態が続き、watch で起きた9回のうち7回が道具呼び出し4回以下で終わっていた。
+ *
+ * 上限を置くと、載せた watch は必ず回せる数になる。載せずに残したぶんは `last_shown_at` の
+ * 古い順で次の回に上がるので、落ちるのではなく後ろへ回る。3 は 420 秒の持ち時間から採った。
+ *
+ * **上限そのものの効き目は測れていない。** 6件同時の状態を再現して前後で1回ずつ走らせたが、
+ * 上限なしの回も 11 手/305 秒で1件を回しており、記録に残っている短い終わり方は再現しなかった
+ * (docs/adr/0028)。ここで固定できているのは順番が回ることだけで、それは検査で押さえてある。
+ */
+export const STALLED_SHOW_MAX = 3
 /** 承認待ちがこの日数以内に期限切れになるなら、tick でユーザーに思い出させる材料にする。 */
 export const EXPIRING_DAYS = 2
 /** 何も無くてもこの時間が経ったら1回起こす(反応するだけの機械にしないための下限)。 */
@@ -297,6 +322,27 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         return { ...w, status: "closed" } satisfies WatchRow
       })
 
+    /**
+     * プロンプトに載せたことを記録する。**回したことではない。**
+     *
+     * `ranWatch` と分けてあるのは、載せたのに回さなかった回があるから。そこが同じ列だと、
+     * 回さなかった watch は次の回もまた先頭に来て、同じ数件が枠を占め続ける(実際にそうなっていた)。
+     * 載せた時刻だけを進めれば、回さずに終えた watch は後ろへ回り、他のものに順番が来る。
+     *
+     * **呼ぶのは digest ではなく、プロンプトを組み立てる側。** digest は起きる理由が無い回にも
+     * 走るので、そこで記録すると誰も見ていない一覧を「載せた」ことにしてしまう。
+     */
+    const noteShown = (ids: readonly string[], at: string = nowIso()) =>
+      Effect.gen(function* () {
+        if (ids.length === 0) return 0
+        yield* db.run(
+          `UPDATE watchlist SET last_shown_at = ?WHERE id IN (${ids.map(() => "?").join(",")})`,
+          at,
+          ...ids,
+        )
+        return ids.length
+      })
+
     const openWatches = (nowMs: number = Date.now()) =>
       db.all("SELECT * FROM watchlist WHERE status = 'open' ORDER BY last_activity_at ASC").pipe(
         Effect.map((rows) =>
@@ -402,9 +448,18 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
 
         // **冷却が明けたものだけ。** `next_move_owner = 'famulus'` は無条件で滞留に入るので、
         // ここで `dueNow` を挟まないと自分持ちの watch は回しても静かにならず、毎回の tick で上がり続ける。
-        const stalled = (yield* openWatches(nowMs)).filter(
+        const due = (yield* openWatches(nowMs)).filter(
           (w) => w.dueNow && (w.next_move_owner === "famulus" || w.stalledDays >= STALLED_DAYS),
         )
+        // **載せた時刻の古い順。** 冷却が同時に明けたぶんに順番を付けるのはこの列だけで、
+        // NULL(一度も載せていない)を先頭に置く。同着は最後の動きが古いほうから。
+        const queued = [...due].sort((a, b) => {
+          const sa = a.last_shown_at ?? ""
+          const sb = b.last_shown_at ?? ""
+          return sa === sb ? a.last_activity_at.localeCompare(b.last_activity_at) : sa.localeCompare(sb)
+        })
+        const stalled = queued.slice(0, STALLED_SHOW_MAX)
+        const stalledHeld = queued.length - stalled.length
         const questions = yield* openQuestions()
         // 確かめてから時間が経った事実。**古いだけで間違いとは限らない**ので、消さずに聞く材料にする。
         const staleBefore = new Date(nowMs - STALE_BELIEF_DAYS * 86_400_000)
@@ -417,7 +472,8 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           staleBefore,
         )) as unknown as StaleBelief[]
         const pendingRows = yield* db.all(
-          "SELECT id, summary, created_at, expires_at FROM proposals WHERE status = 'proposed' ORDER BY expires_at ASC",
+          `SELECT id, summary, created_at, expires_at, settled_note FROM proposals
+            WHERE status = 'proposed' ORDER BY expires_at ASC`,
         )
         const pending: PendingProposal[] = pendingRows.map((r) => ({
           id: String(r.id),
@@ -425,6 +481,8 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           created_at: String(r.created_at),
           expires_at: String(r.expires_at),
           daysLeft: Math.floor(daysBetween(at, Date.parse(String(r.expires_at)))),
+          settled_note:
+            r.settled_note === null || r.settled_note === undefined ? null : String(r.settled_note),
         }))
 
         // 断られたぶん。**古くなっても落とさない** — 「その用件ごと畳んだ」は日が経っても効いている。
@@ -453,14 +511,16 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         // 理由に数えると同じ問いで永久に起き続ける。起きたときの材料としてだけ渡す。
         const reasons: string[] = []
         if (newEvents.length > 0) reasons.push(`まだ見ていない入力が ${newEvents.length} 件`)
-        const expiring = pending.filter((p) => p.daysLeft <= EXPIRING_DAYS)
+        // **結論を置いたものは数えない。** 承認を出せるのはユーザーだけなので、tick が起きても
+        // 進むのは「あなた待ちです」をもう一度書くところまで。一覧には残す — 承認はまだ要る。
+        const expiring = pending.filter((p) => p.daysLeft <= EXPIRING_DAYS && p.settled_note === null)
 
         // 理由の「組み合わせ」= **プロンプトに何が載っているか**。件数も経過時間も入れない。
         // 件数を入れると watch が1件増えただけで「新しい理由」になって後退が掛からない。
         // 経過時間(24時間超え)を入れると、後退が上限に達した瞬間に組み合わせが変わって
         // 数え直しになり、1.5時間と24時間を往復し続ける — 上限が上限でなくなる。
         const overdue = sinceLastActiveHours >= IDLE_WAKE_HOURS
-        const reasonKey = [stalled.length > 0 ? "stalled" : "", expiring.length > 0 ? "expiring" : ""]
+        const reasonKey = [queued.length > 0 ? "stalled" : "", expiring.length > 0 ? "expiring" : ""]
           .filter(Boolean)
           .join("+")
 
@@ -473,7 +533,9 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
         // 新しい入力が無いなら、直前に動いたばかりの tick は動かない(自家中毒を止める)。
         const cooled = sinceLastActiveHours >= cooldownHours
         if (cooled) {
-          if (stalled.length > 0) reasons.push(`動いていない watch が ${stalled.length} 件`)
+          // 起こす理由は**冷却が明けた全部**の数。載せる数で書くと、6件待っている回と
+          // 3件しか無い回が同じ文になり、後ろに何件溜まっているかがどこにも出なくなる。
+          if (queued.length > 0) reasons.push(`動いていない watch が ${queued.length} 件`)
           if (expiring.length > 0) reasons.push(`期限が近い承認待ちが ${expiring.length} 件`)
           if (overdue) reasons.push(`前回の棚卸しから ${IDLE_WAKE_HOURS} 時間以上`)
         }
@@ -489,6 +551,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           cursor,
           newEvents,
           stalled,
+          stalledHeld,
           openQuestions: questions,
           staleBeliefs,
           pending,
@@ -541,6 +604,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       ranWatch,
       closeWatch,
       openWatches,
+      noteShown,
       findWatch,
       ask,
       answer,

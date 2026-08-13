@@ -152,6 +152,9 @@ const card = (p: ProposalRow) =>
     `id        : ${p.id}`,
     `状態      : ${STATUS_LABEL[p.status] ?? p.status}${p.deny_reason ? ` — ${p.deny_reason}` : ""}`,
     `作成      : ${p.created_at}   期限: ${p.expires_at}`,
+    // tick 側の結論。**承認の代わりではない** — 「自分の側では進まない」と書いただけで、
+    // 提案はまだユーザーの判断を待っている(docs/adr/0028)。
+    ...(p.settled_note ? [`tick の結論: ${p.settled_note}(${p.settled_at})`] : []),
     "",
     `見出し    : ${p.summary}`,
     `根拠      : ${p.assessment}`,
