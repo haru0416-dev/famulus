@@ -37,6 +37,10 @@ export const repoRoot = (): string => fileURLToPath(new URL("../..", import.meta
  * 中身は package.json の `gate` に置いてある。**定義を2か所に持たない** —
  * ここに並べ直すと、ホストで通しているものとコンテナで通しているものが黙って食い違う。
  * `corepack` を頭に付けるのは、コンテナの image に pnpm が入っていないから(corepack は入っている)。
+ *
+ * **検査を回す bun も image には入っていない。**`bun` を devDependency に置いてあるので、
+ * `pnpm run` が `node_modules/.bin` を PATH に載せた先で引ける。image を差し替えずに済み、
+ * ホストとコンテナで同じ版が走る(docs/adr/0024)。
  */
 export const GATE = `cd ${CLONE} && corepack pnpm run gate`
 
