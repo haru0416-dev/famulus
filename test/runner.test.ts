@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
+import * as v from "valibot"
 import { test } from "vitest"
 import { callClaude } from "../src/model/claude-cli.ts"
 import { parseCodexAuth, quotaFromHeaders } from "../src/model/codex-responses.ts"
@@ -17,6 +18,7 @@ import {
   stripCitationMarkers,
 } from "../src/model/models.ts"
 import { ROLE_MODEL, Runner } from "../src/model/Runner.ts"
+import { rs } from "../src/model/schema.ts"
 import { Db } from "../src/services/Db.ts"
 import { Governance } from "../src/services/Governance.ts"
 import { Ledger } from "../src/services/Ledger.ts"
@@ -44,6 +46,27 @@ test("run は結果を返し、role 付きで記録する(定額枠なので usd
       assert.equal(h.calls[0]?.prompt, "こんにちは")
     },
     [{ text: "はい" }],
+  )
+})
+
+test("構造化応答が schema に合わなければ失敗として返す", async () => {
+  await withHarness(
+    async (h) => {
+      const error = await h.fail(
+        Effect.gen(function* () {
+          const runner = yield* Runner
+          yield* runner.run({
+            role: "scout",
+            prompt: "判定して",
+            schema: rs(v.object({ ok: v.boolean() })),
+          })
+        }),
+      )
+      assert.equal((error as { _tag?: string })._tag, "RunnerFailed")
+      assert.match(String((error as { message?: string }).message), /schema に合わない/)
+      assert.equal(h.calls.length, 1)
+    },
+    [{ text: "", structured: { ok: "yes" } }],
   )
 })
 

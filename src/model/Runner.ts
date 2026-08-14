@@ -23,6 +23,7 @@ import {
   type QuotaSignal,
   RUNTIME_PROMPT,
 } from "./models.ts"
+import type { RuntimeSchema } from "./schema.ts"
 import { traceOf } from "./trace.ts"
 
 export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify" | "reviewer"
@@ -76,7 +77,7 @@ export interface RunnerRequest {
   readonly prompt: string
   readonly systemPrompt?: string
   /** 与えると構造化応答を要求する(Claude は StructuredOutput、GPT は Responses の json_schema)。 */
-  readonly schema?: unknown
+  readonly schema?: RuntimeSchema<unknown>
   readonly onText?: (delta: string) => void
   readonly signal?: AbortSignal
   /** 会計の種別。既定 'run'。 */
@@ -142,6 +143,8 @@ const makeRunner = (
 
         if (out.quota) yield* gov.noteQuota(out.quota, at, Date.now())
 
+        const checked = req.schema?.validate(out.structured)
+
         yield* ledger.record({
           kind: req.kind ?? "run",
           role: req.role, // role を入れないと日次 run 数の上限を適用できない
@@ -160,7 +163,20 @@ const makeRunner = (
           at,
         })
 
-        return { ...out, model: p.model } as RunnerResult
+        if (checked && !checked.success) {
+          return yield* Effect.fail(
+            new RunnerFailed({
+              pool: p.pool,
+              message: `構造化応答が schema に合わない: ${checked.error.message}`,
+            }),
+          )
+        }
+
+        return {
+          ...out,
+          ...(checked?.success ? { structured: checked.value } : {}),
+          model: p.model,
+        } as RunnerResult
       })
 
     return { plan, run } as RunnerApi
@@ -196,7 +212,7 @@ export const RunnerClaudeCli = Layer.effect(
             prompt: req.prompt,
             model: p.model,
             systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,
-            ...(req.schema !== undefined ? { jsonSchema: req.schema } : {}),
+            ...(req.schema !== undefined ? { jsonSchema: req.schema.jsonSchema } : {}),
             ...(req.onText ? { onText: req.onText } : {}),
             signal: req.signal ?? abort,
           }),

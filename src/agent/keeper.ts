@@ -14,8 +14,10 @@
  * 判定対象をユーザーの入力に限っているから成り立つ。
  */
 import * as Effect from "effect/Effect"
+import * as v from "valibot"
 import { causeReason } from "../core/errors.ts"
 import { Runner } from "../model/Runner.ts"
+import { rs } from "../model/schema.ts"
 import { Memory } from "../services/Memory.ts"
 
 /** 1回で確定値として保存してよい数。保存した値は無検査で使われるので、多いほど良いのではない。 */
@@ -46,43 +48,37 @@ slot は既存のものがあればそれに合わせます(同じ事柄に別�
 **何も保存しない回もあります。** ただしそれは「特に無かった」ではなく、
 **見て、どれも条件に足りなかった**という結論です。何を見て何が足りなかったかを \`looked\` に書きます。`
 
-export const KEEPER_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["looked", "values"],
-  properties: {
-    looked: {
-      type: "string",
-      description:
+export const KEEPER_SCHEMA = rs(
+  v.object({
+    looked: v.pipe(
+      v.string(),
+      v.description(
         "何を見て、どう判断したか。一行。保存対象が無いなら、足りなかったもの(引用が写せない/確言していない/次に参照して意味を持たない)を名指す。",
-    },
-    values: {
-      type: "array",
-      description: `確定値として保存するもの。無ければ空。多くて ${KEEP_MAX} 件。`,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["slot", "value", "quote"],
-        properties: {
-          slot: {
-            type: "string",
-            description: "`領域.項目` の形(例: dentist.next_appt)。既存の slot があればそれに合わせる。",
-          },
-          value: { type: "string", description: "確定する値。後から読んで意味が通る一文にする。" },
-          quote: {
-            type: "string",
-            description: "根拠。ユーザーの発言からそのまま写した一節。要約や言い換えにしない。",
-          },
-          validFrom: {
-            type: "string",
-            description: "その値がいつ真になったか(IsoUtc)。分からなければ書かない。",
-          },
-          reason: { type: "string", description: "既存の値を置き換えるなら、なぜ変わったか。" },
-        },
-      },
-    },
-  },
-} as const
+      ),
+    ),
+    values: v.pipe(
+      v.array(
+        v.object({
+          slot: v.pipe(
+            v.string(),
+            v.description("`領域.項目` の形(例: dentist.next_appt)。既存の slot があればそれに合わせる。"),
+          ),
+          value: v.pipe(v.string(), v.description("確定する値。後から読んで意味が通る一文にする。")),
+          quote: v.pipe(
+            v.string(),
+            v.description("根拠。ユーザーの発言からそのまま写した一節。要約や言い換えにしない。"),
+          ),
+          validFrom: v.optional(
+            v.pipe(v.string(), v.description("その値がいつ真になったか(IsoUtc)。分からなければ書かない。")),
+          ),
+          reason: v.optional(v.pipe(v.string(), v.description("既存の値を置き換えるなら、なぜ変わったか。"))),
+        }),
+      ),
+      v.maxLength(KEEP_MAX),
+      v.description(`確定値として保存するもの。無ければ空。多くて ${KEEP_MAX} 件。`),
+    ),
+  }),
+)
 
 export interface KeptValue {
   readonly slot: string
@@ -168,7 +164,7 @@ export const keep = (opts: {
     )
     if (out._tag === "Left") return `${tag}: 呼べなかった(${causeReason(out.left)})`
 
-    const res = (out.right.structured ?? {}) as { looked?: string; values?: KeptValue[] }
+    const res = out.right.structured as { looked: string; values: KeptValue[] }
     const grounded = keepGrounded(res.values, opts.material)
     const kept = grounded.filter((v) => !already.has(v.slot))
     const dropped = (res.values?.length ?? 0) - grounded.length

@@ -12,6 +12,8 @@
  * 1200字の上限と「1本1話」は比較測定していない運用上の閾値。
  * 形の閾値は docs/adr/0006、reviewer の fail-closed 判定は docs/adr/0031 に記録する。
  */
+import * as v from "valibot"
+import { rs } from "../model/schema.ts"
 
 /**
  * 本文の長さ。測った過程を全部書くと、書いた側の作業記録になる。読む側が要るのは、
@@ -140,35 +142,30 @@ export const REVIEW_SYSTEM = `あなたはこの下書きを**書いていない
 
 ${DRAFTING}`
 
-export const REVIEW_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["verdict", "problems"],
-  properties: {
-    verdict: {
-      type: "string",
-      enum: ["出す", "直す"],
-      description: "そのまま外に出せるなら「出す」。規律に当たる箇所を名指せるなら「直す」。",
-    },
-    problems: {
-      type: "array",
-      description: "直すべき箇所。出せるなら空。多くて3件 — 4件目があるなら題材から選び直す話になる。",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["quote", "rule", "fix"],
-        properties: {
-          quote: {
-            type: "string",
-            description: "本文からそのまま写した一節。要約や言い換えにしない。写せないなら指摘ごと出さない。",
-          },
-          rule: { type: "string", description: "規律のどれに当たるか。一行で。" },
-          fix: { type: "string", description: "どう直すか。落とすなら「落とす」と書く。" },
-        },
-      },
-    },
-  },
-} as const
+export const REVIEW_SCHEMA = rs(
+  v.object({
+    verdict: v.pipe(
+      v.picklist(["出す", "直す"]),
+      v.description("そのまま外に出せるなら「出す」。規律に当たる箇所を名指せるなら「直す」。"),
+    ),
+    problems: v.pipe(
+      v.array(
+        v.object({
+          quote: v.pipe(
+            v.string(),
+            v.description(
+              "本文からそのまま写した一節。要約や言い換えにしない。写せないなら指摘ごと出さない。",
+            ),
+          ),
+          rule: v.pipe(v.string(), v.description("規律のどれに当たるか。一行で。")),
+          fix: v.pipe(v.string(), v.description("どう直すか。落とすなら「落とす」と書く。")),
+        }),
+      ),
+      v.maxLength(3),
+      v.description("直すべき箇所。出せるなら空。多くて3件 — 4件目があるなら題材から選び直す話になる。"),
+    ),
+  }),
+)
 
 export interface Problem {
   readonly quote: string

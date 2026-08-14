@@ -332,7 +332,15 @@ test("英語だけの覚え書きには日本語の見出しが付く — 本文
         assert.equal(out.en.length, 1, "原文でも当たる")
         assert.match(out.en[0]?.text ?? "", /Considering a move to a smaller team/)
       },
-      [{ text: "", structured: { line: "転職を考えている件の覚え書き", words: ["転職", "少人数のチーム"] } }],
+      [
+        {
+          text: "",
+          structured: {
+            line: "少人数のチームへの転職を検討している件の覚え書き",
+            words: ["転職", "少人数", "チーム", "職場", "検討"],
+          },
+        },
+      ],
     )
   })
 })

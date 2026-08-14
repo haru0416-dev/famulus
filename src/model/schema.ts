@@ -23,12 +23,23 @@ import { toJsonSchema } from "@valibot/to-json-schema"
 import { jsonSchema } from "ai"
 import * as v from "valibot"
 
-export const vs = <T extends v.GenericSchema>(s: T) =>
-  jsonSchema<v.InferOutput<T>>(toJsonSchema(s) as Record<string, unknown>, {
-    validate: (value) => {
-      const r = v.safeParse(s, value)
-      return r.success
-        ? { success: true, value: r.output as v.InferOutput<T> }
-        : { success: false, error: new Error(v.summarize(r.issues)) }
-    },
-  })
+export interface RuntimeSchema<T> {
+  readonly jsonSchema: Record<string, unknown>
+  readonly validate: (value: unknown) => { success: true; value: T } | { success: false; error: Error }
+}
+
+/** Runner の構造化出力を、モデルへ渡す JSON Schema と実行時検証の組で持つ。 */
+export const rs = <T extends v.GenericSchema>(s: T): RuntimeSchema<v.InferOutput<T>> => ({
+  jsonSchema: toJsonSchema(s) as Record<string, unknown>,
+  validate: (value) => {
+    const r = v.safeParse(s, value)
+    return r.success
+      ? { success: true, value: r.output as v.InferOutput<T> }
+      : { success: false, error: new Error(v.summarize(r.issues)) }
+  },
+})
+
+export const vs = <T extends v.GenericSchema>(s: T) => {
+  const schema = rs(s)
+  return jsonSchema<v.InferOutput<T>>(schema.jsonSchema, { validate: schema.validate })
+}

@@ -25,8 +25,10 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import * as Effect from "effect/Effect"
+import * as v from "valibot"
 import { nowIso } from "../core/time.ts"
 import { Runner } from "../model/Runner.ts"
+import { rs } from "../model/schema.ts"
 import { Db } from "./Db.ts"
 import { buildFencedPrompt } from "./Governance.ts"
 import { Memory } from "./Memory.ts"
@@ -399,15 +401,10 @@ function compress(turns: readonly Turn[]): string {
 
 /** 引用(`said`)を必須にした項目。これが DB に入る最小単位。 */
 const QUOTED = (what: string, said: string) =>
-  ({
-    type: "object",
-    additionalProperties: false,
-    required: ["what", "said"],
-    properties: {
-      what: { type: "string", description: what },
-      said: { type: "string", description: said },
-    },
-  }) as const
+  v.object({
+    what: v.pipe(v.string(), v.description(what)),
+    said: v.pipe(v.string(), v.description(said)),
+  })
 
 const SAID = "根拠になった owner: 行からの**そのままの引用**(20〜60文字)。引けないなら項目ごと落とす"
 
@@ -423,38 +420,29 @@ const SAID = "根拠になった owner: 行からの**そのままの引用**(20
  * 本人像そのもので、自由記述だとモデルが読み取った印象と本人が言ったことの区別が付かない。
  * DB に入った後ではどちらだったかを復元できない — 代わりを務めるなら、そこは常に本人の言葉に戻せること。
  */
-const DIGEST_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["topic", "decisions", "preferences", "corrections"],
-  properties: {
-    topic: { type: "string", description: "ユーザーがこの回で何をしようとしていたか。一行。" },
-    decisions: {
-      type: "array",
-      description: "ユーザーが選んだ・却下した・方針を定めたこと。相手側の成果報告は入れない。",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["what", "why", "said"],
-        properties: {
-          what: { type: "string", description: "ユーザーが何を決めたか" },
-          why: { type: "string", description: "なぜそう決めたか。ログから読み取れなければ「不明」" },
-          said: { type: "string", description: SAID },
-        },
-      },
-    },
-    preferences: {
-      type: "array",
-      description: "ユーザーのやり方・好みとして次回も当てはまるもの。この回限りの指示は入れない。",
-      items: QUOTED("ユーザーのやり方・好み", SAID),
-    },
-    corrections: {
-      type: "array",
-      description: "ユーザーが明示的に否定・訂正したこと。",
-      items: QUOTED("ユーザーが否定・訂正したこと", SAID),
-    },
-  },
-} as const
+const DIGEST_SCHEMA = rs(
+  v.object({
+    topic: v.pipe(v.string(), v.description("ユーザーがこの回で何をしようとしていたか。一行。")),
+    decisions: v.pipe(
+      v.array(
+        v.object({
+          what: v.pipe(v.string(), v.description("ユーザーが何を決めたか")),
+          why: v.pipe(v.string(), v.description("なぜそう決めたか。ログから読み取れなければ「不明」")),
+          said: v.pipe(v.string(), v.description(SAID)),
+        }),
+      ),
+      v.description("ユーザーが選んだ・却下した・方針を定めたこと。相手側の成果報告は入れない。"),
+    ),
+    preferences: v.pipe(
+      v.array(QUOTED("ユーザーのやり方・好み", SAID)),
+      v.description("ユーザーのやり方・好みとして次回も当てはまるもの。この回限りの指示は入れない。"),
+    ),
+    corrections: v.pipe(
+      v.array(QUOTED("ユーザーが否定・訂正したこと", SAID)),
+      v.description("ユーザーが明示的に否定・訂正したこと。"),
+    ),
+  }),
+)
 
 interface Quoted {
   what: string
@@ -493,19 +481,22 @@ const JP_MIN = 0.05
  * 英語の覚え書きに足す、日本語の見出し。訳文でも要約でもない。
  * 本文はそのまま残したうえで、日本語の検索語から辿り着くための行を1本増やすだけ。
  */
-const HEADER_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["line", "words"],
-  properties: {
-    line: { type: "string", description: "この覚え書きが何についてのものか。日本語1文、20〜60文字。" },
-    words: {
-      type: "array",
-      description: "本文に書かれている事柄を日本語で表す語。5〜12語。本文に無いことは足さない。",
-      items: { type: "string" },
-    },
-  },
-} as const
+const HEADER_SCHEMA = rs(
+  v.object({
+    line: v.pipe(
+      v.string(),
+      v.minLength(20),
+      v.maxLength(60),
+      v.description("この覚え書きが何についてのものか。日本語1文、20〜60文字。"),
+    ),
+    words: v.pipe(
+      v.array(v.string()),
+      v.minLength(5),
+      v.maxLength(12),
+      v.description("本文に書かれている事柄を日本語で表す語。5〜12語。本文に無いことは足さない。"),
+    ),
+  }),
+)
 
 const HEADER_INSTRUCTION = `これはユーザー(Haru)についての覚え書きで、英語で書かれています。
 
