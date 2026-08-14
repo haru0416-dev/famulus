@@ -253,7 +253,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       Effect.gen(function* () {
         const made = yield* call(`/channels/${ch}/messages/${messageId}/threads`, {
           method: "POST",
-          // 名前は 100 字まで。超えると 400 で弾かれる(スレッドが立たない)。
+          // 名前は 100 字まで。超えると 400 で拒否される(スレッドが立たない)。
           body: JSON.stringify({ name: name.slice(0, 100), auto_archive_duration: 1440 }),
         }).pipe(
           Effect.flatMap((r) => Effect.tryPromise(() => r.json() as Promise<{ id?: string }>)),

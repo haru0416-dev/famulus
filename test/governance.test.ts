@@ -177,7 +177,7 @@ test("自走が枠を使い切っても対話は止まらない(仕切りであ�
     assert.equal((e as { _tag: string })._tag, "DailyRunLimit")
     assert.equal((e as { limit: number }).limit, 2)
 
-    // 対話は同じ状態で通る。halt も立っていない — 翌日には自然に戻る種類の枯れ方。
+    // 対話は同じ状態で通る。halt も立っていない — 翌日には自然に戻る種類の上限。
     await h.run(
       Effect.gen(function* () {
         const gov = yield* Governance

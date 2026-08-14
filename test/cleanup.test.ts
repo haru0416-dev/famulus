@@ -36,7 +36,7 @@ const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): P
   const runs = process.env.OPEN_ZERO_RUNS
   const cache = process.env.OPEN_ZERO_RUN_CACHE
   process.env.OPEN_ZERO_RUNS = join(dir, "runs")
-  // 既定のままだと本物の `.data/run-cache` を見に行く。上限を超えていたら検査が消してしまう。
+  // 既定のままだと本物の `.data/run-cache` を読む。上限を超えていたら検査が消してしまう。
   process.env.OPEN_ZERO_RUN_CACHE = join(dir, "cache")
   try {
     await withHarness((h) => Promise.resolve(fn(dir, h)))
@@ -60,22 +60,22 @@ const workspace = (dir: string, name: string, daysAgo: number, deepDaysAgo?: num
   return ws
 }
 
-test("しばらく触られていない作業場だけ削除される", async () => {
+test("しばらく触られていない workspace だけ削除される", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "old", 10)
     workspace(dir, "fresh", 1)
     const line = await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans }))
-    assert.match(line, /作業場 1 件/)
+    assert.match(line, /workspace 1 件/)
     assert.equal(existsSync(join(dir, "runs", "old")), false)
     assert.equal(existsSync(join(dir, "runs", "fresh")), true)
   })
 })
 
 /**
- * 続きをやっている作業場を消さない。ルートディレクトリの mtime は子孫を書き換えても動かないので、
+ * 続きをやっている workspace を消さない。ルートディレクトリの mtime は子孫を書き換えても動かないので、
  * そこだけ見ると「10 日前から放置」に見える。全子孫の最大 mtime で判定する。
  */
-test("子孫ファイルが更新された作業場は残る", async () => {
+test("子孫ファイルが更新された workspace は残る", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "working", 10, 1)
     const line = await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans }))
@@ -89,14 +89,14 @@ test("--dry は数えるだけで消さない", async () => {
     workspace(dir, "old", 10)
     const line = await h.run(cleanup({ at: AT, days: DAYS, dry: true, orphans: noOrphans }))
     assert.match(line, /数えただけ/)
-    assert.match(line, /作業場 1 件/)
+    assert.match(line, /workspace 1 件/)
     assert.match(line, /削除対象$/)
     assert.doesNotMatch(line, /削除した/)
     assert.equal(existsSync(join(dir, "runs", "old")), true)
   })
 })
 
-test("作業場が1つも無くても落ちない", async () => {
+test("workspace が1つも無くても落ちない", async () => {
   await withTmp(async (_dir, h) => {
     assert.match(await h.run(cleanup({ at: AT, days: DAYS, orphans: noOrphans })), /削除対象は無かった/)
   })
@@ -146,10 +146,10 @@ test("ユーザーの時計で早すぎる時刻には回さない", async () =>
 })
 
 /**
- * 時刻では決まらない作業場がある。自分のソース(`selfdev`)は何日か触らなくても
+ * 時刻では決まらない workspace がある。自分のソース(`selfdev`)は何日か触らなくても
  * 在り続けなければならない。触っていないことを理由に消すと、直したい日に限って無い。
  */
-test("keep を立てた作業場は古くても残る", async () => {
+test("keep を立てた workspace は古くても残る", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "selfdev", 30)
     workspace(dir, "old", 30)
@@ -159,14 +159,14 @@ test("keep を立てた作業場は古くても残る", async () => {
         return yield* cleanup({ at: AT, days: DAYS, orphans: noOrphans })
       }),
     )
-    assert.match(line, /作業場 1 件/)
+    assert.match(line, /workspace 1 件/)
     assert.equal(existsSync(join(dir, "runs", "selfdev")), true)
     assert.equal(existsSync(join(dir, "runs", "old")), false)
   })
 })
 
 /** 実体を消したら説明も削除する。残すと、実体の無い説明だけが溜まっていく。 */
-test("削除した作業場の登録も消える(--dry では消えない)", async () => {
+test("削除した workspace の登録も消える(--dry では消えない)", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "old", 30)
     const after = await h.run(

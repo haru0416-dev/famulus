@@ -39,7 +39,7 @@ const exportRoot = (): string => process.env.OPEN_ZERO_EXPORT_ROOT ?? ".data/cla
 
 /**
  * 除外するディレクトリ。
- * `cache-agent-exp` はサブエージェントの実験用キャッシュ、`-tmp-` は使い捨ての作業場。
+ * `cache-agent-exp` はサブエージェントの実験用キャッシュ、`-tmp-` は使い捨ての workspace。
  * どちらもユーザーの判断ではなく、機械が機械に出した指示しか入っていない。
  */
 const EXCLUDE = [/cache-agent-exp/, /(^|\/)-tmp-/]
@@ -85,7 +85,7 @@ export interface SessionRef {
 export interface Material {
   readonly ref: SessionRef
   readonly text: string
-  /** 選別の効き目。生バイト → 残したバイト。 */
+  /** 選別の結果。生バイト → 残したバイト。 */
   readonly rawBytes: number
   readonly keptBytes: number
 }
@@ -445,7 +445,7 @@ const DIGEST_SCHEMA = {
     },
     preferences: {
       type: "array",
-      description: "ユーザーのやり方・好みとして次回も効くもの。この回限りの指示は入れない。",
+      description: "ユーザーのやり方・好みとして次回も当てはまるもの。この回限りの指示は入れない。",
       items: QUOTED("ユーザーのやり方・好み", SAID),
     },
     corrections: {
@@ -517,13 +517,13 @@ const HEADER_INSTRUCTION = `これはユーザー(Haru)についての覚え書�
   英語の語に対応する日本語を選ぶ、ということです(例: job-searching → 転職)。
   **本文に書かれていないことは足さないでください。**`
 
-/** 引用を要求する部分は両方に効くので、下の2つで共有する。 */
+/** 引用を要求する部分は両方で使うので、下の2つで共有する。 */
 const RULES = `- 素材のうち \`owner:\` の行だけがユーザーの言葉です。\`agent:\` の行は文脈にすぎません。
 - **decisions・preferences・corrections のどの項目にも、根拠になった \`owner:\` 行からの引用を
   said に入れてください。** 引用はユーザーが実際に打った文字をそのまま写すもので、
   整えたり言い換えたりしないでください。
   **引用できないものは、ユーザーのことではありません。** その項目ごと落としてください。
-- preferences は**次回も効くもの**だけ。「今回はこうして」は入れない。
+- preferences は**次回も当てはまるもの**だけ。「今回はこうして」は入れない。
 - corrections はユーザーが明示的に否定・訂正したもの。
 - 該当が無い項目は空配列で返してください。**無理に埋めない。** 全部空でも構いません。`
 
@@ -669,7 +669,7 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
         return refs.sort((a, b) => a.at.localeCompare(b.at)).slice(0, limit)
       })
 
-    /** 選別だけ。モデルを呼ばないので、効き目を枠ゼロで測れる。 */
+    /** 選別だけ。モデルを呼ばないので、クォータを使わずに結果を測れる。 */
     const material = (ref: SessionRef) =>
       Effect.sync(() => {
         let found: Read | undefined
@@ -692,7 +692,7 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
     /**
      * 1会話を1イベントにする。
      *
-     * 素材は境界マーカーで囲って渡す。会話ログには web もファイルも通り抜けてきているので、
+     * 素材は境界マーカーで囲って渡す。会話ログには web もファイルも検査なしで入ってくるので、
      * ユーザーの指示と同じ平面に置かない。
      * 書き出すイベントも `taint` を立てる — 由来が信用できない材料から起こした要約だから。
      */

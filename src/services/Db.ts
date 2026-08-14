@@ -54,7 +54,7 @@ export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed
             // busy_timeout が先。これより前の文はロック待ちをせず、その場で locked になる。
             // poll と tick が同じ瞬間に開くと journal_mode が WAL の復旧ロックに当たって落ちていた。
             d.exec("PRAGMA busy_timeout = 5000;")
-            // WAL は並行読み取りのため。foreign_keys は approvals→proposals の FK を効かせるため。
+            // WAL は並行読み取りのため。foreign_keys は approvals→proposals の FK を有効にするため。
             if (path !== ":memory:") d.exec("PRAGMA journal_mode = WAL;")
             d.exec("PRAGMA foreign_keys = ON;")
             // schema.sql より先。旧い形を寄せてから `IF NOT EXISTS` を通す(src/db/migrate.ts)。

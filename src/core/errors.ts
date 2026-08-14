@@ -68,7 +68,7 @@ export class NotFound extends Data.TaggedError("NotFound")<{
 }> {}
 
 /**
- * 行の状態が操作と噛み合わない(承認済みを再承認、id 前方一致が複数など)。
+ * 行の状態が操作と合わない(承認済みを再承認、id 前方一致が複数など)。
  * 曖昧なまま承認を通さないための失敗で、拒否(Refusal)とは別物 — 統治が止めたのではない。
  */
 export class Conflict extends Data.TaggedError("Conflict")<{
@@ -94,8 +94,8 @@ export type Refusal = Halt | QuotaCooldown | DailyRunLimit | UnpricedModel | Egr
  * 表に出た文字列だけを記録すると自律実行上限への到達も provider の失敗も区別できなかった
  * (docs/adr/0011)。実際の理由は内側の `meta.reason` にあった。
  *
- * Flue を外しても包まれ方は残る。いま事前検査が投げるのは素の `Error` で、道具ループが
- * それをさらに包むことがある。だから `cause` を辿り、いちばん内側の `message` を返す —
+ * Flue を外しても入れ子の形は残る。いま事前検査が投げるのは素の `Error` で、道具ループが
+ * それをさらに入れ子にすることがある。だから `cause` を辿り、いちばん内側の `message` を返す —
  * 実測では halt 中の1ターンが `Error: 停止中(halt): …` として出ていて、
  * `String(e)` のままだと先頭に `Error: ` が付いたまま記録される。
  * `message` を持たないもの(Effect のタグ付き失敗など)は元の文字列に落とす。
@@ -122,7 +122,7 @@ export function describeRefusal(r: Refusal): string {
       return `停止中(halt): ${r.reason} — 明示解除するまで走らない`
     case "QuotaCooldown": {
       const min = Math.max(0, Math.ceil((r.untilMs - Date.now()) / 60_000))
-      return `枠 ${r.pool}/${r.window} はクールダウン中(あと約${min}分)`
+      return `クォータ ${r.pool}/${r.window} はクールダウン中(あと約${min}分)`
     }
     case "DailyRunLimit":
       return `日次 run 上限に到達(${r.count}/${r.limit})`

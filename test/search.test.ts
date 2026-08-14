@@ -17,7 +17,7 @@ process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
 // (SearXNG の `publishedDate`)を読む1件は素の `Date` を通るので、走らせたホストの帯で答が変わる。
 // ここまでは「たまたまこのホストが Asia/Tokyo だから通っていた」検査で、コンテナの中では 9 時間ずれた。
 process.env.TZ = "Asia/Tokyo"
-// 同じホストへの間隔は既定 1 秒。ここは fetch を差し替えてあるので誰も叩いていない —
+// 同じホストへの間隔は既定 1 秒。ここは fetch を差し替えてあるので誰も接続していない —
 // 待つぶんがそのままゲートの所要になるので 0 にする(src/services/Web.ts の hostIntervalMs)。
 process.env.OPEN_ZERO_HOST_INTERVAL_MS = "0"
 const { defaultSources, parseFrom, plainQuery, renderHits, searchWeb } = await import(
@@ -54,7 +54,7 @@ test("zenn — path から URL を組み、いいねを目印にする", () => {
 })
 
 test("qiita — 途中で切れた応答から、閉じている項だけ拾う", () => {
-  // 実際に踏んだ形。本文が丸ごと入るので上限に当たって JSON が途中で終わり、
+  // 実際に起きた形。本文が丸ごと入るので上限に当たって JSON が途中で終わり、
   // `JSON.parse` が丸ごと失敗して揃っていた分まで 0 件になった。
   const item = (n: number) =>
     JSON.stringify({
@@ -269,7 +269,7 @@ test("SearXNG の読めない日付は捨てる", () => {
 
 test("空の問いと知らない先は、外へ出る前に返る", async () => {
   assert.deepEqual(await searchWeb("   "), [])
-  // 名指しした先が全部知らない名前なら、叩く相手がいないので通信は起きない。
+  // 名指しした先が全部知らない名前なら、接続先がいないので通信は起きない。
   const r = await searchWeb("test", { where: ["google", "bing"] })
   assert.equal(r.length, 1)
   assert.equal(r[0]?.hits.length, 0)
@@ -378,7 +378,7 @@ test("日本語が入っていない語は、絞らず1回だけ引く(枠を倍
 test("回数制限に当たった先は、解けるまで叩かない", async () => {
   // 実測: 端から端まで1回動かしただけで Qiita の無認証枠 60回/時を使い切り、
   // 以後その時間帯は全部 403 で返った。理由が「HTTP 403」だけだと、待てば戻るのか
-  // 弾かれたのかが読む側に分からない。
+  // 拒否されたのかが読む側に分からない。
   const original = globalThis.fetch
   let calls = 0
   const resetEpoch = Math.floor(Date.now() / 1000) + 1800
@@ -591,7 +591,7 @@ test("x — 殻を拾った要約は外す。ただし題に中身が残って�
         content: "JavaScript is not available · We’ve detected that",
         engines: ["bing"],
       },
-      // 同じ投稿が別の URL で来る回。id で1つに畳む。
+      // 同じ投稿が別の URL で来る回。id で1つにまとめる。
       { url: "https://x.com/youyuxi/status/3", title: "本物", content: "中身", engines: ["bing"] },
       { url: "https://x.com/evanyou/status/3?lang=ca", title: "同じ投稿", content: "中身", engines: ["a"] },
     ],
@@ -656,7 +656,7 @@ test("hn に「Show HN」と書かれたら showhn の先で受ける", async ()
 })
 
 test("引用符ごと括られていても、文の途中でも受ける", async () => {
-  // すり抜けた実物(784秒のラン、4回)。`site:` は `plainQuery` が落とすので語には残らない。
+  // 検査を通ってしまった実物(784秒のラン、4回)。`site:` は `plainQuery` が落とすので語には残らない。
   const q = 'site:news.ycombinator.com/item "Show HN" "agent" "2026-08"'
   const u = new URL((await urlsFor("hn", q, '{"hits":[]}'))[0] ?? "http://x/")
   assert.equal(u.searchParams.get("tags"), "show_hn", "文中の引用符付きを取り逃した")
@@ -744,7 +744,7 @@ test("仕事と関係ない語では job を足さない", async () => {
 
 test("job — 媒体ごとに問い合わせを分けて引く", async () => {
   const called = await urlsFor("job", "React 週2", '{"results":[]}')
-  // 1媒体ずつ投げる。`(site:a OR site:b)` は索引が潰す(`job` の注)。
+  // 1媒体ずつ渡す。`(site:a OR site:b)` は索引が無視する(`job` の注)。
   const qs = called.map((u) => new URL(u).searchParams)
   assert.deepEqual(
     qs.map((p) => (p.get("q") ?? "").replace(/ React 週2$/, "")),

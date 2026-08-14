@@ -35,7 +35,7 @@ const digestAt = (ms: number) =>
     return yield* att.digest(ms)
   })
 
-test("何も無ければ起きない — 前回の棚卸しから24時間経つと1回だけ起きる", async () => {
+test("何も無ければ起きない — 前回の実働から24時間経つと1回だけ起きる", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -48,8 +48,8 @@ test("何も無ければ起きない — 前回の棚卸しから24時間経つ�
     assert.equal(quiet.idle, true, "1時間後は起きない")
 
     const later = await h.run(digestAt(T0 + hours(IDLE_WAKE_HOURS + 1)))
-    assert.equal(later.idle, false, "24時間経てば棚卸しで起きる")
-    assert.match(later.reasons.join(), /棚卸し/)
+    assert.equal(later.idle, false, "24時間経てば経過時間だけで起きる")
+    assert.match(later.reasons.join(), /前回の実働/)
   })
 })
 
@@ -129,12 +129,12 @@ test("自分が動く番の watch は実行条件になる — ただし冷却�
 })
 
 /**
- * 回しても静かにならない、を止める(docs/adr/0013)。
+ * 実行しても静かにならない、を止める(docs/adr/0013)。
  *
  * `next_move_owner = 'famulus'` は無条件で滞留に入るので、`last_activity_at` を更新しても
  * 自分持ちの watch は次の tick でまた上がってくる。実際にそうなり、モデルは最終走行時刻を
  * subject の文字列に書き込んで登録し直すという回避をしていた(列が無いのでそうするしかない)。
- * 止めるのは経過日数ではなく、回した時刻と冷却。
+ * 止めるのは経過日数ではなく、実行した時刻と冷却。
  */
 test("一周回した watch は、冷却が明けるまでプロンプトに載らない", async () => {
   await withHarness(async (h) => {
@@ -192,7 +192,7 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
       }),
     )
 
-    // 動きがあった(touchWatch)と、自分が回した(ranWatch)は別のこと。
+    // 動きがあった(touchWatch)と、自分が実行した(ranWatch)は別のこと。
     // 相手から返事が来ても自分は何もしていないので、冷却は始まらない。
     await h.run(
       Effect.gen(function* () {
@@ -220,7 +220,7 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
 /**
  * 後から記録する道。これが無いと記録そのものが見送られる。
  *
- * 数時間前に回したものを「今」で記録すると、冷却がその分だけ後ろへずれる。実際に、
+ * 数時間前に実行したものを「今」で記録すると、冷却がその分だけ後ろへずれる。実際に、
  * ずれるくらいなら呼ばないという判断が起き(端から端まで走らせた回で観測)、watch はプロンプトに残った。
  */
 test("回した時刻を渡して後から記録できる。先の時刻は取らない", async () => {
@@ -262,7 +262,7 @@ test("回した時刻を渡して後から記録できる。先の時刻は取�
  *
  * 同じ日に登録した watch は同じ日に明けるので、明けたぶんが全部そろって上がる。実測では6件が
  * 毎回そろって載り、tick はその一覧を読み直すだけで1件も回さずに終えていた(34回中20回が
- * 呼び出し2回以下)。載せる数に上限を置き、載せた順に後ろへ回す — docs/adr/0028。
+ * 呼び出し2回以下)。載せる数に上限を置き、載せた順に後ろへ送る — docs/adr/0028。
  */
 const sixWatches = Effect.gen(function* () {
   const att = yield* Attention
@@ -457,7 +457,7 @@ test("同じ理由で起き続けると冷却が倍に伸びる。新しい入�
         }),
       )
     }
-    // 倍々に伸びて 24 時間で止まる = 最後は1日1回の棚卸しに落ち着く(完全には止めない)。
+    // 倍々に伸びて 24 時間で止まる = 最後は1日1回まで下がる(完全には止めない)。
     assert.deepEqual(seen, [1.5, 3, 6, 12, 24, 24, 24, 24])
 
     const capped = await h.run(digestAt(at + hours(MAX_COOLDOWN_HOURS)))

@@ -1,7 +1,7 @@
 /**
  * 検索。`fetch` は URL を1つ開く道具で、こちらは URL をまだ知らないとき。
  *
- * 叩く先は「相手がプログラム向けに出している API を使う」で選ぶ。
+ * 接続先は「相手がプログラム向けに出している API を使う」で選ぶ。
  * robots の `Disallow`・CAPTCHA・`access denied` で断られている入口は使わない。
  * 一般 web 検索のホスト型 API は通常 API key を要する。Bing Search API は終了済みで、
  * Google Custom Search JSON API も新規受付を終えているため、`~/Project/searxng` に SearXNG を立てて
@@ -49,7 +49,7 @@ interface Source {
    */
   readonly reading?: string
   /**
-   * 叩く先。複数返すと、まとめて叩いて1つの先として返す。
+   * 接続先。複数返すと、まとめて呼んで1つの先として返す。
    * `site:` を1媒体ずつ投げないと当たらない先があるので、そこで要る(`job` を参照)。
    */
   readonly url: (q: string, n: number) => string | readonly string[]
@@ -252,7 +252,7 @@ const plain = (s: string): string =>
     .trim()
 
 /**
- * SearXNG の応答を読む。`web` と `x` で共有する — 同じ API を叩いているので、形も同じ。
+ * SearXNG の応答を読む。`web` と `x` で共有する — 同じ API を呼んでいるので、形も同じ。
  *
  * `content` を渡すと要約に手を入れられる。`undefined` を返せばその要約を落とす
  * (索引の要約が中身になっていないことがある — `x` を参照)。
@@ -507,7 +507,7 @@ const SOURCES: readonly Source[] = [
       "**募集の終わったものが混ざる。**索引を読んでいるため。媒体ごとに新しい順で並べてあり、" +
       "**上に出たものほど生きている**が、上でも4件に1件は終わっている。" +
       "**報酬・掲載日・応募期限は募集ページを開けば載っている。**勧める前に開いて、期限と中身を確かめる。",
-    // 問い合わせを媒体ごとに分ける。`(site:a OR site:b)` と書くと索引が潰して募集ページがほとんど返らない。
+    // 問い合わせを媒体ごとに分ける。`(site:a OR site:b)` と書くと索引が絞り込みを無視して募集ページがほとんど返らない。
     // `Source.url` が配列を返せるのはこのため。媒体が3つなのは、`site:` で引いて
     // 個別の募集ページが索引に入っているものだけ残した結果(Findy Freelance は案件が login の内側、
     // ココナラと Offers は分類ページと記事しか出てこない)。
@@ -684,7 +684,7 @@ export const SOURCE_MENU: readonly { name: string; what: string; wide: boolean }
 /**
  * 先を指定しなかったときに出る先。使えない先は最初から混ぜない。
  * 呼ぶたびに環境変数を見る(定数にしない)。道具の説明文もここから作るので、
- * 説明に並ぶ先と実際に叩く先が食い違わない。
+ * 説明に並ぶ先と実際の接続先が食い違わない。
  */
 export const defaultSources = (): readonly string[] =>
   SOURCES.filter((s) => s.wide && !s.unavailable?.()).map((s) => s.name)
@@ -705,7 +705,7 @@ const SOURCE_TIMEOUT_MS = 8_000
 
 /**
  * 回数制限に当たった先を、解けるまで叩かない。先の名前 → いつまで休むか(ms)。
- * 待たずに叩き続けても枠が減るだけなので、相手が言ってきた解除時刻まで外す。
+ * 待たずに呼び続けてもクォータが減るだけなので、相手が言ってきた解除時刻まで外す。
  * プロセスの中に持つので走らせ直せば消えるが、枠は時間で戻るのでそれでよい。
  */
 const restingUntil = new Map<string, number>()
@@ -728,7 +728,7 @@ function whyFailed(status: number, body: string, until: number | undefined): str
 }
 
 export interface SearchOptions {
-  /** 叩く先。省略すると既定の先へ同時に出る。 */
+  /** 検索先。省略すると既定の先へ同時に出る。 */
   readonly where?: readonly string[]
   /** 1つの先から取る件数。 */
   readonly perSource?: number
@@ -746,7 +746,7 @@ export async function searchWeb(query: string, opts: SearchOptions = {}): Promis
   const names = opts.where?.length ? opts.where : defaultSources()
   // `web` に `site:x.com` と書かれたら、`x` の先で受ける。
   // `where: ["x"]` と書くよう説明に足してもモデルは `web` に `site:x.com/名前 ...` と書いてくるので、
-  // 説明を強めるのではなくその書き方を受ける。同じ SearXNG を叩くので外向きの回数は変わらず、
+  // 説明を強めるのではなくその書き方を受ける。同じ SearXNG を呼ぶので外向きの回数は変わらず、
   // 変わるのは読み取りだけ(`site:` を守らない索引の結果と、ログイン前の画面を拾った要約が落ちる)。
   const xTerm = toXTerm(q)
   // `hn` に「Show HN」と書かれたら、`showhn` の先で受ける。同じ理由で、モデルは
@@ -826,7 +826,7 @@ export async function searchWeb(query: string, opts: SearchOptions = {}): Promis
         }
       }
       /**
-       * 先が複数あるときは同時に叩いて混ぜる。1つでも読めれば返す
+       * 先が複数あるときは同時に呼んで混ぜる。1つでも読めれば返す
        * (3媒体のうち1つが落ちても残り2つは出す)。全部落ちたときだけ理由を投げる。
        */
       const call = async (u: string | readonly string[]) => {

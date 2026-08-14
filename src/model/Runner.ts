@@ -235,7 +235,7 @@ export interface StubReply {
 /**
  * テスト用の層。API キーも `claude` バイナリも要らない。
  * 台本を順に返し、尽きたら最後を繰り返す。precheck・記録・クォータ抑止は本番と同じ処理を通るので、
- * 「ゲートが実際に効くか」をモデルを呼ばずに端から端まで確かめられる。
+ * 「ゲートが実際に判定するか」をモデルを呼ばずに端から端まで確かめられる。
  */
 export const RunnerStub = (script: readonly StubReply[]) => {
   let i = 0

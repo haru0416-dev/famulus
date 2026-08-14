@@ -20,8 +20,8 @@
  *   oz belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
  *   oz dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定値として保存する(1回ぶんでは見えない値)
  *   oz cleanup [日数] [--dry]… `.data/` の増え続けるものを削除する(events は触らない)
- *   oz ws                  … 作業場の一覧(名前・用途・大きさ・最後に触った時刻)
- *   oz selfdev [--fresh]   … 自分のソースの clone を作業場に置く(コンテナから直せるようにする)
+ *   oz ws                  … workspace の一覧(名前・用途・大きさ・最後に触った時刻)
+ *   oz selfdev [--fresh]   … 自分のソースの clone を workspace に置く(コンテナから直せるようにする)
  *   oz intake [--dry] [n]  … 過去の会話を圧縮して DB に入れる(DB の入口)
  *
  * 承認しても実行はされない。コネクタ(送信・予約)が1つも無いので、approved は
@@ -80,9 +80,9 @@ const USAGE = `oz — open-zero の承認 CLI
   oz belief <slot> <値>    新しい値を確定。前の区間はそこで閉じる(上書きしない)
                            --from <ISO> で「いつから真だったか」を遡って書ける
   oz dream [日数] [--dry]   何日ぶんかをまとめて見直し、確定に上げ直す(既定 7 日)
-  oz cleanup [日数] [--dry] 作業場と読まれない会話を落とす(既定 14 日・events は触らない)
-  oz ws                    作業場の一覧(何のための場所か・大きさ・最後に触った時刻)
-  oz selfdev [--fresh]     自分のソースの clone を作業場に置き、中でゲートが通るまで確かめる
+  oz cleanup [日数] [--dry] workspace と読まれない会話を落とす(既定 14 日・events は触らない)
+  oz ws                    workspace の一覧(何のための場所か・大きさ・最後に触った時刻)
+  oz selfdev [--fresh]     自分のソースの clone を workspace に置き、中でゲートが通るまで確かめる
                            --fresh は clone ごと取り直す(中で直しかけていたものは消える)
   oz intake --dry [n]      過去の会話を選別だけして圧縮率を見る(モデルを呼ばない)
   oz intake [n]            未取り込みの会話を古い順に n 件(既定 10)DB へ入れる
@@ -179,22 +179,22 @@ const program = (argv: readonly string[]) =>
         const ledger = yield* Ledger
         const db = yield* Db
         const halt = yield* gov.readHalt
-        // 枠は2つある。対話は claude-max、作業と調査は chatgpt-rmod。片方だけ見ていると
-        // 「開いている」と出したまま取り込みが全部落ちる、が起こる。
+        // クォータの pool は2つある。対話は claude-max、作業と調査は codex。片方だけ見ていると
+        // 「利用可」と出したまま取り込みが全部失敗する、が起こる。
         const nowMs = Date.now()
         const pools: string[] = []
         for (const pool of [CLAUDE_POOL, CODEX_POOL]) {
           const cd = yield* gov.quotaCooldown(pool, nowMs)
           pools.push(
             cd
-              ? `枠 ${pool}/${cd.window}: クールダウン中(${new Date(cd.untilMs).toISOString()} まで)`
-              : `枠 ${pool}: 開いている`,
+              ? `クォータ ${pool}/${cd.window}: クールダウン中(${new Date(cd.untilMs).toISOString()} まで)`
+              : `クォータ ${pool}: 利用可`,
           )
         }
         const t = yield* ledger.today()
         const pending = yield* proposals.list("proposed", 100)
         const day = dayRange(nowIso())
-        // 自走が今日どれだけ使ったか。全体の内訳として出す(仕切りが効いているか人が見る唯一の場所)。
+        // 自走が今日どれだけ使ったか。全体の内訳として出す(区分が分かれているか人が見る唯一の場所)。
         const a = yield* db.get(
           "SELECT COUNT(*)n FROM ledger WHERE role = ?AND at >= ?AND at < ?",
           AUTONOMOUS_ROLE,
@@ -286,11 +286,11 @@ const program = (argv: readonly string[]) =>
       }
 
       /**
-       * tick が見ているものを、ユーザーの側から置く/畳む4本。
+       * tick が見ているものを、ユーザーの側から置く/やめる4本。
        *
        * 問いも watch も、増やす経路はエージェントの道具にしかなく、減らす経路は答えるときしか無かった。
        * 片方向しかない置き場は必ず溜まる。溜まった側は `openQuestions` の上限を埋めて、
-       * 新しく立った問いを tick から押し出す(実測: open 38 件のうち tick が見ていたのは 20 件)。
+       * 新しく立った問いを tick の一覧から外す(実測: open 38 件のうち tick が見ていたのは 20 件)。
        */
       case "answer": {
         const a = idAndText(rest)
@@ -434,7 +434,9 @@ const program = (argv: readonly string[]) =>
 
       case "ws": {
         const list = yield* listWorkspaces
-        return [`作業場(${list.length} 件)— ${runsRoot()}`, "", renderWorkspaces(list, Date.now())].join("\n")
+        return [`workspace(${list.length} 件)— ${runsRoot()}`, "", renderWorkspaces(list, Date.now())].join(
+          "\n",
+        )
       }
 
       case "selfdev": {
@@ -449,7 +451,7 @@ const program = (argv: readonly string[]) =>
         const n = Number(rest.find((a) => /^\d+$/.test(a)) ?? (dry ? 100 : 10))
         const refs = yield* intake.scan(n)
 
-        // 選別だけ。枠を1回も使わずに効き目が測れるので、既定の確認手段はこちら。
+        // 選別だけ。クォータを1回も使わずに結果が測れるので、既定の確認手段はこちら。
         if (dry) {
           if (refs.length === 0) return "取り込むものは無い(全部済んでいる)"
           let raw = 0
@@ -530,7 +532,7 @@ const main = async (): Promise<void> => {
   const rt = runtime()
   try {
     // runPromise は失敗を FiberFailure で包んで投げてくる(message が "An error has occurred" になる)。
-    // Exit で受けて cause を潰し、元の失敗値そのものを見て文言を選ぶ。
+    // Exit で受けて cause を外し、元の失敗値そのものを見て文言を選ぶ。
     const exit = await rt.runPromise(Effect.exit(program(process.argv.slice(2))))
     if (Exit.isSuccess(exit)) {
       console.log(exit.value)

@@ -1,14 +1,21 @@
 /**
  * 外に出す文の漏れ検査。「止めるべきものを止める」と「止めなくていいものを通す」の両方を見る。
  *
- * 片方だけでは役に立たない。素通しなら医院名の載った記事がそのまま公開されるし、
+ * 片方だけでは役に立たない。検査が無ければ医院名の載った記事がそのまま公開されるし、
  * 疑わしいものまで弾けば一度も出せなくなり、出せない検査は外される。
  * 実際に1本目の下書きに何が混ざったかを標本にしてある。
  */
 
 import { test } from "bun:test"
 import assert from "node:assert/strict"
-import { findLeaks, findShape, findSmells, keepQuoted, reviewOutcome } from "../src/agent/drafting.ts"
+import {
+  findFigures,
+  findLeaks,
+  findShape,
+  findSmells,
+  keepQuoted,
+  reviewOutcome,
+} from "../src/agent/drafting.ts"
 
 const SECRETS = [
   "歯医者(さくら歯科)の次回予約は2026年8月19日(水)18:00に変更。",
@@ -62,7 +69,7 @@ test("定型はどこに出ても落とす", () => {
   assert.deepEqual(smells.sort(), ["さまざまな", "本稿では", "ていきます"].sort())
 })
 
-test("測ったことだけを書いた本文は素通しする", () => {
+test("測ったことだけを書いた本文は何も当たらない", () => {
   const body = [
     "提案5件のうち2件が、押される前に実行できなくなっていた。",
     "1件は参照していた確定値が9時間後に書き換わり、もう1件は中身の期日が有効期限より先に来た。",
@@ -181,7 +188,7 @@ test("指摘が無い返り値でも落ちない", () => {
 })
 
 /**
- * 精査の返りを、出す / 出さない に落とすところ。素通りの側を見る。
+ * 精査の返りを、出す / 出さない に変換するところ。出す側を見る。
  *
  * 落ちるのが1件も無い回に出してしまうと、精査役が黙ったことと指摘が無かったことが
  * 呼ぶ側から区別できない。ここは「出す」と書かれた回だけを通す(docs/adr/0031)。
@@ -228,4 +235,10 @@ test("写せた指摘は引用ごと返す", () => {
   )
   assert.equal(r.post, false)
   assert.match(r.post === false ? r.text : "", /「18回は別の枠へ出ていた」/)
+})
+
+test("tell に当てる検査は比喩だけを見る — 通知に不要な検査は実行しない", () => {
+  assert.deepEqual(findFigures("検索は空振りだった"), ["空振り"])
+  // 締めの評価語と横棒は除外しない。除外すると用のある通知が出せなくなる。
+  assert.deepEqual(findFigures("この設定が効く。移行は完了 — 残り0件。"), [])
 })

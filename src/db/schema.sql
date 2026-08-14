@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS turns (
 CREATE INDEX IF NOT EXISTS idx_turns_at ON turns(at);
 
 -- ============================================================================
--- 9. workspaces(コンテナの作業場。読み書きは src/core/workspaces.ts)
+-- 9. workspaces(コンテナの workspace。読み書きは src/core/workspaces.ts)
 --     **ファイルシステムが知らないことだけ置く。** 大きさと最後に触った時刻は
 --     `.data/runs/<name>` を走査すれば分かるので列にしない(持つと必ずずれる)。
 -- ============================================================================

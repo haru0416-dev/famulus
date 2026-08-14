@@ -375,7 +375,7 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
      * 入力は モデルを呼ぶ前に DB へ落ちる(assistant.ts の useAgentStart)ので、これが無いと
      * 自分が今受け取ったばかりの発言が検索に当たり、過去の記録として読まれる
      * (「さっき言われたこと」を「前にも言っていた」と言い出す)。
-     * 自走側は `text: ""` で索引に入れないことで同じ穴を塞いでいるが、対話の入力は索引に要る
+     * 自走側は `text: ""` で索引に入れないことで同じ経路を止めているが、対話の入力は索引に要る
      * (溜まらないと引けるようにならない)ので、除外は検索の側でやる。
      */
     const recall = (query: string, limit = 10, exclude?: string) =>

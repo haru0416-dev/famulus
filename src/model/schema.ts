@@ -13,7 +13,7 @@
  * 渡さないと検証されない。AI SDK の `safeValidateTypes` は `schema.validate == null` を
  * 「検証なしで成功」として通す。つまり `validate` を省くと、valibot のスキーマは
  * JSON Schema を作るためだけに使われ、モデルが返した値はそのまま `execute` へ入る —
- * `hours: "24"`(文字列)も、必須の欠けも、素通りする(docs/adr/0025)。
+ * `hours: "24"`(文字列)も、必須の欠けも、検査を通る(docs/adr/0025)。
  *
  * 落ちた呼び出しは turn を止めない。AI SDK が `tool-error` を積み、次の呼び出しの
  * 「## ツール結果」に valibot の指摘が載るので、モデルは同じ turn の中で呼び直せる。

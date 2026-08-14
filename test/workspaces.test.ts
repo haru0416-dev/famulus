@@ -1,5 +1,5 @@
 /**
- * 作業場の一覧の検査。実体と登録がずれたときにどちらを信じるかを固定する。
+ * workspace の一覧の検査。実体と登録がずれたときにどちらを信じるかを固定する。
  *
  * ここがずれる経路は2つある。コンテナは DB を通さずにホストのファイルを書き換えるし、
  * 掃除はファイルを消しても登録は消さないことがある。在るのは実体のほうに倒す。
@@ -101,7 +101,7 @@ test("noteWorkspace は keep を変更しない", async () => {
 
 /**
  * 子孫だけが更新されたディレクトリで、時刻も大きさも取れること。
- * ルートの mtime しか見ないと、使っている作業場が古いと出る(cleanup がそれで消す)。
+ * ルートの mtime しか見ないと、使っている workspace が古いと出る(cleanup がそれで消す)。
  */
 test("scanTree は子孫を含む最大 mtime と合計サイズを返す", async () => {
   const dir = mkdtempSync(join(tmpdir(), "oz-scan-"))
@@ -122,7 +122,7 @@ test("scanTree は子孫を含む最大 mtime と合計サイズを返す", asyn
 })
 
 /**
- * 同じ実体を2回数えない。作業場の中身はほとんどが `node_modules` で、
+ * 同じ実体を2回数えない。workspace の中身はほとんどが `node_modules` で、
  * bun の isolated はそこを symlink と hard link で組む。数え直すと大きさが数倍に出る(docs/adr/0026)。
  */
 test("scanTree は symlink の先へ降りない", () => {
@@ -161,7 +161,7 @@ test("scanTree は symlink の輪で落ちない", () => {
   }
 })
 
-test("一覧の文は、説明の無い作業場をそう書く", async () => {
+test("一覧の文は、説明の無い workspace をそう書く", async () => {
   const now = Date.parse("2026-08-13T12:00:00Z")
   const line = renderWorkspaces(
     [

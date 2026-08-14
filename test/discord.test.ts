@@ -126,7 +126,7 @@ const configured = Effect.gen(function* () {
   return d.configured()
 })
 
-/** 値を残すと後続テストが実 Discord を叩き得るため、解除もこの helper に集約する。 */
+/** 値を残すと後続テストが実 Discord へ接続し得るため、解除もこの helper に集約する。 */
 const wire = (url: string | undefined, ch?: { talk?: string; draft?: string; log?: string }) => {
   delete process.env.OPEN_ZERO_DISCORD_CH_TALK
   delete process.env.OPEN_ZERO_DISCORD_CH_DRAFT
@@ -542,7 +542,7 @@ test("聞き続けるスレッドには上限がある — 古いものから落
         }),
       )
       assert.deepEqual(JSON.parse(open ?? "[]"), ids.slice(1))
-      // 落ちたスレッドに書いても拾わない(叩きに行っていない)。
+      // 落ちたスレッドに書いても拾わない(接続していない)。
       dc.at(String(ids[0])).unshift({ id: "910", content: "古いスレッドへの返事", author: { id: OWNER } })
       assert.deepEqual(await h.run(inbox), [])
     })

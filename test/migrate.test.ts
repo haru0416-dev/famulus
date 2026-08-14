@@ -127,8 +127,8 @@ test("発火の記録を持たない watchlist は列が足され、既存の wa
     .prepare("SELECT last_run_at, cooldown_hours, run_count, last_result, last_shown_at FROM watchlist")
     .get() as Record<string, unknown> | null
   assert.ok(row, "移行したはずの行が引けない")
-  // 回した跡も載せた跡もどこにも残っていない。`opened_at` で埋めると、
-  // 回していないものを回したことにし、載せていないものを載せたことにする。
+  // 実行した跡も載せた跡もどこにも残っていない。`opened_at` で埋めると、
+  // 実行していないものを実行したことにし、載せていないものを載せたことにする。
   assert.deepEqual(
     { ...row },
     { last_run_at: null, cooldown_hours: 24, run_count: 0, last_result: null, last_shown_at: null },

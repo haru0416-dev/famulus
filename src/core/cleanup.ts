@@ -4,15 +4,15 @@
  * 対象ごとに増え方と寿命が異なる。
  *
  * - `events`(`open-zero.db`)は append-only で、増えるのが正しい。ここは触らない。
- *   トリガが DELETE を塞いでいるので、間違って書いても通らない。
- * - `.data/runs/<名前>` はコンテナの作業場。中身は依存の取得物とビルドの残骸で、
- *   測定した作業場では 9.8MB のうち 8.7MB が npm のキャッシュだった。結果は DB に書く規律なので、
+ *   トリガが DELETE を拒否するので、間違って書いても通らない。
+ * - `.data/runs/<名前>` はコンテナの workspace。中身は依存の取得物とビルドの残骸で、
+ *   測定した workspace では 9.8MB のうち 8.7MB が npm のキャッシュだった。結果は DB に書く規律なので、
  *   ここに残っているものは次回再開用の作業データでしかない。ただし
- *   「長い作業は同じ作業場に置いて次の tick で続ける」(src/services/Sandbox.ts)ので、
+ *   「長い作業は同じ workspace に置いて次の tick で続ける」(src/services/Sandbox.ts)ので、
  *   触られたばかりのものは消せない。最後に触った時刻で切る。
  *   ただし時刻では決まらないものが1つある — 自分のソースのように、何日か触らなくても
  *   在り続けなければならない場所。そこは `keep` で外す(src/core/workspaces.ts)。
- * - `.data/run-cache` は作業場をまたいで共有するパッケージの置き場。古さでは切らない —
+ * - `.data/run-cache` は workspace をまたいで共有するパッケージの置き場。古さでは切らない —
  *   使い回すために置いてあるので、触られていないことは消してよい理由にならない。上限で切る。
  *   消えても次の走行が取得し直すだけなので、部分的に選ばずまるごと削除する。
  *
@@ -37,7 +37,7 @@ import { dayRange, localHour, nowIso } from "./time.ts"
 import { forgetWorkspaces, keptNames, mb, scanTree } from "./workspaces.ts"
 
 /**
- * これより古いものを削除する。続きをやる作業場を消さない期間を取る。
+ * これより古いものを削除する。続きをやる workspace を消さない期間を取る。
  *
  * 環境変数で縮められるようにしてあるのは、端から端まで通して確かめるため —
  * 既定の 14 日だと、確かめたい日に落ちるものが無い。
@@ -53,7 +53,7 @@ export const CLEANUP_HOUR = Number(process.env.OPEN_ZERO_CLEANUP_HOUR ?? 4)
 /**
  * 共有キャッシュの上限(MB)。超えたらまるごと削除する。
  *
- * 2GB にしたのは、走行 30回ぶんの作業場が合計 1.4GB で、その中で重複していたのが
+ * 2GB にしたのは、走行 30回ぶんの workspace が合計 1.4GB で、その中で重複していたのが
  * 184MB だったから。同じ調子で溜まっても月単位で届かない幅。
  */
 export const CACHE_MAX_MB = Number(process.env.OPEN_ZERO_CACHE_MAX_MB ?? 2048)
@@ -67,7 +67,7 @@ export const cleanupDue = (atIso: string) =>
   })
 
 /**
- * 作業場のうち、しばらく触られていないものを削除する。
+ * workspace のうち、しばらく触られていないものを削除する。
  *
  * `kept` は時刻を見ずに残す名前(src/core/workspaces.ts の `keep`)。自分のソースを置いた
  * `selfdev` のように、何日か触らなくても在り続けなければならない場所がある。
@@ -142,12 +142,12 @@ export const cleanup = (opts?: {
     // 「14 日より古いもの」を全体に掛けると、キャッシュとコンテナの削除条件を読み違える。
     const parts: string[] = []
     if (runs.names.length > 0)
-      parts.push(`作業場 ${runs.names.length} 件(${mb(runs.bytes)}、${days} 日より古い)`)
+      parts.push(`workspace ${runs.names.length} 件(${mb(runs.bytes)}、${days} 日より古い)`)
     if (cacheBytes > 0) parts.push(`共有キャッシュ(${mb(cacheBytes)}、上限 ${maxMb}MB 超え)`)
     if (orphans.removed.length > 0)
       parts.push(`起動元プロセスが存在しないコンテナ ${orphans.removed.length} 件`)
     const head = dry ? "cleanup(数えただけ)" : "cleanup"
     if (parts.length === 0)
-      return `${head}: 削除対象は無かった(作業場は ${days} 日、キャッシュは ${maxMb}MB で判定)`
+      return `${head}: 削除対象は無かった(workspace は ${days} 日、キャッシュは ${maxMb}MB で判定)`
     return dry ? `${head}: ${parts.join(" / ")} が削除対象` : `${head}: ${parts.join(" / ")} を削除した`
   })

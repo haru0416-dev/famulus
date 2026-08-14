@@ -1,5 +1,5 @@
 /**
- * DB の検査。append-only が SQL 側で強制されていることを、アプリを経由せずに直接叩いて確かめる。
+ * DB の検査。append-only が SQL 側で強制されていることを、アプリを経由せずに直接実行して確かめる。
  * (アプリが行儀よく書いているだけなら、別経路が一つ増えた時点で不変条件は消える)
  */
 
@@ -106,7 +106,7 @@ test("recall は今のターンの入力を過去の記録として返さない"
     const { withSelf, withoutSelf } = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        // 本当に過去にある記録。同じ本文だと dedupe が畳むので、別の言い回しにする。
+        // 本当に過去にある記録。同じ本文だと dedupe がまとめるので、別の言い方にする。
         yield* mem.remember({ kind: "observe", content: { said: "先週から疲れが抜けない" } })
         // 今このターンで受け取った入力。DB には残るが、検索の根拠にしてはいけない。
         const now = yield* mem.remember({

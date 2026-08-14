@@ -1,13 +1,13 @@
 /**
  * 自分のソースを、自分が動かせる場所に置く。
  *
- * コンテナに見えるのは作業場だけで、`/home/haru` は映らない(src/services/Sandbox.ts)。
+ * コンテナに見えるのは workspace だけで、`/home/haru` は映らない(src/services/Sandbox.ts)。
  * この境界のせいで、自走している側は自分のソースを読むことも直すこともできなかった。
  * 実測した tick が到達したのは「拾ってきた他人のリポジトリを動かす」ところまでで、
  * 自分の欠陥を見つけても書き換える手が無い。境界は緩めない — 代わりに複製をこちら側から置く。
  *
  * 置くのは clone。作業ツリーのコピーではなく履歴ごと渡すのは、直した結果を `git diff` で
- * 取り出せるようにするため。本体への反映はここではやらない — 反映は取り消しの効かない操作で、
+ * 取り出せるようにするため。本体への反映はここではやらない — 反映は取り消せない操作で、
  * コンテナの中で通ったゲートは「その複製で通った」という意味しか持たない。
  *
  * `keep` を立てて登録するので cleanup の日数では消えない(src/core/workspaces.ts)。
@@ -21,10 +21,10 @@ import * as Effect from "effect/Effect"
 import { runDir, runInSandbox } from "../services/Sandbox.ts"
 import { keepWorkspace } from "./workspaces.ts"
 
-/** 作業場の名前。プロンプトにもこの名前で出る。 */
+/** workspace の名前。プロンプトにもこの名前で出る。 */
 export const SELFDEV = "selfdev"
 
-/** 作業場の中でのソースの位置。`npm` の置き土産(`.npm`)を clone の外に落とすために1段掘る。 */
+/** workspace の中でのソースの位置。`npm` の置き土産(`.npm`)を clone の外に落とすために1段掘る。 */
 const CLONE = "open-zero"
 
 /** このファイルから見たリポジトリの根。cwd に依らない — CLI はどこから叩かれるか分からない。 */
@@ -32,7 +32,7 @@ export const repoRoot = (): string => fileURLToPath(new URL("../..", import.meta
 
 /**
  * コンテナの中で bun を引く手。イメージには入っていない — 入れるのは走行記録で呼ばれたものだけで、
- * bun が要るのはこの作業場1つだけだから(src/services/Sandbox.ts)。
+ * bun が要るのはこの workspace 1つだけだから(src/services/Sandbox.ts)。
  *
  * 版は動いているこちらに合わせる。固定の文字列を書くと、mise が上げた日から
  * 「コンテナで通ったゲート」がホストで通る保証にならなくなる。
@@ -66,7 +66,7 @@ const sh = (cmd: string, args: readonly string[], cwd?: string): string =>
   execFileSync(cmd, args as string[], { encoding: "utf8", ...(cwd ? { cwd } : {}) }).trim()
 
 /**
- * 作業場を作って(あるいは作り直して)、中でゲートが通るところまで確かめる。
+ * workspace を作って(あるいは作り直して)、中でゲートが通るところまで確かめる。
  *
  * `fresh` は clone ごと捨てて取り直す。取り消せないので既定では取らない —
  * 中で直しかけていたものが消える。
@@ -103,7 +103,7 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
     if (dirty) lines.push(`※ 本体の未コミット ${dirty.split("\n").length} ファイルは clone に入っていない`)
 
     yield* keepWorkspace(SELFDEV, SELFDEV_PURPOSE)
-    lines.push(`作業場 ${SELFDEV} を登録した(cleanup の対象外)`)
+    lines.push(`workspace ${SELFDEV} を登録した(cleanup の対象外)`)
 
     // 依存はコンテナ内で取得する。ホストとコンテナでは libc が異なり、
     // Biome や Bun などプラットフォーム別実体を含む node_modules を共有できない。

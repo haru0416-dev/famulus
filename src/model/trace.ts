@@ -3,7 +3,7 @@
  *
  * 素の返り値を頭から切ると、道具呼び出しが落ちる。構造化経路の返り値は
  * `{"text": ..., "toolCalls": [...]}` という順の JSON なので、text が長い回ほど
- * 何を呼んだかが先に消える — 一番読みたい側から失われる。だから畳んでから切る。
+ * 何を呼んだかが先に消える — 一番読みたい側から失われる。だからまとめてから切る。
  *
  * 畳み方: 発話は頭 `TEXT_MAX` 字、道具は名前を全部残し、引数は1つあたり `ARG_MAX` 字。
  * 引数を落とさないのは、`task` の宛先(`agent`)や `recall` の語が、
@@ -24,7 +24,7 @@ interface Reply {
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}…` : s)
 
-/** 道具1件を `名前(引数)` に畳む。引数が無ければ名前だけ。 */
+/** 道具1件を `名前(引数)` にまとめる。引数が無ければ名前だけ。 */
 function foldCall(c: unknown): string {
   if (!c || typeof c !== "object") return String(c)
   const { name, arguments: args } = c as { name?: unknown; arguments?: unknown }
@@ -37,7 +37,7 @@ function foldCall(c: unknown): string {
 }
 
 /**
- * モデルの返り値をDB1行分に畳む。構造化 JSON でなければ素のテキストとして扱う
+ * モデルの返り値をDB1行分にまとめる。構造化 JSON でなければ素のテキストとして扱う
  * (`claude -p` を道具なしで呼ぶ経路がある)。
  */
 export function traceOf(raw: string): string {
@@ -46,7 +46,7 @@ export function traceOf(raw: string): string {
     const parsed: unknown = JSON.parse(raw)
     if (parsed && typeof parsed === "object" && "toolCalls" in parsed) reply = parsed as Reply
   } catch {
-    // JSON でないなら素のテキスト。畳む対象が無いのでそのまま切る。
+    // JSON でないなら素のテキスト。まとめる対象が無いのでそのまま切る。
   }
   if (!reply) return clip(raw, ROW_MAX)
 

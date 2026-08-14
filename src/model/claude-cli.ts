@@ -171,7 +171,7 @@ export async function callClaude(opts: ModelCallOptions): Promise<ModelCallResul
     "",
     // MCP を子に持ち込ませない。`--mcp-config` を渡さずにこれだけ立てると、
     // 他の設定源にある MCP サーバは全部無視される。ユーザーのシェルから起きた場合に
-    // 「親の Claude Code に繋がっている連携」が子の一覧に混ざるのを塞ぐ。
+    // 「親の Claude Code に繋がっている連携」が子の一覧に混ざらないようにする。
     "--strict-mcp-config",
     "--no-session-persistence",
   ]
@@ -198,7 +198,7 @@ export async function callClaude(opts: ModelCallOptions): Promise<ModelCallResul
   let nativeToolAttempt = false
 
   // kill だけでは足りない: 子が孫を残すと stdout の書き込み端が開いたままで EOF を待ち続ける
-  // (= タイムアウトが効かない)。読み取り端も明示的に破棄する。
+  // (= タイムアウトが発火しない)。読み取り端も明示的に破棄する。
   const halt = (why: "timeout" | "quota" | "abort"): void => {
     if (stopped) return
     stopped = why
@@ -269,7 +269,7 @@ export async function callClaude(opts: ModelCallOptions): Promise<ModelCallResul
     throw new ModelCallError(message, quota)
   }
 
-  if (stopped === "quota") fail(`claude -p: 推論枠が閉じている(${quota?.window ?? "unknown"})`)
+  if (stopped === "quota") fail(`claude -p: 推論クォータがクールダウン中(${quota?.window ?? "unknown"})`)
   if (stopped === "abort") fail("claude -p: 中断された")
   if (stopped === "timeout") fail(`claude -p: ${opts.timeoutMs ?? 180_000}ms で応答しない`)
 

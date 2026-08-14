@@ -4,7 +4,7 @@
  * 実際にコンテナが動くかどうかは docker を立てて確かめた(そちらはここでは回さない —
  * 検査に docker の生死を持ち込むと、境界の壊れとホストの都合が同じ赤で出る)。
  * ここに残すのは、モデルが書いた文字列がそのまま境界を広げうる2か所:
- * 作業場の名前と、docker に渡す引数。
+ * workspace の名前と、docker に渡す引数。
  */
 
 import { test } from "bun:test"
@@ -26,7 +26,7 @@ const withRoot = (fn: () => void): void => {
   }
 }
 
-test("作業場の名前は置き場の外に出られない", () => {
+test("workspace の名前は置き場の外に出られない", () => {
   withRoot(() => {
     const root = runsRoot()
     for (const name of ["../../etc", "/etc/passwd", "a/../../b", "~/.ssh"]) {
@@ -40,9 +40,9 @@ test("作業場の名前は置き場の外に出られない", () => {
   })
 })
 
-test("名前が全部落ちるものは弾く(空の作業場を作らない)", () => {
+test("名前が全部落ちるものは弾く(空の workspace を作らない)", () => {
   withRoot(() => {
-    // 全部が使えない字なら、削った結果は空になる。空を許すと置き場そのものが作業場になり、
+    // 全部が使えない字なら、削った結果は空になる。空を許すと置き場そのものが workspace になり、
     // 過去の走行が全部書ける場所に混ざる。
     assert.throws(() => runDir(".."), /走行名として使えない/)
     assert.throws(() => runDir("!!!"), /走行名として使えない/)
@@ -61,10 +61,14 @@ test("既定では外に出られない。net を渡したときだけ開く", (
   assert.equal(open[open.indexOf("--network") + 1], "bridge")
 })
 
-test("書けるのは作業場と共有キャッシュだけ。コンテナは毎回捨てる", () => {
+test("書けるのは workspace と共有キャッシュだけ。コンテナは毎回捨てる", () => {
   const args = dockerArgs("echo hi", { workDir: "/tmp/w", name: "oz-run-test" })
   const mounts = args.filter((_, i) => args[i - 1] === "-v")
-  assert.deepEqual(mounts, ["/tmp/w:/work", `${cacheRoot()}:/cache`], "作業場とキャッシュ以外が繋がっている")
+  assert.deepEqual(
+    mounts,
+    ["/tmp/w:/work", `${cacheRoot()}:/cache`],
+    "workspace とキャッシュ以外が繋がっている",
+  )
   assert.ok(args.includes("--rm"), "コンテナが残ると走行のたびに溜まる")
   // ユーザーの uid で走らせる。root のままだと、コンテナが作ったファイルを tick が消せない。
   assert.equal(args[args.indexOf("--user") + 1], `${process.getuid?.()}:${process.getgid?.()}`)
@@ -79,17 +83,17 @@ test("中の時計の帯はホストと同じ", () => {
 })
 
 /**
- * キャッシュを作業場の外へ出す。`HOME=/work` のままだと npm も pip も uv も
- * 作業場ごとに同じパッケージを取得する(実測: 別の作業場で uv が 2041ms → 3274ms、57MB を二重に持つ)。
+ * キャッシュを workspace の外へ出す。`HOME=/work` のままだと npm も pip も uv も
+ * workspace ごとに同じパッケージを取得する(実測: 別の workspace で uv が 2041ms → 3274ms、57MB を二重に持つ)。
  */
-test("パッケージキャッシュは作業場の外で共有する", () => {
+test("パッケージキャッシュは workspace の外で共有する", () => {
   const args = dockerArgs("npm i", { workDir: "/tmp/w", name: "oz-run-test" })
   const env = args.filter((_, i) => args[i - 1] === "-e")
   for (const k of ["npm_config_cache=/cache/npm", "PIP_CACHE_DIR=/cache/pip", "UV_CACHE_DIR=/cache/uv"]) {
     assert.ok(env.includes(k), `${k} が渡っていない: ${env.join(" ")}`)
   }
-  // 置き場が `.data/runs` の下にあると、cleanup が作業場として数えて 14 日で削除する。
-  assert.ok(!cacheRoot().startsWith(`${runsRoot()}/`), "キャッシュが作業場の置き場の中にある")
+  // 置き場が `.data/runs` の下にあると、cleanup が workspace として数えて 14 日で削除する。
+  assert.ok(!cacheRoot().startsWith(`${runsRoot()}/`), "キャッシュが workspace の置き場の中にある")
 })
 
 /**

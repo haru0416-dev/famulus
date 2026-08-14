@@ -20,7 +20,7 @@ import { dayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "../services/Db.ts"
 import { KEEP_MS, keep } from "./keeper.ts"
 
-/** 遡ってよい日数。初回と、長く止まっていたあとに効く。 */
+/** 遡ってよい日数。初回と、長く止まっていたあとに使う。 */
 export const DREAM_DAYS = 7
 
 /** 1回で読む発言の上限。超えた分は次の回に残る(取りこぼさない)。 */
@@ -36,7 +36,7 @@ export const DREAM_DAILY = "daily:dream"
  * ユーザーの時計でこの時刻を過ぎてから回す。既定は 4 時。
  *
  * 前日ぶんの発言が出揃っていて、かつユーザーがモデルを使っていない時間帯に置く。
- * 日付の境界(0 時)より後でなければ、その日ぶんの目印と噛み合わない。
+ * 日付の境界(0 時)より後でなければ、その日ぶんの目印とずれる。
  */
 export const DREAM_HOUR = Number(process.env.OPEN_ZERO_DREAM_HOUR ?? 4)
 
@@ -84,7 +84,7 @@ export interface DreamRow {
 }
 
 /**
- * 材料を集める。モデルは呼ばない。数えるだけで効き目が見られるようにしてある。
+ * 材料を集める。モデルは呼ばない。数えるだけで結果が見られるようにしてある。
  *
  * 古い順に返す。上限で切ったとき、切った位置から次の回が続けられる。
  */

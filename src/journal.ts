@@ -126,7 +126,7 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
 /**
  * 窓の中に増えた行を数える。tick の報告は読まない。
  *
- * `ran`(watch を回した記録)だけは events に残らず watchlist の1行を上書きするので、
+ * `ran`(watch を実行した記録)だけは events に残らず watchlist の1行を上書きするので、
  * 後の回に上書きされたぶんは数から消える。消えることを承知で数えている —
  * 呼んだかどうかは道具の並びに残っているので、そちらと突き合わせれば読める。
  */
@@ -212,7 +212,7 @@ const leftLine = (l: Left, none = "何も残らなかった"): string => {
     [l.tells, "通知", "件"],
     [l.shells, "コンテナ実行", "回"],
     [l.beliefs, "確定した事実", "件"],
-    [l.watchRuns, "watch を回した", "本"],
+    [l.watchRuns, "watch を実行した", "本"],
   ] as const
   const got = parts.filter(([n]) => n > 0).map(([n, name, unit]) => `${name} ${n}${unit}`)
   return got.length === 0 ? none : got.join(" / ")
@@ -244,7 +244,7 @@ const workLine = (e: Entry): string =>
     ...(e.cutOff ? [`**止まった: ${e.cutOff}**`] : []),
   ].join(" / ")
 
-/** 報告文を1行に畳む。文の途中では切らない — 途中で切れた文は、言っていないことを言わせる。 */
+/** 報告文を1行にまとめる。文の途中では切らない — 途中で切れた文は、言っていないことを言わせる。 */
 const saidLine = (said: string, max = 140): string => {
   const flat = said.replace(/\s+/g, " ").trim()
   if (flat === "") return "(何も書かなかった)"
@@ -269,10 +269,10 @@ const saidLine = (said: string, max = 140): string => {
  */
 export const logPost = (e: Entry): string =>
   [
-    `### ${clock(e.at)} に起きた`,
+    `### ${clock(e.at)} の実行`,
     // 止まった回はここに出す。下に置くと、上だけ読んで終わった回と見分けが付かない。
     ...(e.cutOff ? [`- **止まった** ${e.cutOff}`] : []),
-    `- 理由 ${e.reasons.join(" / ") || "記録なし"}`,
+    `- 実行条件 ${e.reasons.join(" / ") || "記録なし"}`,
     `- 実働 ${e.steps === undefined ? "手数の記録なし" : `${e.steps}手`}${e.ms === undefined ? "" : ` / ${took(e.ms)}`}`,
     `- 推論 ${e.runs}run / 出力${tok(e.outTok)}${e.usd > 0 ? ` / $${e.usd.toFixed(3)}` : ""}`,
     `- 道具 ${e.tools?.length ? tally(e.tools) : "記録なし"}`,
@@ -288,7 +288,7 @@ export const renderJournal = (entries: readonly Entry[]): string => {
   const body = entries.map((e) =>
     [
       `── ${localStamp(e.at)} ${"─".repeat(20)}`,
-      `  起きた  ${e.reasons.join(" / ") || "理由の記録なし"}`,
+      `  条件    ${e.reasons.join(" / ") || "実行条件の記録なし"}`,
       `  実働    ${workLine(e).replace(/\*\*/g, "")}`,
       `  道具    ${e.tools?.length ? runs(e.tools) : "記録なし(この回より前)"}`,
       `  残った  ${leftLine(e.left)}`,

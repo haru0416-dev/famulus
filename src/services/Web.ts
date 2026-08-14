@@ -4,7 +4,7 @@
  * コネクタ側の egress は allowlist(Governance の EGRESS_ALLOW)で足りる。宛先が数えられるから。
  * 調査の読み取りは宛先を列挙できないので、形で拒否する。IPv4 の loopback・私設・link-local・
  * CGNAT と、IPv6 の ::/::1・fc00::/7・fe80 で始まるアドレスを拒否する。
- * ufw は受信だけを見ていて送信は素通しなので、ここを塞がないとモデルの書いた URL 一本で
+ * ufw は受信だけを見ていて送信は検査しないので、ここで止めないとモデルの書いた URL 一本で
  * `http://127.0.0.1:8080` も `http://100.72.193.4` も読める。
  *
  * 名前解決後にも判定するが、接続時には再解決されるため DNS rebinding は防げない。
@@ -23,7 +23,7 @@ const MAX_BYTES = 1_500_000
 const MAX_CHARS = 12_000
 const TIMEOUT_MS = 20_000
 const MAX_HOPS = 3
-/** 名乗り。素性と用途が分かる形で出す — 相手が弾きたくなったときに弾ける名前にしておく。 */
+/** 名乗り。素性と用途が分かる形で出す — 相手が拒否したくなったときに拒否できる名前にしておく。 */
 const UA = "open-zero/0.1 (personal research agent)"
 
 /** 内側を指すアドレスか。数値で見る — 文字列の前方一致では 10.0.0.1 と 100.1.1.1 を取り違える。 */
@@ -233,7 +233,7 @@ function pick(xml: string, tag: string): string | undefined {
 }
 
 /**
- * RSS / Atom は1件ずつに割って返す。素通しでタグを剥がすと見出し・日付・本文が1本に繋がり、
+ * RSS / Atom は1件ずつに割って返す。そのままタグを剥がすと見出し・日付・本文が1本に繋がり、
  * どの日付がどの記事のものか消える。
  * 判定に使うのは形だけ — `<item>` か `<entry>` があれば feed 扱いにする。無ければ `undefined`。
  */
@@ -442,12 +442,12 @@ export function detour(url: string): string | undefined {
   if (isHost(u, "npmjs.com")) {
     // www.npmjs.com は Cloudflare の待機ページで 403。レジストリは素で返る。
     const pkg = /^\/package\/(.+)$/.exec(u.pathname)?.[1]
-    return `npmjs.com は 403 で弾かれる。https://registry.npmjs.org/${pkg ?? "<パッケージ名>"}/latest を開く`
+    return `npmjs.com は 403 で拒否される。https://registry.npmjs.org/${pkg ?? "<パッケージ名>"}/latest を開く`
   }
   if (isHost(u, "x.com") || isHost(u, "twitter.com")) {
     // 取りに行く前に断る(`refusedBeforeFetch`)。理由は2つ。直に引いても本文を含まないクライアント描画用 HTML しか返らず、
     // かつ `x.com/robots.txt` が `Disallow: /` で本文の取れる API も全部断られている。
-    // 投稿の中身は `search` の `x` から読む(索引の要約で、X を叩いていない)。
+    // 投稿の中身は `search` の `x` から読む(索引の要約で、X には接続していない)。
     const who = /^\/([A-Za-z0-9_]{1,15})\/status\/\d+/.exec(u.pathname)?.[1]
     // 「取れない」で終わらせると読み手はそこで諦めて、search に出ている投稿本文を
     // 使わずに終える。行き先まで言う。
@@ -459,11 +459,11 @@ export function detour(url: string): string | undefined {
   }
   if (isHost(u, "stackoverflow.com") && seg[0] === "questions" && seg[1] === "tagged") {
     // 質問一覧だけが 403。質問1件のページは通るので振り替えない。
-    return `質問一覧の HTML は 403 で弾かれる。https://stackoverflow.com/feeds/tag/${seg[2]} を開く`
+    return `質問一覧の HTML は 403 で拒否される。https://stackoverflow.com/feeds/tag/${seg[2]} を開く`
   }
   if (isHost(u, "reddit.com") && seg[0] === "r" && seg[1]) {
     // old.reddit.com も `.json` も 403。通るのは `.rss` だけ。
-    return `HTML も .json も 403 で弾かれる。https://www.reddit.com/r/${seg[1]}/.rss を開く`
+    return `HTML も .json も 403 で拒否される。https://www.reddit.com/r/${seg[1]}/.rss を開く`
   }
   if (isHost(u, "youtube.com") && u.pathname === "/watch" && u.searchParams.get("v")) {
     // 視聴ページは題や説明までの転送量が大きい。題と投稿者だけなら oEmbed の応答で足りる。
@@ -530,7 +530,7 @@ function githubDetour(u: URL, seg: readonly string[]): string | undefined {
  * (それで困る規模では回さない)。
  *
  * 環境変数で縮められるのは検査のため。相手を差し替えた検査(fetch を stub したもの)は
- * 誰にも迷惑を掛けないのに、同じホストを4回叩く1件で 4 秒待つ。外へ出る既定は動かさない。
+ * 誰にも迷惑を掛けないのに、同じホストへ4回出す1件で 4 秒待つ。外へ出る既定は動かさない。
  */
 const hostIntervalMs = (): number => Number(process.env.OPEN_ZERO_HOST_INTERVAL_MS ?? 1_000)
 const lastHit = new Map<string, number>()
@@ -635,7 +635,7 @@ async function readCapped(res: Response): Promise<{ buf: Uint8Array; cut: boolea
  *
  * 判定を三段に分けてある:
  *
- * - HTML の大きさだけで測ると、小さいページの空振りを見逃す(JS の転送ページは HTML ごと小さい)。
+ * - HTML の大きさだけで測ると、小さいページで何も取れない回を見逃す(JS の転送ページは HTML ごと小さい)。
  *   返した字数そのものでも引っかける。
  * - 疑う相手は script のある HTML だけ。JSON の API は 200 バイトで正しく答えるし、
  *   素の HTML が短いのは単に短いページで、疑う理由が無い。
@@ -666,7 +666,7 @@ function thinNote(p: {
         "載っているはずのものが見当たらないなら、残りは JS で後から入る部分 — 別の出典を当たったほうが早い")
     )
   }
-  // 切ったのか、そもそも入っていないのかも言い分ける。上限で切ったページの空振りは
+  // 切ったのか、そもそも入っていないのかも言い分ける。上限で切ったページで取れないのは
   // 「JS で組み立てる」ではなく「読んだ範囲に本文が無かった」。診断を間違えると、
   // 読み手は取れるはずのものを諦める。
   const why =
@@ -856,14 +856,14 @@ async function fetchFresh(raw: string): Promise<CachedDoc> {
  * `fetchPage` と分けたのは、あちらが「人に読ませる1ページ」を作る道具だから — `toText` が
  * タグを剥がし、`slice` が 12,000字で切る。JSON を欄ごとに読む側にはどちらも邪魔になる。
  * 間隔(`pace`)・上限(`readCapped`)・転送の検査は同じものを通す。内側への転送を
- * 素通りさせないため、`redirect: "follow"` にはしない(宛先が定数でも、転送先は相手が決める)。
+ * 転送先を検査せずに開かないため、`redirect: "follow"` にはしない(宛先が定数でも、転送先は相手が決める)。
  *
  * `timeoutMs` の既定は 1ページぶんの 20 秒。同時に何本も出す側は短くする —
  * 揃うのを待つ形では、返らない1本が全体を制限いっぱいまで引き延ばす。
  *
  * 断られたときの本文も返す(`fetchPage` は捨てる)。API は理由を本文に書く —
  * Qiita の 403 は `{"message":"Rate limit exceeded"}` で、これが読めないと
- * 「一時的に上限」と「弾かれた」の区別が付かない。
+ * 「一時的に上限」と「拒否された」の区別が付かない。
  */
 export interface RawOptions {
   readonly accept: string
@@ -872,13 +872,13 @@ export interface RawOptions {
   readonly headers?: Readonly<Record<string, string>>
   /**
    * この origin ちょうど1つだけ、内側判定と間隔の制限を免除する。
-   * 自分で立てたサーバを呼ぶためだけの穴(現状は SearXNG の `http://127.0.0.1:8888`)。
+   * 自分で立てたサーバを呼ぶためだけの例外(現状は SearXNG の `http://127.0.0.1:8888`)。
    *
    * 冒頭の防御はそのまま残す。モデルが書いた URL は `fetchPage` を通り、こちらには来ない
    * — 免除できるのは `Search.ts` の中に先として書いてある origin だけで、
    * 問い合わせ文から組み立てられる余地は無い。前方一致ではなく origin の完全一致で見る
    * (`http://127.0.0.1:8888` の免除が `http://127.0.0.1:8888.example.com` に伸びない)。
-   * 転送された先には掛からない — 次の周では `url` の origin が変わるので、また弾かれる。
+   * 転送された先には掛からない — 次の周では `url` の origin が変わるので、また拒否される。
    */
   readonly allowOrigin?: string
 }

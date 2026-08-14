@@ -30,7 +30,7 @@ const NOT_TOOLS = new Set([
   "commit", // Attention の関数(冷却の起点を進める側)。モデルからは呼べない
   "at", // 道具の引数名(`ran` に渡す、実際に回した時刻)
   "since", // keeper の引数名(この回の起点)。モデルには見えない
-  "purpose", // 道具の引数名(`shell` に渡す、その作業場は何のための場所か)
+  "purpose", // 道具の引数名(`shell` に渡す、その workspace は何のための場所か)
   "signal", // respond() の引数名(呼ぶ側が締切で切るための AbortSignal)。モデルには見えない
   // ここから下は tick が DB に残す記録の欄名(src/journal.ts が読む側)。モデルからは触れない —
   // 呼び出し側が数えて書く値で、道具として呼べるものは1つも無い(docs/adr/0030)。

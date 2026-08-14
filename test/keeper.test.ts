@@ -159,6 +159,6 @@ test("keeper が呼べなくても回全体は失敗しない", async () => {
       const line = await h.run(keep({ material: MATERIAL }))
       assert.match(line, /呼べなかった/)
     },
-    [{ text: "", fail: "rmod が落ちた" }],
+    [{ text: "", fail: "モデルが落ちた" }],
   )
 })

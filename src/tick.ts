@@ -2,7 +2,7 @@
 /**
  * tick。話しかけられなくても動くための唯一の入口。
  *
- * ここまでの構造は全部「人が口を開いたら動く」形だった(`bun run agent` も `oz` も人が叩く)。
+ * ここまでの構造は全部「人が話しかけたら動く」形だった(`bun run agent` も `oz` も人が起動する)。
  * 自走にするというのは、起動の理由を人の発話から DB の状態に移すこと。
  * このファイルがその置き換えで、systemd のタイマーから定期的に呼ばれる。
  *
@@ -20,9 +20,10 @@
 import * as Effect from "effect/Effect"
 import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
+import { withoutFigures } from "./agent/figures.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
 import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
-import { clearDeadline, startDeadline } from "./core/deadline.ts"
+import { clearDeadline, remainingMs, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
 import { causeReason, describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
@@ -74,7 +75,7 @@ function renderWatchSection(d: Digest): string | undefined {
     // 先週を踏まえた文が一度も出ない。実際に AI追跡の watch がそうなっていた。
     ...d.stalled.map((w) => {
       const head = `- ${short(w.id)} ${w.subject}(最後の動きから ${w.stalledDays} 日 / 次に動くのは ${w.next_move_owner}`
-      const runs = w.run_count > 0 ? ` / 通算 ${w.run_count} 回` : " / まだ一度も回していない"
+      const runs = w.run_count > 0 ? ` / 通算 ${w.run_count} 回` : " / まだ一度も実行していない"
       const prev = w.last_result ? `\n  前回: ${w.last_result}` : ""
       return `${head}${runs})${prev}`
     }),
@@ -127,7 +128,7 @@ function renderRefusedSection(d: Digest): string | undefined {
 /**
  * tick のプロンプト。「何もしない」を正解として明示するのが要点。
  * 実行された以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を出す。
- * 実行条件と材料だけ渡して、処理する必要が無ければ一行で終えてよいと書く。
+ * 実行条件と対象だけ渡して、処理する必要が無ければ一行で終えてよいと書く。
  */
 function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspace[]): string {
   const sections: string[] = []
@@ -170,12 +171,12 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
   const refusedSection = renderRefusedSection(d)
   if (refusedSection) sections.push(refusedSection)
 
-  // 在る作業場は毎回載せる。道具(`workspaces`)を置いただけでは引かれない —
+  // 残っている workspace は毎回載せる。道具(`workspaces`)を置いただけでは引かれない —
   // 引くかどうかを判断するには、まず在ることを知っていなければならない。数行で済む。
   if (workspaces.length > 0) {
     sections.push(
       [
-        "## 使える作業場(`shell` の workspace に渡す名前)",
+        "## 使える workspace(`shell` の workspace に渡す名前)",
         renderWorkspaces(workspaces, Date.parse(d.at)),
         "",
         "**続きをやれるものが在るなら新しく作らない。** 作り直すと依存の取得からやり直しになり、",
@@ -192,8 +193,8 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
         "1日に1本、外に出せる文を `draft` で置く。出す先は Zenn を想定した記事。",
         "",
         "**書き始める前に `recall` で自分の走行記録を引く。** 切られた tick、通らなかった経路、",
-        "効かなかった設定、使ったモデル利用量 — 自走するエージェントを実際に動かして失敗した記録は他の誰も持っていない。",
-        "引いて何も出てこなければ `draft` を呼ばず、「材料が無い」と一行書いて終える。",
+        "動かなかった設定、使ったモデル利用量 — 自走するエージェントを実際に動かして失敗した記録は他の誰も持っていない。",
+        "引いて何も出てこなければ `draft` を呼ばず、「書ける実測が無い」と一行書いて終える。",
         "",
         DRAFTING,
       ].join("\n"),
@@ -204,7 +205,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
     [
       "## 今回やること",
       `**この回に使える時間は ${Math.round(TIMEOUT_MS / 1000)} 秒**。\`shell\` の返り値に残りが出る。` +
-        "尽きる前に手を止めて、分かったことを書く。続きは同じ作業場の名前を渡せば次の tick で継げる。",
+        "尽きる前に中断して、分かったことを書く。続きは同じ workspace の名前を渡せば次の tick で継げる。",
       "",
       ...(spokenTo
         ? [
@@ -222,8 +223,8 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
       "**調べ直すより、取得済みの情報で終える。** tick は数分で切られる。途中で切られると",
       "その回の働きは丸ごと消えて、ユーザーには何も残らない。だから:",
       "- `recall` は当たった時点で止める。**同じ語をもう一度引かない**。「該当なし」が2回続いたら DB に無い。",
-      "- DB を読むだけなら `recall` を自分で引く。子(`digger` / `researcher`)を呼ぶのは",
-      "  **1回では足りないとき**と、**外(web)を見に行くとき**だけ。",
+      "- DB を読むだけなら `recall` を自分で引く。委譲エージェント(`digger` / `researcher`)を呼ぶのは",
+      "  **1回では足りないとき**と、**web を調べるとき**だけ。",
       "- **探索は観点別の独立タスクに分ける。** 同じ問いを1つの文脈で順に調べると、2件目は1件目の語彙を",
       "  引き継いで同じ観点しか見なくなる。**別の観点を別の委譲エージェントに渡し、互いの結果は見せない。**",
       "  統合するのは結果が戻ってから。答えが見えている段階では分割せず、取得済みの情報で終える。",
@@ -231,13 +232,13 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
       "  確認でしかない。**予告を外した返りだけが新しい。** 外れたら、外れた側を書く。",
       "- **ユーザーに届ける価値があると判断するなら、同じ評価基準で除外したものを1つ名指す。**",
       "  除外例を名指せない評価基準は何でも採用するので、採用されたことが証拠にならない。",
-      "- 材料が揃ったらそこで打ち切って、`tell` なり `remember` なりで形にして終える。",
+      "- 必要な情報が揃ったらそこで打ち切って、`tell` なり `remember` なりで形にして終える。",
       "",
       // 「何もしないでよい」は載せるものが無い回にだけ言う。無条件に書くと、冷却の明けた
       // watch を並べておきながら同じ文で「動かなくてよい」と言うことになる。実測(直近40回の実働)では
       // watch で起きた9回のうち7回が道具呼び出し4回以下だった。逆に「必ず何かやれ」と書くと
       // 用の無い watch と提案が増える。分けるのは件数ではなく、載っているかどうか。
-      // この分岐そのものの効き目は測れていない(前後1回ずつでは差が出なかった。docs/adr/0028)。
+      // この分岐そのものの結果は測れていない(前後1回ずつでは差が出なかった。docs/adr/0028)。
       ...(spokenTo
         ? [
             "**訊き返してよい。** 相手はいま画面の前にいる。分岐が決められないなら、",
@@ -359,7 +360,7 @@ async function tick(): Promise<string> {
 
   // 自律実行区分であることを、エージェントを組み立てる前に設定する。
   // lane() は呼び出し時評価なのでこれだけで足りるが、モデル id は createAssistant() の
-  // 時点で確定するので、差し替えるならこの順序でなければ効かない。
+  // 時点で確定するので、差し替えるならこの順序でなければ反映されない。
   process.env.OPEN_ZERO_LANE = "autonomous"
   // 道具一式を読み込むのは、モデル実行が必要と決まってから。idle の回(定期実行の大半)は
   // ここを通らないので、その回の起動は DB を1回引くだけで終わる。
@@ -426,8 +427,10 @@ async function tick(): Promise<string> {
         const discord = yield* Discord
         // 返信は DB より先に出す。ユーザーは待っている側なので、記録に手間取って
         // 返事が遅れる順序にしない。出せなくても DB には残るので、失っては困るものは無い。
-        // 切られた回の穴埋め文は出さない。届けてよいのは、書かれた返事だけ。
-        if (spokenTo && text && !cutOff) yield* discord.post({ text })
+        // 切られた回の補完文は出さない。届けてよいのは、書かれた返事だけ。
+        if (spokenTo && text && !cutOff) {
+          yield* discord.post({ text: yield* withoutFigures(text, remainingMs()) })
+        }
         yield* mem.remember({
           kind: "observe",
           source: "system",
@@ -446,7 +449,7 @@ async function tick(): Promise<string> {
             ...(kept ? { kept } : {}),
           },
           // 索引に入れるのは言ったことだけ。`deriveText` に任せると封筒(起動時刻・起きた理由)まで
-          // 平らに潰して混ぜてしまい、「ユーザーの入力が未読」のような定型句が毎回の記録に紛れて、
+          // 平らにして混ぜてしまい、「ユーザーの入力が未読」のような定型句が毎回の記録に紛れて、
           // 何を検索してもそれが当たるようになる。封筒は DB に残す、索引には入れない。
           text,
           at: nowIso(),

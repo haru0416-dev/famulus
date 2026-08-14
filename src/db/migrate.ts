@@ -1,9 +1,9 @@
 /**
  * 既に中身のある DB を新しいスキーマに合わせる。
  *
- * `schema.sql` は全部 `CREATE TABLE IF NOT EXISTS` なので、既存のテーブルには効かない。
+ * `schema.sql` は全部 `CREATE TABLE IF NOT EXISTS` なので、既存のテーブルには適用されない。
  * 形を変えたければここで明示的に作り直すしかない。schema.sql を適用する前に呼ぶ:
- * 先に旧い形を新しい形へ寄せておけば、あとは `IF NOT EXISTS` が素通りするだけで済む。
+ * 先に旧い形を新しい形へ寄せておけば、あとは `IF NOT EXISTS` が何もしないだけで済む。
  *
  * どれも冪等。掛かっていなければ掛け、掛かっていれば何もしない。
  * `events` には触らない。それ以外の既存テーブルは、必要に応じて行を保持したまま
@@ -95,9 +95,9 @@ function ledgerCacheWrite(d: Sqlite): boolean {
 /**
  * watchlist に発火の記録を足す(docs/adr/0013)。
  *
- * 既存行の `last_run_at` は NULL のまま置く。「まだ一度も回していない」と読むのが記録として正しい
- * — 回した跡はどこにも残っていないので、`opened_at` や `last_activity_at` で埋めると
- * 回していないものを回したことにする。NULL は最初の tick で1回だけプロンプトに載り、そこから冷却が始まる。
+ * 既存行の `last_run_at` は NULL のまま置く。「まだ一度も実行していない」と読むのが記録として正しい
+ * — 実行した跡はどこにも残っていないので、`opened_at` や `last_activity_at` で埋めると
+ * 実行していないものを実行したことにする。NULL は最初の tick で1回だけプロンプトに載り、そこから冷却が始まる。
  */
 function watchlistFiring(d: Sqlite): boolean {
   const cols = columns(d, "watchlist")
@@ -114,8 +114,8 @@ function watchlistFiring(d: Sqlite): boolean {
  *
  * `last_run_at` だけでは順番が付かない。冷却が同時に明けた watch は全部同じ回に載り、
  * 実測では6件が毎回そろって上がって、tick は一覧を読み直すだけで1件も回さずに終えていた。
- * 「回した」と「載せた」は別の出来事なので、列も別に持つ — 回さずに終えた watch を
- * 後ろへ回すには、載せたことだけを記録できなければならない。
+ * 「実行した」と「載せた」は別の出来事なので、列も別に持つ — 実行せずに終えた watch を
+ * 後ろへ送るには、載せたことだけを記録できなければならない。
  *
  * 既存行は NULL のまま置く。「まだ一度も載せていない」と読むのが記録として正しい
  * — 載せた跡はどこにも残っていない。NULL は先頭に並ぶので、最初の数回で一巡する。
@@ -169,13 +169,13 @@ function dropNtfyCursor(d: Sqlite): boolean {
  * 他の表の `REFERENCES` を追いかけて書き換える。`proposals` を `proposals_v1` に改名すると、
  * それを指している `approvals` `decisions` `ledger` の3つが `proposals_v1` を指すようになり、
  * 用済みの `proposals_v1` を落とした時点で参照先が消える。
- * 実物のコピーで踏んで気付いた — 参照する表が無い検査用の DB では通っていた。
+ * 実物のコピーで再現して気付いた — 参照する表が無い検査用の DB では通っていた。
  *
  * 通る順は、新しい名前で作る → 写す → 古いほうを落とす → 新しいほうを改名する。
  * 改名で追いかけられるのは `<表>_new` への参照だけで、そんな参照は誰も持っていない。
  * 子の側は最初から最後まで元の名前を指したまま動かない。
  *
- * `PRAGMA foreign_keys` はトランザクションの中では効かないので、外で落として外で戻す。
+ * `PRAGMA foreign_keys` はトランザクションの中では設定できないので、外で落として外で戻す。
  * 落としている間の取りこぼしは `foreign_key_check` で見て、1件でもあれば巻き戻す。
  */
 const rebuild = (d: Sqlite, table: string, createNew: string, cols: string): void => {
@@ -257,7 +257,7 @@ function narrowInheritedChecks(d: Sqlite): string[] {
   }
 
   if (/'counterparty'/.test(ddl(d, "watchlist"))) {
-    // 値を移行してから作り直す。移行前に作ると CHECK で弾かれて、適用されないまま次回も同じ所へ来る。
+    // 値を移行してから作り直す。移行前に作ると CHECK に拒否されて、適用されないまま次回も同じ所へ来る。
     d.exec("UPDATE watchlist SET next_move_owner = 'human' WHERE next_move_owner = 'counterparty'")
     rebuild(
       d,
@@ -288,7 +288,7 @@ function narrowInheritedChecks(d: Sqlite): string[] {
 /**
  * 読み書きする側の無いテーブルを削除する(docs/adr/0007)。
  *
- * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に効かないので、テーブルは残り続ける。
+ * `schema.sql` から消しても `IF NOT EXISTS` は既存の DB に適用されないので、テーブルは残り続ける。
  * 残ると `.schema` を読んだ側が「その仕組みが在る」と読む — 消したい理由がそれなので、実物も削除する。
  *
  * 空のときだけ削除する。行があるなら、それは想定と違うことが起きている兆候で、

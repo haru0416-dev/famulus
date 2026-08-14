@@ -6,10 +6,10 @@
  * このホストにはユーザーの鍵も DB(`.data/*.db`)も置いてある。境界を先に引かないと動かせない。
  *
  * 境界に docker を選んだのは、srt(bubblewrap)と headless の `claude -p` を実測して不採用にしたから。
- * 前者は AppArmor が入れ子の userns を塞いでいて動かず、後者は作業場の中にも書けない。
+ * 前者は AppArmor が入れ子の userns を拒否するので動かず、後者は workspace の中にも書けない。
  * どちらの失敗も、越えるには sudo かサンドボックスの解除が要る。不採用の経緯は docs/adr/0001。
  *
- * docker は sudo 無しで通り、「作業場には書ける / `/home/haru` は見えない /
+ * docker は sudo 無しで通り、「workspace には書ける / `/home/haru` は見えない /
  * `--network none` なら外に出られない」が同時に成り立つ。中に資格情報を持ち込まないので、
  * 万一持ち出されて困るのは、そのランで自分が置いたものだけになる。
  */
@@ -43,7 +43,7 @@ const BASE_IMAGE = "node:24-bookworm"
  * 上限は tick の持ち時間(`OPEN_ZERO_TICK_TIMEOUT_MS`、既定 420 秒)より短く取ってある。
  * 走行が tick の制限時間を使い切ると、その回は終了して走行記録が1行も残らない —
  * コンテナの中で起きたことはコンテナを捨てた時点で消えるので、書き残せなかった走行は無かったのと同じになる。
- * 長い作業は1回で終わらせず、同じ作業場に置いて次の tick で続ける。
+ * 長い作業は1回で終わらせず、同じ workspace に置いて次の tick で続ける。
  */
 const DEFAULT_TIMEOUT_MS = 3 * 60_000
 /** モデルに渡す上限。ビルドログは平気で数MB出るが、読ませたいのは詰まった箇所だけ。 */
@@ -54,7 +54,7 @@ const CPUS = "2"
 const PIDS = "512"
 
 export interface RunOptions {
-  /** ホスト側の作業場。ここだけが書ける。`runDir()` が返す絶対パスを渡す。 */
+  /** ホスト側の workspace。ここだけが書ける。`runDir()` が返す絶対パスを渡す。 */
   readonly workDir: string
   /** 外に出るか。既定は出ない。依存の取得(clone・install)が要るときだけ true。 */
   readonly net?: boolean
@@ -75,19 +75,19 @@ export interface RunResult {
 export const runsRoot = (): string => resolve(process.env.OPEN_ZERO_RUNS ?? ".data/runs")
 
 /**
- * 取得したパッケージの共有キャッシュ。作業場の外に置く。
+ * 取得したパッケージの共有キャッシュ。workspace の外に置く。
  *
- * `HOME=/work` なので、既定のままだと npm も pip も uv も作業場ごとにキャッシュを作る。
- * このホストで測ると、`uv` で requests を入れる走行は作業場を変えた場合に
- * 2041ms → 3274ms に伸びて、両方の作業場が 57MB ずつ同じものを持っていた。
+ * `HOME=/work` なので、既定のままだと npm も pip も uv も workspace ごとにキャッシュを作る。
+ * このホストで測ると、`uv` で requests を入れる走行は workspace を変えた場合に
+ * 2041ms → 3274ms に伸びて、両方の workspace が 57MB ずつ同じものを持っていた。
  *
  * `runsRoot()` の下に置いてはいけない。`sweepRuns` は `.data/runs` の直下を全部
- * 作業場として数えるので、キャッシュが作業場の一覧に出て、14日で消される側に回る。
+ * workspace として数えるので、キャッシュが workspace の一覧に出て、14日で消される側に回る。
  */
 export const cacheRoot = (): string => resolve(process.env.OPEN_ZERO_RUN_CACHE ?? ".data/run-cache")
 
 /**
- * 名前から作業場を1つ作って絶対パスを返す。
+ * 名前から workspace を1つ作って絶対パスを返す。
  *
  * 名前はモデルが書く。`../` や絶対パスをそのまま繋ぐと、書き込みを許す場所が
  * `.data/runs` の外へ伸びる — 境界を docker に引いておきながら、渡す先で外してしまう。
@@ -102,7 +102,7 @@ export function runDir(name: string): string {
   if (!safe) throw new Error(`走行名として使えない: ${name}`)
   const root = runsRoot()
   const dir = join(root, safe)
-  if (!dir.startsWith(`${root}/`)) throw new Error(`作業場が置き場の外に出る: ${name}`)
+  if (!dir.startsWith(`${root}/`)) throw new Error(`workspace が置き場の外に出る: ${name}`)
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -126,7 +126,7 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     // ユーザーの uid で走らせる。既定の root で作ったファイルは、後で tick(haru)が読めも消せもしない。
     "--user",
     `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
-    // uid を指定するとコンテナの中に home が無くなる。npm も pip も HOME を要求するので作業場を充てる。
+    // uid を指定するとコンテナの中に home が無くなる。npm も pip も HOME を要求するので workspace を充てる。
     "-e",
     "HOME=/work",
     // 中の時計の帯をホストに合わせる。既定のコンテナは UTC で、こちらは Asia/Tokyo。
@@ -134,9 +134,9 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     // 日付を読む検査1件が中でだけ 9 時間ずれて落ちた(src/services/Search.ts の publishedDate)。
     "-e",
     `TZ=${TZ}`,
-    // 取得キャッシュは作業場をまたいで使い回す。置き場は作業場の外(cacheRoot)。
+    // 取得キャッシュは workspace をまたいで使い回す。置き場は workspace の外(cacheRoot)。
     // イメージ側にも同じ値を設定してあるが、ここでも渡す — フォールバック先の素のイメージには入っていないので、
-    // 組めなかった回だけキャッシュが効かない、という差ができる。
+    // 組めなかった回だけキャッシュを使わない、という差ができる。
     "-e",
     "npm_config_cache=/cache/npm",
     "-e",
@@ -162,7 +162,7 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
   ]
 }
 
-/** docker を1回叩いて終了コードと出力を取る。走行そのものではなく、周りの世話(組む・数える・消す)用。 */
+/** docker を1回呼んで終了コードと出力を取る。走行そのものではなく、周りの世話(組む・数える・消す)用。 */
 function docker(args: readonly string[], timeoutMs = 5 * 60_000): Promise<{ code: number; out: string }> {
   return new Promise((done) => {
     const child = spawn("docker", args as string[], { stdio: ["ignore", "pipe", "pipe"] })
@@ -184,7 +184,7 @@ function docker(args: readonly string[], timeoutMs = 5 * 60_000): Promise<{ code
   })
 }
 
-/** 一度組んだら二度と見に行かない(`docker image inspect` でも 30ms 掛かるので、走行ごとには払わない)。 */
+/** 一度組んだら二度と確認しない(`docker image inspect` でも 30ms 掛かるので、走行ごとには払わない)。 */
 let imagePromise: Promise<string> | undefined
 
 /**
@@ -261,7 +261,7 @@ export async function sweepOrphans(dry = false): Promise<{ removed: string[]; ke
  * 「どのコマンドがどこで失敗したか」の前後関係が消える。読む側が要るのはその順序のほう。
  */
 export async function runInSandbox(command: string, opts: RunOptions): Promise<RunResult> {
-  if (!isAbsolute(opts.workDir)) throw new Error(`作業場は絶対パスで渡す: ${opts.workDir}`)
+  if (!isAbsolute(opts.workDir)) throw new Error(`workspace は絶対パスで渡す: ${opts.workDir}`)
   mkdirSync(cacheRoot(), { recursive: true })
   // image が明示されている場合は、自動ビルドせず指定されたイメージを使う。
   const image = opts.image ?? process.env.OPEN_ZERO_RUN_IMAGE ?? (await ensureImage())

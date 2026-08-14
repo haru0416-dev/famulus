@@ -31,7 +31,7 @@ const tickUnit = (): string => process.env.OPEN_ZERO_TICK_UNIT ?? "open-zero-tic
 /**
  * 再起動を試すまでの最小間隔。クォータ枯渇や停止で tick が即時終了したとき、未読は残るので
  * 毎回起動を試すことになる。30秒ごとにそれを行うと処理されない起動要求が積み上がる。
- * tick が正常に終わった直後の未読には効かせない(下の `ran`)。
+ * tick が正常に終わった直後の未読には適用しない(下の `ran`)。
  */
 const RETRY_MS = 180_000
 

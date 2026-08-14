@@ -1,5 +1,5 @@
 /**
- * 作業場の一覧。`.data/runs/<名前>` に何が置いてあるかを、次の tick が読める形にする。
+ * workspace の一覧。`.data/runs/<名前>` に何が置いてあるかを、次の tick が読める形にする。
  *
  * `shell` は前から同じ名前を渡せば続きから走る作りになっていたが、どんな名前が在るかを
  * 知る手段が無かった。名前は毎回モデルが思い付きで書くので、実測では同じ調べ物に
@@ -53,10 +53,10 @@ const entriesOf = (dir: string) => {
  * ディレクトリを1回だけ再帰走査し、合計サイズと最新更新時刻を同時に取得する。
  *
  * ルートディレクトリの時刻だけを見ると、配下のファイルを書き換えても親ディレクトリの時刻が変わらないため、
- * 使用中の作業場が「古い」と表示される。配下を走査して最も新しい更新時刻を採る。
+ * 使用中の workspace が「古い」と表示される。配下を走査して最も新しい更新時刻を採る。
  *
  * ## 同じ実体を2回数えない
- * 作業場の内容はほとんどが `node_modules` で、bun の isolated と pnpm はそこを
+ * workspace の内容はほとんどが `node_modules` で、bun の isolated と pnpm はそこを
  * symlink と hard link で構成する(bun は `node_modules/.bun/` へ、pnpm は `.pnpm/` へ張る)。
  *
  * - `readdirSync(recursive: true)` は symlink の参照先を走査する(Bun / Node どちらも)。
@@ -115,7 +115,7 @@ export const sinceLabel = (touchedMs: number, nowMs: number): string => {
 }
 
 /**
- * 登録と実体を突き合わせる。実体のあるものだけ返す — 消えた作業場の説明だけ残しても、
+ * 登録と実体を突き合わせる。実体のあるものだけ返す — 消えた workspace の説明だけ残しても、
  * 一覧から選んだ先が空になる。並びは最後に触った順(続きをやる相手が上に来る)。
  */
 export const listWorkspaces = Effect.gen(function* () {
@@ -163,7 +163,7 @@ export const purposeOf = (name: string) =>
 
 /**
  * 説明を書く/上書きする。`keep` はここからは動かせない —
- * 消えないようにする指定は取り消しの効かない側(残り続ける)なので、ホスト側の管理経路からだけ変更する。
+ * 消えないようにする指定は取り消せない側(残り続ける)なので、ホスト側の管理経路からだけ変更する。
  */
 export const noteWorkspace = (name: string, purpose: string) =>
   Effect.gen(function* () {

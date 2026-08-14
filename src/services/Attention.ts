@@ -26,13 +26,13 @@ export interface WatchRow {
   readonly last_activity_at: string
   readonly next_move_owner: NextMove
   readonly status: "open" | "closed"
-  /** 最後に回した時刻。null = 一度も回していない。 */
+  /** 最後に実行した時刻。null = 一度も実行していない。 */
   readonly last_run_at: string | null
   readonly cooldown_hours: number
   readonly run_count: number
-  /** 前回回して分かったこと。次に回すときの起点になる。 */
+  /** 前回実行して分かったこと。次に実行するときの起点になる。 */
   readonly last_result: string | null
-  /** 最後にプロンプトに載せた時刻。載せたが回さなかった回はここだけ進む。 */
+  /** 最後にプロンプトに載せた時刻。載せたが実行しなかった回はここだけ進む。 */
   readonly last_shown_at: string | null
 }
 
@@ -41,7 +41,7 @@ export interface WatchView extends WatchRow {
   readonly stalledDays: number
   /** 冷却が明けているか。明けていないものはプロンプトに載せない。 */
   readonly dueNow: boolean
-  /** 冷却明けまでの時間。0 なら今すぐ回してよい。 */
+  /** 冷却明けまでの時間。0 なら今すぐ実行してよい。 */
   readonly dueInHours: number
 }
 
@@ -111,10 +111,10 @@ export interface Digest {
 export const STALLED_DAYS = 3
 
 /**
- * watch を回した後、次にプロンプトに載せるまでの既定時間(docs/adr/0013)。
+ * watch を実行した後、次にプロンプトに載せるまでの既定時間(docs/adr/0013)。
  *
  * `last_activity_at` では止まらない。`digest` は `next_move_owner = 'famulus'` の watch を
- * 無条件で滞留に入れるので、回して `touchWatch` しても次の tick でまた上がる。列が無かった
+ * 無条件で滞留に入れるので、実行して `touchWatch` しても次の tick でまた上がる。列が無かった
  * ときは、モデルが最終走行時刻を subject の文字列に書き込んで登録し直していた。
  * 判定は `last_run_at` と `run_count` で行う。
  */
@@ -127,8 +127,8 @@ export const WATCH_COOLDOWN_HOURS = 24
  * 7回が道具呼び出し4回以下で終わっていた。載せなかったぶんは `last_shown_at` の古い順で
  * 次の回に上がる。3 は 420 秒の持ち時間から採った。
  *
- * 上限そのものの効き目は測れていない。6件同時の状態を再現して前後1回ずつ走らせたが、
- * 上限なしの回も 11 手 / 305 秒で1件を回しており、短い終わり方は再現しなかった。
+ * 上限そのものの結果は測れていない。6件同時の状態を再現して前後1回ずつ走らせたが、
+ * 上限なしの回も 11 手 / 305 秒で1件を実行しており、短い終わり方は再現しなかった。
  * 検査で押さえてあるのは順番が回ることだけ。
  */
 export const STALLED_SHOW_MAX = 3
@@ -228,15 +228,15 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       })
 
     /**
-     * 回した記録を付ける。冷却はここからしか始まらない。
+     * 実行した記録を付ける。冷却はここからしか始まらない。
      *
-     * `touchWatch`(動きがあった)と分けてある。相手から返事が来たのは動きだが自分は回していない。
-     * 逆に、何も出てこなかった回も回したことに数える。
+     * `touchWatch`(動きがあった)と分けてある。相手から返事が来たのは動きだが自分は実行していない。
+     * 逆に、何も出てこなかった回も実行したことに数える。
      *
-     * `result` は次に回すときの起点にする。無かったときは AI追跡の watch 3件が全部
+     * `result` は次に実行するときの起点にする。無かったときは AI追跡の watch 3件が全部
      * 「HN の新着を全部見る」になり、差分を言えたことが無かった。
      *
-     * `at` は回した時刻で、記録した時刻ではない。後から記録するとき今の時刻を入れると冷却が
+     * `at` は実行した時刻で、記録した時刻ではない。後から記録するとき今の時刻を入れると冷却が
      * その分ずれるので、過去は渡せる。未来は取らない(渡せると冷却を好きなだけ伸ばせる)。
      */
     const ranWatch = (idOrPrefix: string, result: string, ranAt?: string) =>
@@ -272,8 +272,8 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       })
 
     /**
-     * プロンプトに載せたことを記録する。回したことではない。`ranWatch` と同じ列にすると、
-     * 回さなかった watch が次の回もまた先頭に来て同じ数件が居座る。
+     * プロンプトに載せたことを記録する。実行したことではない。`ranWatch` と同じ列にすると、
+     * 実行しなかった watch が次の回もまた先頭に来て同じ数件が残り続ける。
      *
      * 呼ぶのは digest ではなくプロンプトを組み立てる側。digest は実行条件が無い回にも走るので、
      * そこで記録すると誰も見ていない一覧を載せたことになる。
@@ -293,7 +293,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       db.all("SELECT * FROM watchlist WHERE status = 'open' ORDER BY last_activity_at ASC").pipe(
         Effect.map((rows) =>
           (rows as unknown as WatchRow[]).map((r) => {
-            // 一度も回していないものは今すぐ回してよい(NULL を「大昔に回した」とは読まない)。
+            // 一度も実行していないものは今すぐ実行してよい(NULL を「大昔に実行した」とは読まない)。
             const dueAtMs =
               r.last_run_at === null ? nowMs : Date.parse(r.last_run_at) + r.cooldown_hours * 3_600_000
             return {
@@ -469,7 +469,7 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
           // 3件しか無い回が同じ文になり、後ろに何件溜まっているかが出ない。
           if (queued.length > 0) reasons.push(`対応対象の watch が ${queued.length} 件`)
           if (expiring.length > 0) reasons.push(`期限が近い承認待ちが ${expiring.length} 件`)
-          if (overdue) reasons.push(`前回の棚卸しから ${IDLE_WAKE_HOURS} 時間以上`)
+          if (overdue) reasons.push(`前回の実働から ${IDLE_WAKE_HOURS} 時間以上`)
         }
 
         // 冷却の対象外にする。1日に1回しか成立しない条件で、抑えると夕方に別の理由で動いた日は

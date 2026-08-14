@@ -18,8 +18,8 @@ export const CLAUDE_POOL = "claude-max"
  * `quotaCooldown` は `quota:<pool>` を鍵に持つので、同じ pool にすると
  * 「GPT を実行したから Claude を停止する」(逆も)が起きる。消費先が違うので集計単位も分ける。
  *
- * 値は rmod を経由していた頃のまま。DB(`quota:<pool>` と ledger の provenance)に記録済みの
- * 履歴と同じ鍵でないと、改名した時点でクールダウンと集計が過去分と繋がらなくなる。
+ * 値が経路名と一致しないのは、DB(`quota:<pool>` と ledger の provenance)に記録済みの履歴と
+ * 同じ鍵でないと、改名した時点でクールダウンと集計が過去分と繋がらなくなるから(docs/adr/0035)。
  */
 export const CODEX_POOL = "chatgpt-rmod"
 

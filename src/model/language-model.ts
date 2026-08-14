@@ -75,7 +75,7 @@ function toolOutputText(out: LanguageModelV4ToolResultOutput): string {
 }
 
 /**
- * 会話履歴を1本のテキストに畳む。`claude -p` は prompt を1つしか取らないため。
+ * 会話履歴を1本のテキストにまとめる。`claude -p` は prompt を1つしか取らないため。
  * system は畳まない — `--system-prompt` に別で渡す。
  */
 export function renderPrompt(prompt: LanguageModelV4Prompt): string {
@@ -113,7 +113,7 @@ export function toolInstruction(tools: LanguageModelV4CallOptions["tools"]): str
   return [
     "",
     // 見出しを「ツール」にしない。内側の claude はツール一覧を「今この場で呼べるもの」と読み、
-    // ネイティブに呼びに行って CLI に `No such tool available` で弾かれ、そこで「使えない」と
+    // ネイティブに呼びに行って CLI に `No such tool available` で拒否され、そこで「使えない」と
     // 結論して toolCalls を空のまま返す。呼び方が1つしかないことを見出しの側で先に言う。
     "## 提出できる依頼(**ツールではない**)",
     list,
@@ -123,7 +123,7 @@ export function toolInstruction(tools: LanguageModelV4CallOptions["tools"]): str
     "要らなければ `toolCalls` を空配列にして `text` だけ返す。",
     "",
     "**この場に実行系のツールは1つも無い。** 上の名前をツールとして呼ぼうとすると",
-    "`No such tool available` で弾かれる。弾かれても「使えない」と結論しない — 提出していないだけ。",
+    "`No such tool available` で拒否される。拒否されても「使えない」と結論しない — 提出していないだけ。",
     // ツールを封じても CLI の前置きは消えないので、素で訊けば Read / Edit / Write が並ぶ。
     "実行系が Read / Edit / Write / Glob / Grep / Bash のような一覧を見せることがあるが、**それは幻**で、",
     "この経路では1つも動かない。MCP・ファイル・カレンダーも最初から無い。",
@@ -149,7 +149,7 @@ export function normalizeToolName(raw: string | undefined, names: readonly strin
 /**
  * 再提出するか。指示文だけに頼らず、CLI のエラーから判定する。
  *
- * 内側の claude が提出用の名前をネイティブに呼んで CLI に弾かれ、そのまま「使えなかった」と
+ * 内側の claude が提出用の名前をネイティブに呼んで CLI に拒否され、そのまま「使えなかった」と
  * 道具呼び出しを1件も提出せず戻ることがある。
  * 判定に使うのは CLI が流した tool_use_error だけで、応答の文面は読まない —
  * 「ツールが無い」と書いてあるかどうかで決めると、正しく諦めた回までやり直す。
@@ -164,13 +164,13 @@ export function needsResubmit(
 
 /** 取り直しのときだけ足す一行。道具ではなく呼び方の問題だと名指しする。 */
 const RESUBMIT_HINT = `
-直前の試行で、上の名前をネイティブのツールとして呼んで \`No such tool available\` に弾かれている。
+直前の試行で、上の名前をネイティブのツールとして呼んで \`No such tool available\` で拒否されている。
 **道具が無いのではなく、呼び方が違う。** 今回は必ず \`toolCalls\` に \`{name, arguments}\` を書いて提出する。
 「使えない」と書いて終わらせない。`
 
 /**
  * `claude -p` を1つの V4 モデルにする。統治は掛かっていない —
- * ゲートと会計は src/model/governed.ts の middleware が包む。素のこれを直接使わない。
+ * ゲートと会計は src/model/governed.ts の middleware が挟む。素のこれを直接使わない。
  */
 export function claudeCliModel(modelId: string): LanguageModelV4 {
   const doGenerate: LanguageModelV4["doGenerate"] = async (options) => {
@@ -201,7 +201,7 @@ export function claudeCliModel(modelId: string): LanguageModelV4 {
         : { text: r.text, toolCalls: [] }
 
     if (needsResubmit(hasTools, result.nativeToolAttempt, (asReply(result).toolCalls ?? []).length)) {
-      if (process.env.OZ_DEBUG) console.error("[oz] ネイティブ呼び出しで弾かれた。取り直す:", modelId)
+      if (process.env.OZ_DEBUG) console.error("[oz] ネイティブ呼び出しが拒否された。取り直す:", modelId)
       result = await call(`${systemPrompt}\n${RESUBMIT_HINT}`)
     }
 
