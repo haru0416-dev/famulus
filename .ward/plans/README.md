@@ -19,10 +19,12 @@ Agent Plugins 1.0.0 is the preferred external package format, not a fourth execu
 
 Extension authority is split by responsibility:
 
-- **Skill** supplies instructions for one turn; it owns no state, tools, model, budget, schedule, or authority.
-- **Router** chooses at most one allowed Skill before a turn; it cannot call tools or change state.
+- **Skill** supplies one typed instruction layer; it owns no state, tools, model, budget, schedule, or authority.
+- **SkillPlan compiler** combines only host-approved orthogonal slots; it cannot union authority.
+- **Router** may recommend an allowed Skill for one offered slot; it cannot call tools or change state.
 - **Agent profile / policy compiler** creates the immutable turn specification and effective scope.
-- **AI SDK loop** runs one live bounded turn; it does not own durable repetition.
+- **Execution root** owns shared scope, deadline, concurrency, and root budget for one or more loops.
+- **AI SDK loop** is one bounded recoverable invocation; multiple sibling loops may run under one root and no loop is inherently the main loop.
 - **Domain service** owns durable repetition and transitions, such as research campaigns or delivery.
 - **Hook observer** reacts only to committed typed events by requesting a core-owned handler; it cannot execute effects directly.
 - **Plugin** packages generation-pinned Skills and MCP candidates; it does not register loops, hooks, schedulers, or state machines.
@@ -43,6 +45,7 @@ Shared invariants, not a shared state machine:
 - every effective model-visible tool, including provider-injected/native tools, has a local effect classification; unclassified tools are unavailable
 - network egress, user notification, and arbitrary command execution are effects even when sandboxed or first-party
 - provider-executed external-I/O tools are unavailable in governed runs, including read/search tools, because local policy cannot journal before their I/O; no-I/O protocol features such as structured response formatting remain allowed
+- before plan 007, only existing host-owned tools classified by generation-pinned CoreToolPolicy and invocation journal may perform effects; adding a new effect path is forbidden
 
 ## AI SDK boundary
 
@@ -63,18 +66,18 @@ SQLite remains authoritative for runs, checkpoints, the single Operation approva
 | Plan | Stage | Depends on | Outcome |
 |---|---|---|---|
 | [001](001-runtime-safety.md) | P0 | - | validated config, stable paths, migrations, backup, cycle lease |
-| [009](009-ai-sdk-kernel.md) | Cross-cutting | 001 | stable AI SDK agent, structured output, step policy, traces, persisted messages |
+| [009](009-ai-sdk-kernel.md) | Cross-cutting | 001 | execution roots, multiple bounded loops, structured output, traces, persisted messages |
 | [002](002-reliable-discord.md) | P0 | 001 | paged inbound and durable outbound delivery |
 | [003](003-draft-lifecycle-e2e.md) | P0 | 002, 009 | resumable draft lifecycle and black-box health checks |
 | [004](004-research-evidence.md) | P1 | 001, 009 | evidence, claims, experiments, artifacts, dossiers |
 | [005](005-explore-modes.md) | P1 | 004, 009 | measured `wide / deep / explore` and fixed fan-out |
-| [006](006-research-campaigns.md) | P2 | 004, 005, 009 | durable campaigns, branches, checkpoints, signposts |
+| [011](011-extension-control-boundaries.md) | Cross-cutting | 009 | native SkillPlan composition, loop scopes, bounded coordination |
+| [006](006-research-campaigns.md) | P2 | 004, 005, 009, 011 | durable campaigns, parallel branches, checkpoints, signposts |
 | [007](007-capability-operations.md) | Future foundation | 001, 002, 009 | typed capabilities, approval-safe operations, MCP boundary |
-| [010](010-agent-plugin-packages.md) | Future foundation | 001, 007, 009 | Agent Plugins 1.0.0 loader, pinned installs, grants, updates |
-| [011](011-extension-control-boundaries.md) | Future foundation | 007, 009, 010 | native Skill routing, turn scopes, typed observers, delegation rules |
+| [010](010-agent-plugin-packages.md) | Future foundation | 001, 007, 009, 011A | Agent Plugins 1.0.0 loader, pinned installs, grants, updates |
 | [008](008-self-deploy.md) | Future foundation | 001, 003, 007 | staged self-update with health check and rollback |
 
-P0 through P2 means plans 001 through 006 plus cross-cutting plan 009. Plans 007, 008, 010, and 011 fix the future shape without pretending connectors, plugin installation, extension routing, or autonomous deployment already exist.
+P0 through P2 means plans 001 through 006 plus cross-cutting plans 009 and 011 Phase A. Plans 007, 008, 010, and 011's gated plugin/router/observer phases fix the future shape without pretending connectors, plugin installation, automatic extension routing, or autonomous deployment already exist.
 
 ## Global stop conditions
 

@@ -2,7 +2,7 @@
 
 Planned at `2ce2a2a`.
 
-Depends on plans 001, 007, and 009. The loader may be developed with a Skills-only fixture after plan 001, but MCP activation and effectful capabilities stay disabled until plan 007 is complete.
+Depends on plans 001, 007, 009, and plan 011 Phase A. The no-exec package validator may be developed after plan 001, but importing Skills requires the Phase A registry/composition boundary, and MCP activation/effectful capabilities stay disabled until plan 007 is complete.
 
 ## Decision
 
@@ -50,7 +50,7 @@ Persist only with the first production reader, writer, CLI, and tests:
 - discovered components, quarantined probe results, and diagnostics
 - grants bound to component/server/tool, input/output-schema hashes, Capability/adapter version, credential scope, and package digest
 - revoked/disabled state and timestamps
-- generation leases from active consumers; this plan starts with Operations/live sessions, and later plans add turn/checkpoint/handler-request references with their first writers
+- generation leases from active consumers: this plan owns Operations/live sessions, plan 011 Phase A owns live-loop refs, plan 006 owns campaign checkpoints, and plan 011's gated observer phase owns handler requests
 
 Manifest `version` is display/update-candidate metadata only. Existing approved Operations remain pinned to the exact old generation until terminal.
 
@@ -65,7 +65,7 @@ Manifest `version` is display/update-candidate metadata only. Existing approved 
 7. Use plan 007's quarantined non-LLM probe to connect/initialize/list capabilities. A probe cannot call tools, and failure never enables a candidate.
 8. Bind enabled components to local grants. Any package digest, executable, MCP config, input/output tool schema, adapter, credential scope, or effect classification change invalidates the affected grant.
 9. Route only host-owned, replay-safe read adapters with enforceable origin/method/data constraints inline through restricted profiles. Raw remote MCP tools stay `unknown` and disabled even when described as reads; they cannot receive a grant or create an Operation until a host-owned effect-specific adapter defines effects, resources, schemas, execution, and recovery. Known write/share/money/deploy adapters route through Operations; a missing adapter leaves the candidate discovered but disabled.
-10. Implement generation-based update, capability diff, rollback, disable, and revocation. Keep a generation while any currently implemented consumer references it; start with nonterminal Operations and sessions, and extend the same reference rule when plan 011 adds turns/checkpoints/handler requests. Recheck revocation when claiming work and immediately before external I/O; close sessions, kill processes/containers, revoke credential leases, and block egress on revocation. Revocation forbids new I/O but may retain read-only package bytes required by a pinned non-effectful consumer.
+10. Implement generation-based update, capability diff, rollback, disable, and revocation. Keep a generation while any consumer-owned reference exists: Operations/sessions here, live loops in plan 011 Phase A, campaign checkpoints in plan 006, and handler requests in the gated observer phase. Recheck revocation when claiming work and immediately before external I/O; close sessions, kill processes/containers, revoke credential leases, and block egress on revocation. Revocation forbids new I/O but may retain read-only package bytes required by a pinned non-effectful consumer.
 11. Add marketplace/source acquisition only after local-directory and pinned-repository installs pass the same inspection and rollback tests. Do not invent a registry protocol before the standard defines one or a concrete source requires it.
 
 ## Runtime isolation

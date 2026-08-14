@@ -13,18 +13,6 @@ Proposals intentionally stop at approved and store a payload hash, but the displ
 Before adding external capabilities, inventory every model-visible built-in tool and classify its effect. Existing `shell(net: true)` is network egress plus arbitrary code execution, and `tell`/draft delivery is `share`; neither is implicitly safe because it is first-party or sandboxed. Agent profiles are deny-by-default: an unclassified tool is unavailable, and plugin-provided instructions run without ambient network shell or direct delivery tools.
 
 ```ts
-type EffectAtom =
-  | "local.read"
-  | "local.append"
-  | "workspace.write"
-  | "network.egress"
-  | "code.exec"
-  | "share.owner"
-  | "share.third-party"
-  | "external.write"
-  | "money"
-  | "deploy"
-
 interface Capability<I, O> {
   id: string
   version: string
@@ -36,12 +24,15 @@ interface Capability<I, O> {
   normalize(input: I): I
   resources(input: I): ResourceRequest
   preview(input: I): ApprovalView
+  idempotencyNamespace(input: I): string
   idempotencyKey(input: I): string
   execute(ctx: ExecutionContext<I>): Effect<O, ConnectorError>
   verify(ctx: VerificationContext<I, O>): Effect<Verification>
   reconcile?(ctx: ReconcileContext<I, O>): Effect<ReconcileResult>
 }
 ```
+
+`EffectAtom` is the closed classification vocabulary introduced by plan 009; this plan adds resource/grant/Operation semantics without defining a second effect taxonomy.
 
 MCP discovery may produce capability candidates but never bypass this interface. Agent Plugins package loading belongs to plan 010 and is only one source of MCP configuration and Skills. `@ai-sdk/mcp` converts protocol tools into AI SDK tools only after registry validation. Raw MCP tools are `unknown` and disabled by default; descriptions and annotations cannot establish read-only behavior. Direct model execution is allowed only for an audited local adapter whose normalized input resources are checked against grant constraints. Provider-executed external-I/O tools are forbidden even for reads because local code cannot commit an invocation before their I/O. A provider may implement no-I/O protocol primitives such as structured response formatting as an internal tool; classify and allow those only when contract tests prove they cannot independently perform external I/O or expose model authority.
 
@@ -55,13 +46,13 @@ An effect is not automatically an approval boundary. `inline` execution is allow
 
 `provider_sessions`: generation, transport/process reference, credential lease, state, opened/closed timestamps.
 
-`operations`: proposal ref, capability grant, normalized spec, spec hash, idempotency key, risk, state, lease, external ref, timestamps.
+`operations`: proposal/domain-intent ref, capability grant, normalized spec, spec hash, stable idempotency namespace/key, risk, state, lease, external ref, timestamps; unique `(idempotency_namespace, idempotency_key)`. The namespace represents the external effect identity/account/action domain and survives grant/provider-generation rotation.
 
 `operation_approvals`: the only authoritative approval, bound to operation ID and exact spec hash, actor, decision, expiry, timestamps.
 
 `operation_attempts`: append-only attempt, started/finished, outcome (`success/failed/partial/unknown`), receipt, error.
 
-State: `prepared -> awaiting_approval -> approved -> executing -> waiting_delivery | verifying -> succeeded`; alternatives are `denied`, `expired`, `retry_wait`, `failed`, `unknown`, `cancelled`.
+State: `prepared -> awaiting_approval -> approved -> executing -> waiting_delivery | verifying -> succeeded`; alternatives are `denied`, `expired`, `retry_wait`, `partial`, `failed`, `unknown`, `cancelled`.
 
 Rules:
 
@@ -69,6 +60,7 @@ Rules:
 - Approval checks expiry in the same transaction as the decision.
 - Timeout/disconnect after external I/O becomes `unknown`, never automatic retry.
 - Retry requires capability-declared safety or successful reconciliation proving non-application.
+- `partial` means some externally visible sub-effects are confirmed. It never retries automatically; only capability reconciliation or manual resolution may complete, compensate, or terminate it.
 - Existing legacy proposals are never retrospectively executable.
 - Credentials are resolved by connector code outside model and Sandbox contexts.
 - Model tools bound to `execution: "operation"` only prepare an Operation and stop. They never hold an AI SDK `execute` function that performs the effect.
@@ -77,6 +69,19 @@ Rules:
 - Provider-executed external read/search tools are also prohibited because local invocation journal and resource authorization cannot precede their I/O.
 - Revocation closes sessions, kills local processes/containers, expires credential leases, and blocks egress before new external I/O.
 - An Operation classified as third-party share atomically enqueues a Delivery bound to its spec hash and enters `waiting_delivery`. Delivery owns send attempts, retry, reconciliation, and receipt; Operation only projects the terminal receipt into verification.
+- Preparing an Operation is insert-or-return: the same stable namespace/key plus same spec hash returns the existing row across grant generations; a different spec hash is a Conflict. An existing `unknown` or `succeeded` Operation blocks replacement after update. Operation creation, invocation reference, and the domain transition to `waiting_on_operation` occur in one SQLite transaction.
+- Grant rotation never silently changes an approved effect. A matching `prepared` or `awaiting_approval` Operation may be atomically rebound to a new compatible grant only after full resource/policy reauthorization, and any prior approval is cleared. `approved`, `executing`, `waiting_delivery`, `verifying`, `unknown`, and `succeeded` stay pinned to the original grant generation; revocation blocks execution or requires reconciliation/manual resolution according to state.
+
+Grant rotation/reprepare by state:
+
+| State | Rebind | Same namespace/key prepare |
+|---|---|---|
+| `prepared`, `awaiting_approval` | allowed after full reauthorization; clear approval | return/rebind existing row |
+| `approved` | forbidden | return existing; revoked grant blocks claim and requires a new owner decision |
+| `executing`, `waiting_delivery`, `verifying`, `partial`, `unknown` | forbidden | return existing; executor/reconciler remains sole owner |
+| `retry_wait` | forbidden until reconciliation/policy confirms retry under pinned grant; revoked grant requires manual resolution | return existing |
+| `succeeded` | forbidden | return receipt; never create replacement |
+| `failed`, `denied`, `expired`, `cancelled` | forbidden | return terminal row; a genuinely new owner intent must use a new idempotency key |
 
 ## Steps
 
@@ -85,7 +90,7 @@ Rules:
 3. Add static Capability registry with the existing local Search binding and plan 002 owner Delivery enqueue as the first host-owned inline capabilities.
 4. Add source-neutral provider generation, grant, session, operation, approval, and attempt schema with one reader, writer, CLI, and E2E test.
 5. Define provider generation commit/recovery: stage filesystem/config, persist inspected generation, atomically select it in SQLite, and reconcile orphan staging/active records at startup.
-6. Implement prepare, resource/data-scope authorization, approve, claim, execute, verify, reconcile, revoke, and manual resolve APIs. Authorization compares normalized-input resources and outbound data classification with grant constraints before creating an invocation or Operation.
+6. Implement idempotent prepare, resource/data-scope authorization, approve, claim, execute, verify, reconcile, revoke, and manual resolve APIs. Authorization compares normalized-input resources and outbound data classification with grant constraints before atomically creating/reusing an Operation and binding its invocation/domain intent.
 7. Add a separate executor unit that never invokes an LLM.
 8. Add `@ai-sdk/mcp` only here; persist MCP session metadata in SQLite, use HTTP transport for production, and keep stdio disabled until plan 010 proves a runtime closure and sandbox profile.
 9. Add a non-LLM quarantined probe lifecycle: connect/initialize/list capabilities with tool calls forbidden, temporary scoped credentials, isolation, attempt/audit record, timeout, and teardown.
@@ -101,7 +106,7 @@ bun run gate
 bun run test:operations-e2e
 ```
 
-Required faults: approval expiry race, payload mutation, SDK approval replay, duplicate executor, Operation/delivery enqueue crash, duplicate delivery receipt, remote success then local crash, partial result, invalid connector output, unknown reconciliation, denied inline origin/method/data scope, non-replay-safe capability marked inline, probe crash, active-generation commit crash, MCP input/output schema drift, untrusted effect annotation, same-schema malicious remote behavior, denied credential scope, revocation with live session, and executor restart.
+Required faults: approval expiry race, payload mutation, SDK approval replay, duplicate prepare returning the same Operation, same namespace/key with changed spec conflict, grant rotation rebind before approval clearing old approval, grant/provider update in every Operation state including `retry_wait`, terminal same-key reprepare requiring new intent key, crash around atomic Operation/domain binding, duplicate executor, Operation/delivery enqueue crash, duplicate delivery receipt, remote success then local crash, partial result, invalid connector output, unknown reconciliation, denied inline origin/method/data scope, non-replay-safe capability marked inline, probe crash, active-generation commit crash, MCP input/output schema drift, untrusted effect annotation, same-schema malicious remote behavior, denied credential scope, revocation with live session, and executor restart.
 
 ## Done criteria
 
