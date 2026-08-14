@@ -317,14 +317,9 @@ const makeDiscord = () =>
 
     /**
      * そのチャンネルの cursor。持っていなければ undefined(取り込まずに cursor だけ進める)。
-     * DM はチャンネルごとに分ける前の cursor を引き継ぐ。引き継がないと過去ログを一度全部読む。
      */
     const cursorOf = (ch: string): Effect.Effect<string | undefined, DbFailed> =>
-      Effect.gen(function* () {
-        const own = yield* db.meta(`discord:last:${ch}`)
-        if (own) return own
-        return ch === (yield* dm()) ? yield* db.meta("discord:last") : undefined
-      })
+      db.meta(`discord:last:${ch}`)
 
     /**
      * 返ってきたものを読む。リアクションと自由文を同じ形で返す。一覧を1回引いて両方見る

@@ -69,11 +69,7 @@ export function sanitizedEnv(source: NodeJS.ProcessEnv = process.env): Record<st
  */
 const BIN_CANDIDATES = [".local/bin/claude", ".claude/local/claude", ".bun/bin/claude"]
 
-export function resolveClaudeBin(
-  explicit?: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  if (explicit) return existsSync(explicit) ? explicit : undefined
+export function resolveClaudeBin(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env.OPEN_ZERO_CLAUDE_BIN) return env.OPEN_ZERO_CLAUDE_BIN
   const home = env.HOME ?? homedir()
   for (const rel of BIN_CANDIDATES) {
@@ -144,7 +140,7 @@ export async function callClaude(opts: ModelCallOptions): Promise<ModelCallResul
     // 検査せずに実行しない。実行すると Claude のサブスクで GPT を呼ぶことになり、上流で失敗する。
     throw new ModelCallError(`${opts.model} はこの経路では呼べない(GPT は src/model/codex-responses.ts)`)
   }
-  const bin = resolveClaudeBin(opts.bin)
+  const bin = resolveClaudeBin()
   if (!bin) {
     throw new ModelCallError(
       "claude 実行ファイルが見つからない(PATH にも既定の置き場所にも無い)。OPEN_ZERO_CLAUDE_BIN で指定できる",

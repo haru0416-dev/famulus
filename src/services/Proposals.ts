@@ -10,12 +10,11 @@
  *      │ deny→ denied
  *      └ 期限切れ→ expired
  *
- * 実行状態は ADR 0033 で型と CHECK から削除した。`deferred` は旧状態として残るが、
- * 現在そこへ遷移させる API は無い。
+ * 実行状態と旧 `deferred` は型と CHECK から削除した。
  * approved は「承認済み・未実行」で止まり、実際に動かすのはユーザー。
  * ここで実行したことにする方が嘘としては大きいので、止めたままにしてある。
  *
- * `approve` は approvals 行を必ず書く。承認した時点の payload の指紋を残すためで、
+ * `approve` は proposal_actions 行を必ず書く。承認した時点の payload の指紋を残すためで、
  * 実行する側を作るときに「承認後に中身が差し替わっていないか」を照合できるようにしてある。
  * 照合する側はまだ無い。今あるのは記録だけ。
  */
@@ -34,18 +33,15 @@ import { Db } from "./Db.ts"
  * 全部 famulus-zero から持ってきた種類で、こちらのコードが作れるのは `plan` だけだった
  * — 実データも8件全部 `plan`。種別が7つあると、読んだ側は「6つの経路がある」と読む。
  */
-export type ProposalKind = "plan"
-
 /**
  * 提案の状態。実行の3つ(`executing` `executed` `failed`)は落とした(docs/adr/0033)。
  *
  * 承認しても実行する仕組みが無い。到達しない状態を残すと、`oz list` を読んだ側が
  * 「承認すれば動く」と読む。実行を付ける日が来たら、そのときに足す。
  */
-export type ProposalStatus = "proposed" | "approved" | "deferred" | "denied" | "expired"
+export type ProposalStatus = "proposed" | "approved" | "denied" | "expired"
 
 export interface CreateInput {
-  readonly kind?: ProposalKind
   readonly summary: string
   readonly assessment: string
   readonly ask: string
@@ -65,7 +61,6 @@ export interface CreateInput {
 
 export interface ProposalRow {
   readonly id: string
-  readonly kind: ProposalKind
   readonly created_at: string
   readonly summary: string
   readonly assessment: string
@@ -78,7 +73,6 @@ export interface ProposalRow {
   readonly payload: string
   readonly provenance: string
   readonly status: ProposalStatus
-  readonly deferred_until: string | null
   readonly expires_at: string
   readonly deny_reason: string | null
   /** tick が「今回できることは無い」と結論を置いた時刻。null = まだ何も言っていない。 */
@@ -95,8 +89,7 @@ const plusDays = (at: string, days: number) =>
 /** 承認した時点の payload の指紋。照合する側を作るまでは、ただの記録。 */
 export const payloadHash = (payload: string): string => createHash("sha256").update(payload).digest("hex")
 
-/** 承認・却下を受け付ける状態。`deferred` は旧状態の行を決着させるために含める。 */
-const DECIDABLE: readonly ProposalStatus[] = ["proposed", "deferred"]
+const DECIDABLE: readonly ProposalStatus[] = ["proposed"]
 
 const makeProposals = () =>
   Effect.gen(function* () {
@@ -110,12 +103,11 @@ const makeProposals = () =>
         const provenance = JSON.stringify(input.provenance ?? [{ kind: "agent", at }])
         yield* db.run(
           `INSERT INTO proposals
-             (id, kind, created_at, summary, assessment, ask,
+             (id, created_at, summary, assessment, ask,
               c_what, c_when, c_who, c_how, c_how_verified,
               payload, provenance, status, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?)`,
           id,
-          input.kind ?? "plan",
           at,
           input.summary,
           input.assessment,
@@ -160,9 +152,31 @@ const makeProposals = () =>
 
     /** 期限切れを expired に落とす。承認待ちの一覧が実態とずれないよう list の前に呼ぶ。 */
     const expireDue = (at: string = nowIso()) =>
-      db
-        .run("UPDATE proposals SET status = 'expired' WHERE status = 'proposed' AND expires_at < ?", at)
-        .pipe(Effect.as(undefined))
+      Effect.gen(function* () {
+        yield* db.run("BEGIN IMMEDIATE")
+        return yield* Effect.gen(function* () {
+          const due = yield* db.all(
+            "SELECT id, created_at FROM proposals WHERE status='proposed' AND expires_at < ?",
+            at,
+          )
+          for (const p of due) {
+            yield* db.run(
+              `INSERT INTO proposal_actions
+                 (id, proposal_id, at, action, actor, latency_ms)
+               VALUES (?, ?, ?, 'expire', 'system', ?)`,
+              randomUUID(),
+              p.id,
+              at,
+              Math.max(0, Date.parse(at) - Date.parse(String(p.created_at))),
+            )
+          }
+          yield* db.run(
+            "UPDATE proposals SET status='expired' WHERE status='proposed' AND expires_at < ?",
+            at,
+          )
+          yield* db.run("COMMIT")
+        }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
+      })
 
     const list = (status: ProposalStatus | "all" = "proposed", limit = 20) =>
       Effect.gen(function* () {
@@ -178,18 +192,6 @@ const makeProposals = () =>
         return rows as unknown as ProposalRow[]
       })
 
-    /** 判断の生ログ。deny 行は Attention が決定時刻に使う。approve 率の集計側はまだ無い。 */
-    const noteDecision = (p: ProposalRow, verb: string, at: string) =>
-      db.run(
-        "INSERT INTO decisions (id, proposal_id, at, verb, kind, latency_ms)VALUES (?, ?, ?, ?, ?, ?)",
-        randomUUID(),
-        p.id,
-        at,
-        verb,
-        p.kind,
-        Math.max(0, Date.parse(at) - Date.parse(p.created_at)),
-      )
-
     const ensureDecidable = (p: ProposalRow) =>
       DECIDABLE.includes(p.status)
         ? Effect.void
@@ -198,48 +200,56 @@ const makeProposals = () =>
           )
 
     /**
-     * 承認。approvals 行と status 遷移を同一トランザクションで行う
+     * 承認actionの追記とstatus遷移を同一トランザクションで行う
      * (承認記録の無い approved を作らない = 後で照合する相手を必ず残す)。
      */
     const approve = (idOrPrefix: string, opts?: { approverRef?: string; at?: string }) =>
       Effect.gen(function* () {
-        const p = yield* get(idOrPrefix)
-        yield* ensureDecidable(p)
         const at = opts?.at ?? nowIso()
-        const hash = payloadHash(p.payload)
-
-        yield* db.run("BEGIN")
-        yield* Effect.gen(function* () {
+        yield* db.run("BEGIN IMMEDIATE")
+        return yield* Effect.gen(function* () {
+          const p = yield* get(idOrPrefix)
+          yield* ensureDecidable(p)
+          const hash = payloadHash(p.payload)
           yield* db.run(
-            `INSERT INTO approvals (id, proposal_id, approver, approver_ref, at, verb, payload_hash)
-             VALUES (?, ?, 'owner', ?, ?, 'approve', ?)`,
+            `INSERT INTO proposal_actions
+               (id, proposal_id, at, action, actor, actor_ref, payload_hash, latency_ms)
+             VALUES (?, ?, ?, 'approve', 'owner', ?, ?, ?)`,
             randomUUID(),
             p.id,
-            opts?.approverRef ?? "cli",
             at,
+            opts?.approverRef ?? "cli",
             hash,
+            Math.max(0, Date.parse(at) - Date.parse(p.created_at)),
           )
           yield* db.run("UPDATE proposals SET status = 'approved' WHERE id = ?", p.id)
-          yield* noteDecision(p, "approve", at)
           yield* db.run("COMMIT")
+          return { id: p.id, payloadHash: hash, at }
         }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
-
-        return { id: p.id, payloadHash: hash, at }
       })
 
     /** 却下。理由は次の生成へ還流させる学習信号なので必須にする。 */
     const deny = (idOrPrefix: string, reason: string, opts?: { at?: string }) =>
       Effect.gen(function* () {
-        const p = yield* get(idOrPrefix)
-        yield* ensureDecidable(p)
         const at = opts?.at ?? nowIso()
-        yield* db.run("BEGIN")
-        yield* Effect.gen(function* () {
+        yield* db.run("BEGIN IMMEDIATE")
+        return yield* Effect.gen(function* () {
+          const p = yield* get(idOrPrefix)
+          yield* ensureDecidable(p)
+          yield* db.run(
+            `INSERT INTO proposal_actions
+               (id, proposal_id, at, action, actor, reason, latency_ms)
+             VALUES (?, ?, ?, 'deny', 'owner', ?, ?)`,
+            randomUUID(),
+            p.id,
+            at,
+            reason,
+            Math.max(0, Date.parse(at) - Date.parse(p.created_at)),
+          )
           yield* db.run("UPDATE proposals SET status = 'denied', deny_reason = ?WHERE id = ?", reason, p.id)
-          yield* noteDecision(p, "deny", at)
           yield* db.run("COMMIT")
+          return { id: p.id, at }
         }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
-        return { id: p.id, at }
       })
 
     /**
@@ -261,11 +271,7 @@ const makeProposals = () =>
         return { ...p, settled_at: at, settled_note: note } satisfies ProposalRow
       })
 
-    /** 承認記録。payload_hash を照合する側を作ったときに、ここを引く。 */
-    const approvalOf = (proposalId: string) =>
-      db.get("SELECT * FROM approvals WHERE proposal_id = ?ORDER BY at DESC LIMIT 1", proposalId)
-
-    return { create, get, list, expireDue, approve, deny, settle, approvalOf } as const
+    return { create, get, list, approve, deny, settle } as const
   })
 
 export class Proposals extends Context.Service<Proposals, Effect.Success<ReturnType<typeof makeProposals>>>()(

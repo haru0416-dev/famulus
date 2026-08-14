@@ -79,6 +79,7 @@ const shiftDays = (iso: string, days: number): string =>
   new Date(Date.parse(iso) - days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z")
 
 export interface DreamRow {
+  readonly id: string
   readonly at: string
   readonly text: string
 }
@@ -97,7 +98,7 @@ export const dreamMaterial = (opts?: { at?: string; days?: number; limit?: numbe
     const window = shiftDays(at, days)
     const from = cursor !== undefined && cursor > window ? cursor : window
     const rows = yield* db.all(
-      `SELECT e.at AS at, f.text AS text
+      `SELECT e.id AS id, e.at AS at, f.text AS text
          FROM events e JOIN events_fts f ON f.event_id = e.id
         WHERE e.source = 'owner' AND e.taint = 0 AND e.kind = 'observe'
           AND e.content IS NOT NULL AND e.at > ? AND e.at <= ?
@@ -133,6 +134,7 @@ export const dream = (opts?: {
     const material = rows.map((r) => `- ${r.at} ${r.text}`).join("\n")
     const line = yield* keep({
       material,
+      evidence: rows.map((r) => ({ id: r.id, text: r.text })),
       // 対象期間の開始時刻を渡す。この期間中に既に確定した slot は触らない —
       // 触ると、日中に本体が書いた値を夜に言い換えた区間が上に乗る。
       since: from,

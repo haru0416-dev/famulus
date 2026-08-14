@@ -8,10 +8,10 @@
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown, UnpricedModel } from "../core/errors.ts"
+import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown } from "../core/errors.ts"
 import { RunnerFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
-import { Governance, type Meter } from "../services/Governance.ts"
+import { Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { callClaude } from "./claude-cli.ts"
 import { callCodex } from "./codex-responses.ts"
@@ -26,7 +26,7 @@ import {
 import type { RuntimeSchema } from "./schema.ts"
 import { traceOf } from "./trace.ts"
 
-export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify" | "reviewer"
+export type Role = "structurer" | "scout" | "reviewer"
 
 /**
  * 役割→モデル。品質が製品そのものになる役だけ opus に置く。
@@ -52,8 +52,6 @@ export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
  * 落ちた分は後から復元できないので、モデルを替えるときは引用の原文一致率を測ってから替える。
  */
 export const ROLE_MODEL: Record<Role, string> = {
-  briefing: "claude-opus-5", // 朝会執筆
-  dialogue: "claude-opus-5", // 対話(声。下げない)
   // 締めの keeper(keeper)。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
   // (keepGrounded)。scout と同じ性質なので同じ側に置く。ユーザーが話した回ごとに1回通るため、
   // ここを opus にすると対話と同じクォータを毎回2回消費することになる。
@@ -62,12 +60,10 @@ export const ROLE_MODEL: Record<Role, string> = {
   // クォータも分かれる(CODEX_POOL)ので、精査に1回使っても対話用クォータは減らない。
   reviewer: "gpt-5.6-sol",
   scout: "gpt-5.6-luna", // 取り込みの構造化。引用を写す役(Intake.ingest)
-  classify: "gpt-5.6-luna", // 分類(呼び手はまだ無い)
 }
 
 export interface RunPlan {
   readonly model: string
-  readonly meter: Meter
   readonly pool: string
 }
 
@@ -80,8 +76,7 @@ export interface RunnerRequest {
   readonly schema?: RuntimeSchema<unknown>
   readonly onText?: (delta: string) => void
   readonly signal?: AbortSignal
-  /** 会計の種別。既定 'run'。 */
-  readonly kind?: string
+  readonly kind: string
 }
 
 export interface RunnerResult {
@@ -102,7 +97,7 @@ export interface RunnerResult {
 /**
  * run の型付き失敗チャネル。クールダウン、halt、日次上限などを文字列へ潰さず呼び出し側へ渡す。
  */
-export type RunError = RunnerFailed | Halt | QuotaCooldown | DailyRunLimit | UnpricedModel | DbFailed
+export type RunError = RunnerFailed | Halt | QuotaCooldown | DailyRunLimit | DbFailed
 
 export interface RunnerApi {
   readonly plan: (role: string) => RunPlan
@@ -129,7 +124,7 @@ const makeRunner = (
         const at = nowIso()
 
         // ゲート。失敗チャネルに拒否が載るので、ここを通らずに下へは行けない。
-        yield* gov.precheck({ meter: p.meter, pool: p.pool, model: p.model, at, nowMs: Date.now() })
+        yield* gov.precheck({ pool: p.pool, at, nowMs: Date.now() })
 
         const out = yield* exec(req, p).pipe(
           // 失敗でもクォータシグナルが取れていれば必ず再実行を抑止する。
@@ -146,17 +141,14 @@ const makeRunner = (
         const checked = req.schema?.validate(out.structured)
 
         yield* ledger.record({
-          kind: req.kind ?? "run",
+          kind: req.kind,
           role: req.role, // role を入れないと日次 run 数の上限を適用できない
           model: p.model,
-          meter: p.meter,
           usage: {
             inTok: out.usage.inTok,
             outTok: out.usage.outTok,
             cacheRead: out.usage.cacheRead,
             cacheWrite: out.usage.cacheWrite,
-            // 定額利用なので実費は 0。CLI が返す金額は従量課金換算額として provenance にだけ残す。
-            usd: p.meter === "quota" ? 0 : out.usage.notionalUsd,
           },
           summary: traceOf(out.text),
           provenance: { pool: p.pool, notionalUsd: out.usage.notionalUsd },
@@ -188,9 +180,6 @@ const defaultPlan = (role: string): RunPlan => {
   const model = assertKnownModel(ROLE_MODEL[role as Role] ?? role)
   return {
     model,
-    // `total_cost_usd` が返ることと、それが請求であることは別。Claude Max は定額なので限界費用は 0 で、
-    // 制限されるのは USD ではなく5時間単位の利用量。USD を条件にするとクォータが残っていても金額で止まる。
-    meter: "quota",
     // pool は role ではなくモデルで決まる。ここを固定にしていると GPT の消費が Claude のクォータに
     // 計上され、「作業を GPT に振り分けたのに対話が止まる」が起きる。
     pool: poolForModel(model),

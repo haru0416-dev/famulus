@@ -79,6 +79,7 @@ export interface RefusedProposal {
 
 export interface ObservedEvent {
   readonly rowid: number
+  readonly id: string
   readonly at: string
   readonly source: string
   /** 1 なら不信データ由来(gmail/web)。tick はこれを見て境界マーカーで囲う。 */
@@ -243,27 +244,32 @@ const makeAttention = () =>
      */
     const ranWatch = (idOrPrefix: string, result: string, ranAt?: string) =>
       Effect.gen(function* () {
-        const w = yield* findWatch(idOrPrefix)
-        const now = nowIso()
-        const at = ranAt === undefined || ranAt > now ? now : ranAt
-        // 動きの時刻は戻さない。後から記録するとき、その間に来た返事のほうが新しい。
-        const activity = at > w.last_activity_at ? at : w.last_activity_at
-        yield* db.run(
-          `UPDATE watchlist
-              SET last_run_at = ?, last_activity_at = ?, run_count = run_count + 1, last_result = ?
-            WHERE id = ?`,
-          at,
-          activity,
-          result,
-          w.id,
-        )
-        return {
-          ...w,
-          last_run_at: at,
-          last_activity_at: activity,
-          run_count: w.run_count + 1,
-          last_result: result,
-        } satisfies WatchRow
+        yield* db.run("BEGIN IMMEDIATE")
+        return yield* Effect.gen(function* () {
+          const w = yield* findWatch(idOrPrefix)
+          const now = nowIso()
+          const at = ranAt === undefined || ranAt > now ? now : ranAt
+          // 動きの時刻は戻さない。後から記録するとき、その間に来た返事のほうが新しい。
+          const activity = at > w.last_activity_at ? at : w.last_activity_at
+          yield* db.run("INSERT INTO watch_runs (watch_id, at, result)VALUES (?, ?, ?)", w.id, at, result)
+          yield* db.run(
+            `UPDATE watchlist
+                SET last_run_at = ?, last_activity_at = ?, run_count = run_count + 1, last_result = ?
+              WHERE id = ?`,
+            at,
+            activity,
+            result,
+            w.id,
+          )
+          yield* db.run("COMMIT")
+          return {
+            ...w,
+            last_run_at: at,
+            last_activity_at: activity,
+            run_count: w.run_count + 1,
+            last_result: result,
+          } satisfies WatchRow
+        }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
       })
 
     const closeWatch = (idOrPrefix: string) =>
@@ -384,9 +390,9 @@ const makeAttention = () =>
 
         // 自分が書いたもの(source='system')は実行条件にしない。外部入力だけを対象にする。
         const newEvents = (yield* db.all(
-          `SELECT rowid, at, source, taint, content FROM events
-            WHERE rowid > ?AND source != 'system' AND content IS NOT NULL
-            ORDER BY rowid ASC LIMIT 50`,
+          `SELECT seq AS rowid, id, at, source, taint, content FROM events
+            WHERE seq > ?AND source != 'system' AND content IS NOT NULL
+            ORDER BY seq ASC LIMIT 50`,
           cursor,
         )) as unknown as ObservedEvent[]
 
@@ -422,9 +428,9 @@ const makeAttention = () =>
         // 断られたぶんは古くなっても落とさない。件数で切る。
         // 落とすなら、その理由を確定値として置いてからにする。
         const refusedRows = yield* db.all(
-          `SELECT p.id, p.summary, p.deny_reason, COALESCE(d.at, p.created_at)AS decided_at
+          `SELECT p.id, p.summary, p.deny_reason, COALESCE(a.at, p.created_at)AS decided_at
              FROM proposals p
-             LEFT JOIN decisions d ON d.proposal_id = p.id AND d.verb = 'deny'
+              LEFT JOIN proposal_actions a ON a.proposal_id = p.id AND a.action = 'deny'
             WHERE p.status = 'denied' AND p.deny_reason IS NOT NULL
             ORDER BY decided_at DESC LIMIT ?`,
           REFUSED_LIMIT,
@@ -512,7 +518,7 @@ const makeAttention = () =>
       Effect.gen(function* () {
         let upto = opts?.upto
         if (upto === undefined) {
-          const max = yield* db.get("SELECT COALESCE(MAX(rowid),0)m FROM events")
+          const max = yield* db.get("SELECT COALESCE(MAX(seq),0)m FROM events")
           upto = Number(max?.m ?? 0)
         }
         yield* db.setMeta("tick:cursor", String(upto))

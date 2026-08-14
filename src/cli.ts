@@ -14,7 +14,7 @@
  *   oz unwatch <id>        … 決着した watch を閉じる
  *   oz list [status]       … 提案一覧(既定は承認待ち)
  *   oz show <id>           … 承認カード全文(id は前方一致でよい)
- *   oz approve <id>        … 承認。approvals 行を書き、payload を指紋で固定する
+ *   oz approve <id>        … 承認actionを書き、payloadを指紋で固定する
  *   oz deny <id> <理由>    … 却下。理由は次の生成へ還流させるので必須
  *   oz recall <語>         … 記憶を引く
  *   oz belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
@@ -65,7 +65,7 @@ const USAGE = `oz — open-zero の承認 CLI
   oz halt <理由>           全停止(自動解除しない)
   oz resume                停止解除
   oz attention             tick の処理対象(watch・未解決の問い・次回の実行条件)
-  oz journal [n]           tick の実働(既定 10 回)。呼んだ道具・残った行数・実費を、
+  oz journal [n]           tick の実働(既定 10 回)。呼んだ道具・残った行数を、
                            自分で書いた報告文と分けて出す
   oz answer <id> <答え>    問いに答えて閉じる(ユーザーの答えは確認済みとして入る)
   oz drop <id> <理由>      問いを答えないまま取り下げる。理由は必須
@@ -92,12 +92,8 @@ const USAGE = `oz — open-zero の承認 CLI
 const STATUS_LABEL: Record<string, string> = {
   proposed: "承認待ち",
   approved: "承認済み(未実行)",
-  deferred: "保留",
   denied: "却下",
   expired: "期限切れ",
-  executing: "実行中",
-  executed: "実行済み",
-  failed: "失敗",
 }
 
 /**
@@ -216,8 +212,7 @@ const program = (argv: readonly string[]) =>
           halt ? `停止中: ${halt.reason}(${halt.at}) — oz resume で解除` : "停止: なし",
           ...pools,
           `${t.day}: run ${t.runs} 回(うち自走 ${Number(a?.n ?? 0)}/${BUDGET.autonomousRuns})` +
-            ` / 入力 ${fmtTok(t.inTok)} 出力 ${fmtTok(t.outTok)}` +
-            ` / 実費 $${t.usd.toFixed(4)}${t.unpriced > 0 ? ` / 単価未登録 ${t.unpriced} 件` : ""}`,
+            ` / 入力 ${fmtTok(t.inTok)} 出力 ${fmtTok(t.outTok)}`,
           // tick は通知なしに停止しうる。最後に呼ばれた時刻を出しておかないと、
           // 「静かなのは用が無いからか、止まっているからか」がユーザーに区別できない。
           last

@@ -1,8 +1,7 @@
 /**
- * memory サービス。記録の基準は append-only の `events` で、`belief_slots` と `events_fts` は projection。
+ * memory サービス。記録の基準は append-only の `events`。belief履歴はview、FTSはprojection。
  *
- * 消せないことは SQL 側で強制する。検索対象からの除外は DELETE ではなく `forget` イベントの追記、
- * 抹消は `content := NULL` の UPDATE だけ(それ以外の UPDATE はトリガが ABORT する)。
+ * 抹消は本文と検索文をNULLにし、同じtransactionでredactイベントを追記する。
  *
  * `remember` は引数を最小・既定値を厚くしてある。仕組みがあっても記録が溜まらなければ DB は無いのと同じで、
  * 溜まらない原因が API の摩擦なら、それは設計の側で消せる。
@@ -14,7 +13,7 @@ import * as Layer from "effect/Layer"
 import { localStamp, nowIso } from "../core/time.ts"
 import { Db, type Row } from "./Db.ts"
 
-export type EventKind = "observe" | "belief" | "forget" | "redact" | "import"
+export type EventKind = "observe" | "belief" | "redact" | "import"
 export type EventSource = "owner" | "calendar" | "gmail" | "web" | "system"
 export type Exposure = "private" | "public"
 
@@ -40,6 +39,27 @@ export interface RememberInput {
   /** 検索用テキスト。省略時は content から導く。 */
   readonly text?: string
   readonly at?: string
+  readonly origin?: { readonly kind: string; readonly id: string }
+}
+
+interface AppendMeta {
+  readonly originKind: string | null
+  readonly originId: string | null
+  readonly beliefSlot: string | null
+  readonly validFrom: string | null
+  readonly invalidatedReason: string | null
+  readonly evidenceEventId: string | null
+  readonly evidenceQuote: string | null
+}
+
+const EMPTY_META: AppendMeta = {
+  originKind: null,
+  originId: null,
+  beliefSlot: null,
+  validFrom: null,
+  invalidatedReason: null,
+  evidenceEventId: null,
+  evidenceQuote: null,
 }
 
 export interface EventRow {
@@ -181,11 +201,16 @@ const makeMemory = () =>
   Effect.gen(function* () {
     const db = yield* Db
 
-    /** イベントを1件追記し、FTS projection も同トランザクションで更新する。 */
-    const remember = (input: RememberInput) =>
+    const append = (input: RememberInput, id: string, at: string, meta: AppendMeta) =>
       Effect.gen(function* () {
-        const id = randomUUID()
-        const at = input.at ?? nowIso()
+        if (meta.originKind !== null) {
+          const existing = yield* db.get(
+            "SELECT id FROM events WHERE origin_kind = ?AND origin_id = ?AND content IS NOT NULL",
+            meta.originKind,
+            meta.originId,
+          )
+          if (existing) return String(existing.id)
+        }
         const source = input.source ?? "owner"
         const kind = input.kind ?? "observe"
         // gmail/web は既定で taint。明示指定があればそれを優先する。
@@ -194,28 +219,46 @@ const makeMemory = () =>
         const content = JSON.stringify(input.content ?? null)
         const text = input.text ?? deriveText(input.content)
 
-        yield* db.run("BEGIN")
-        const written = yield* Effect.gen(function* () {
-          yield* db.run(
-            `INSERT INTO events (id, at, kind, source, taint, exposure, supersedes, provenance, content)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            id,
-            at,
-            kind,
-            source,
-            taint ? 1 : 0,
-            input.exposure ?? "private",
-            input.supersedes ?? null,
-            provenance,
-            content,
-          )
-          if (text.length > 0) {
-            yield* db.run("INSERT INTO events_fts (event_id, text)VALUES (?, ?)", id, text)
-          }
-          yield* db.run("COMMIT")
-          return id
-        }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
-        return written
+        yield* db.run(
+          `INSERT INTO events
+             (id, at, kind, source, taint, exposure, supersedes, provenance, content, search_text,
+              origin_kind, origin_id, belief_slot, valid_from, invalidated_reason,
+              evidence_event_id, evidence_quote)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id,
+          at,
+          kind,
+          source,
+          taint ? 1 : 0,
+          input.exposure ?? "private",
+          input.supersedes ?? null,
+          provenance,
+          content,
+          text.length > 0 ? text : null,
+          meta.originKind,
+          meta.originId,
+          meta.beliefSlot,
+          meta.validFrom,
+          meta.invalidatedReason,
+          meta.evidenceEventId,
+          meta.evidenceQuote,
+        )
+        if (text.length > 0) yield* db.run("INSERT INTO events_fts (event_id, text)VALUES (?, ?)", id, text)
+        return id
+      })
+
+    /** イベントとFTS projectionを同じtransactionで追記する。 */
+    const remember = (input: RememberInput) =>
+      Effect.gen(function* () {
+        const id = randomUUID()
+        const at = input.at ?? nowIso()
+        const meta = input.origin
+          ? { ...EMPTY_META, originKind: input.origin.kind, originId: input.origin.id }
+          : EMPTY_META
+        yield* db.run("BEGIN IMMEDIATE")
+        return yield* append(input, id, at, meta)
+          .pipe(Effect.tap(() => db.run("COMMIT")))
+          .pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
       })
 
     /**
@@ -233,57 +276,56 @@ const makeMemory = () =>
     const believe = (
       slot: string,
       value: unknown,
-      opts?: { exposure?: Exposure; supersedes?: string; validFrom?: string; reason?: string },
+      opts?: {
+        exposure?: Exposure
+        supersedes?: string
+        validFrom?: string
+        reason?: string
+        evidenceEventId?: string
+        evidenceQuote?: string
+      },
     ) =>
       Effect.gen(function* () {
         const at = nowIso()
         const exposure = opts?.exposure ?? "private"
-        const cur = yield* db.get(
-          "SELECT resolved_from, valid_from FROM belief_slots WHERE slot = ?AND valid_until IS NULL",
-          slot,
-        )
-        // 遡って書くとき、前の区間より前には戻さない(区間が裏返るとどの並びも壊れる)。
-        const prevFrom = cur === undefined ? undefined : String(cur.valid_from)
-        const asked = opts?.validFrom ?? at
-        const validFrom = prevFrom !== undefined && asked < prevFrom ? prevFrom : asked
-        const eventId = yield* remember({
-          kind: "belief",
-          source: "system",
-          content: { slot, value, validFrom },
-          exposure,
-          // 何を訂正したのかは events 側にも残す。projection を捨てても系譜が辿れる。
-          ...((opts?.supersedes ?? cur)
-            ? { supersedes: opts?.supersedes ?? String(cur?.resolved_from) }
-            : {}),
-          text: `${slot} ${deriveText(value)}`,
-          at,
-        })
-        if (cur !== undefined) {
-          yield* db.run(
-            `UPDATE belief_slots
-                SET valid_until = ?, invalidated_by = ?, invalidated_reason = ?
-              WHERE slot = ?AND valid_until IS NULL`,
-            validFrom,
-            eventId,
-            opts?.reason ?? null,
+        yield* db.run("BEGIN IMMEDIATE")
+        return yield* Effect.gen(function* () {
+          const cur = yield* db.get(
+            "SELECT resolved_from, valid_from FROM belief_slots WHERE slot = ?AND valid_until IS NULL",
             slot,
           )
-        }
-        yield* db.run(
-          `INSERT INTO belief_slots (slot, value, exposure, resolved_from, updated_at, valid_from)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(slot, valid_from)DO UPDATE SET
-             value = excluded.value, exposure = excluded.exposure,
-             resolved_from = excluded.resolved_from, updated_at = excluded.updated_at,
-             valid_until = NULL, invalidated_by = NULL, invalidated_reason = NULL`,
-          slot,
-          JSON.stringify(value ?? null),
-          exposure,
-          eventId,
-          at,
-          validFrom,
-        )
-        return eventId
+          // 遡って書くとき、前の区間より前には戻さない(区間が裏返るとどの並びも壊れる)。
+          const prevFrom = cur === undefined ? undefined : String(cur.valid_from)
+          const asked = opts?.validFrom ?? at
+          const validFrom = prevFrom !== undefined && asked < prevFrom ? prevFrom : asked
+          const eventId = randomUUID()
+          yield* append(
+            {
+              kind: "belief",
+              source: "system",
+              content: value,
+              exposure,
+              // 何を訂正したのかは events 側にも残す。projection を捨てても系譜が辿れる。
+              ...((opts?.supersedes ?? cur)
+                ? { supersedes: opts?.supersedes ?? String(cur?.resolved_from) }
+                : {}),
+              text: `${slot} ${deriveText(value)}`,
+              at,
+            },
+            eventId,
+            at,
+            {
+              ...EMPTY_META,
+              beliefSlot: slot,
+              validFrom,
+              invalidatedReason: opts?.reason ?? null,
+              evidenceEventId: opts?.evidenceEventId ?? null,
+              evidenceQuote: opts?.evidenceQuote ?? null,
+            },
+          )
+          yield* db.run("COMMIT")
+          return eventId
+        }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
       })
 
     const view = (slot: string, r: Row | undefined) =>
@@ -443,18 +485,28 @@ const makeMemory = () =>
         )
         .pipe(Effect.map((rows) => rows as unknown as EventRow[]))
 
-    /** 抹消。トリガが許す唯一の UPDATE(content := NULL)+ 監査用に redact イベントを残す。 */
+    /** 本文・FTS・監査eventを同じtransactionで抹消する。 */
     const redact = (eventId: string, reason: string) =>
       Effect.gen(function* () {
-        yield* db.run("UPDATE events SET content = NULL WHERE id = ?", eventId)
+        const id = randomUUID()
+        const at = nowIso()
+        yield* db.run("BEGIN IMMEDIATE")
+        yield* db.run("UPDATE events SET content = NULL, search_text = NULL WHERE id = ?", eventId)
         yield* db.run("DELETE FROM events_fts WHERE event_id = ?", eventId)
-        return yield* remember({
-          kind: "redact",
-          source: "system",
-          content: { redacted: eventId, reason },
-          supersedes: eventId,
-          text: "",
-        })
+        return yield* append(
+          {
+            kind: "redact",
+            source: "system",
+            content: { redacted: eventId, reason },
+            supersedes: eventId,
+            text: "",
+          },
+          id,
+          at,
+          EMPTY_META,
+        )
+          .pipe(Effect.tap(() => db.run("COMMIT")))
+          .pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
       })
 
     const count = db.get("SELECT COUNT(*)n FROM events").pipe(Effect.map((r) => Number(r?.n ?? 0)))

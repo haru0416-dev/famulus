@@ -52,14 +52,7 @@ export const runtime = (): AppRuntime => {
   return current
 }
 
-const REFUSAL_TAGS = new Set([
-  "Halt",
-  "QuotaCooldown",
-  "DailyRunLimit",
-  "UnpricedModel",
-  "EgressDenied",
-  "DeliveryRejected",
-])
+const REFUSAL_TAGS = new Set(["Halt", "QuotaCooldown", "DailyRunLimit", "DeliveryRejected"])
 
 /** 拒否を人間に読める Error にして投げる。 */
 export class RefusedError extends Error {

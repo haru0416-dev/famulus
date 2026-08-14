@@ -38,6 +38,113 @@ test("events は DELETE できない(トリガが ABORT する)", async () => {
   })
 })
 
+test("同じ外部IDを再取得してもeventは1件だけ残る", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const first = yield* mem.remember({
+          source: "owner",
+          content: "同じDiscord投稿",
+          origin: { kind: "discord", id: "123" },
+        })
+        const second = yield* mem.remember({
+          source: "owner",
+          content: "同じDiscord投稿",
+          origin: { kind: "discord", id: "123" },
+        })
+        return { first, second, count: yield* mem.count }
+      }),
+    )
+    assert.equal(out.first, out.second)
+    assert.equal(out.count, 1)
+  })
+})
+
+test("belief eventは根拠event・引用・失効理由を正本に持つ", async () => {
+  await withHarness(async (h) => {
+    const row = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const db = yield* Db
+        const evidence = yield* mem.remember({ source: "owner", content: "今は東京に住んでいる" })
+        const id = yield* mem.believe("home.city", "東京", {
+          reason: "本人が現住所を訂正した",
+          evidenceEventId: evidence,
+          evidenceQuote: "今は東京に住んでいる",
+        })
+        return yield* db.get(
+          "SELECT evidence_event_id,evidence_quote,invalidated_reason FROM events WHERE id=?",
+          id,
+        )
+      }),
+    )
+    assert.equal(row?.evidence_quote, "今は東京に住んでいる")
+    assert.equal(row?.invalidated_reason, "本人が現住所を訂正した")
+    assert.ok(row?.evidence_event_id)
+  })
+})
+
+test("event追記が失敗したtransactionは巻き戻される", async () => {
+  await withHarness(async (h) => {
+    const failed = await h.fail(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "不正", exposure: "invalid" as never })
+      }),
+    )
+    assert.equal((failed as { _tag: string })._tag, "DbFailed")
+    const count = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "次の正常な追記" })
+        return yield* mem.count
+      }),
+    )
+    assert.equal(count, 1)
+  })
+})
+
+test("belief追記が失敗したtransactionは巻き戻される", async () => {
+  await withHarness(async (h) => {
+    const failed = await h.fail(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.believe("profile.city", "東京", { exposure: "invalid" as never })
+      }),
+    )
+    assert.equal((failed as { _tag: string })._tag, "DbFailed")
+    const count = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.believe("profile.city", "東京")
+        return yield* mem.count
+      }),
+    )
+    assert.equal(count, 1)
+  })
+})
+
+test("redact監査追記が失敗したtransactionは巻き戻される", async () => {
+  await withHarness(async (h) => {
+    const failed = await h.fail(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.redact("missing-event", "存在しないevent")
+      }),
+    )
+    assert.equal((failed as { _tag: string })._tag, "DbFailed")
+    const count = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "次の正常な追記" })
+        return yield* mem.count
+      }),
+    )
+    assert.equal(count, 1)
+  })
+})
+
 test("events の UPDATE は content := NULL(抹消)だけ通る", async () => {
   await withHarness(async (h) => {
     const id = await h.run(
@@ -78,6 +185,26 @@ test("events の UPDATE は content := NULL(抹消)だけ通る", async () => {
     )
     assert.equal(after.content, null)
     assert.equal(after.redact?.supersedes, id)
+  })
+})
+
+test("最新beliefを抹消しても古い値を現在値として復活させない", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.believe("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
+        const latest = yield* mem.believe("home.city", "東京", { validFrom: "2026-06-01T00:00:00Z" })
+        yield* mem.redact(latest, "誤った確定")
+        return {
+          current: yield* mem.belief("home.city"),
+          old: yield* mem.beliefAsOf("home.city", "2026-03-01T00:00:00Z"),
+        }
+      }),
+    )
+    assert.equal(out.current, undefined)
+    assert.equal(out.old?.value, "札幌")
+    assert.equal(out.old?.validUntil, "2026-06-01T00:00:00Z")
   })
 })
 
@@ -399,6 +526,56 @@ test("区間は半開 — 境界の瞬間はどちらか一方だけが主張す
     assert.equal(out.before?.value, "札幌")
     assert.equal(out.at?.value, "東京", "境界のその瞬間からは新しい値")
     assert.equal(out.way, undefined, "確定より前のことは知らない — 推測で埋めない")
+  })
+})
+
+test("過去へ遡る訂正は現在区間の開始より前へ戻さない", async () => {
+  await withHarness(async (h) => {
+    const current = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.believe("home.city", "札幌", { validFrom: "2026-06-01T00:00:00Z" })
+        yield* mem.believe("home.city", "東京", { validFrom: "2026-01-01T00:00:00Z" })
+        return yield* mem.belief("home.city")
+      }),
+    )
+    assert.equal(current?.value, "東京")
+    assert.equal(current?.validFrom, "2026-06-01T00:00:00Z")
+  })
+})
+
+test("空のrecall表示と一覧APIの既定値を扱う", async () => {
+  assert.equal(renderRecall([]), "該当なし")
+  const row = {
+    id: "event-1",
+    at: "2026-08-14T00:00:00Z",
+    kind: "observe" as const,
+    source: "owner" as const,
+    taint: 0,
+    exposure: "private" as const,
+    supersedes: null,
+    provenance: "[]",
+    content: null,
+    text: null,
+    is_current: 0,
+  }
+  assert.match(renderRecall([row]), /owner\] $/)
+  assert.match(renderRecall([{ ...row, content: "壊れたJSON" }]), /壊れたJSON/)
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.believe("profile.optional", null)
+        return {
+          belief: yield* mem.belief("profile.optional"),
+          current: yield* mem.currentBeliefs(),
+          recent: yield* mem.recent(),
+        }
+      }),
+    )
+    assert.equal(out.belief?.value, null)
+    assert.equal(out.current.length, 1)
+    assert.equal(out.recent.length, 1)
   })
 })
 

@@ -75,7 +75,11 @@ try {
     // 確定記憶へ上がらない。返信は先に表示し、keeper が終わってから次の入力を受ける。
     if (!turn.cutOff) {
       const kept = await run(
-        keep({ material: `owner: ${line}`, signal: AbortSignal.timeout(KEEP_MS) }),
+        keep({
+          material: `owner: ${line}`,
+          ...(turn.inputEventId ? { evidence: [{ id: turn.inputEventId, text: `owner: ${line}` }] } : {}),
+          signal: AbortSignal.timeout(KEEP_MS),
+        }),
       ).catch((e: unknown) => `keeper: 落ちた(${causeReason(e)})`)
       await run(
         Effect.gen(function* () {

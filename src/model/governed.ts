@@ -47,10 +47,8 @@ async function gate(model: string): Promise<void> {
     Effect.gen(function* () {
       const gov = yield* Governance
       yield* gov.precheck({
-        meter: "quota",
         // pool はモデルで決まる(GPT を回しても Claude のクォータ状態は変わらない、逆も)。
         pool: poolForModel(model),
-        model,
         at: nowIso(),
         nowMs: Date.now(),
         lane: lane(),
@@ -100,8 +98,7 @@ async function account(
         kind: "turn",
         role: laneRole(),
         model,
-        meter: "quota",
-        usage: { ...usage, usd: 0 }, // 定額利用。従量課金換算額は provenance にだけ残す。
+        usage,
         summary: traceOf(text),
         provenance: { pool: poolForModel(model), notionalUsd, via: "agent" },
         at,

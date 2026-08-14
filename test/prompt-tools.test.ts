@@ -93,7 +93,7 @@ test("親 Agent の remember は確定値を直接書かない", () => {
 
 test("ユーザーが話す入口はどちらも keeper を通す", () => {
   assert.match(read("src/chat.ts"), /run\(\s*keep\(\{/)
-  assert.match(read("src/tick.ts"), /run\(keep\(\{/)
+  assert.match(read("src/tick.ts"), /run\(\s*keep\(\{/)
 })
 
 test("自由文のツール結果は親モデルへの指示と分離する", () => {

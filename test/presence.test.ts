@@ -12,17 +12,17 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "vitest"
+import { SCHEMA_SQL } from "../src/db/sqlite.ts"
 import { presence, stateLine } from "../src/presence.ts"
 
-/** 表示に要る列だけの DB を1つ作る。本物の migrations は通さない — 読む側の形しか要らない。 */
+/** 現行schemaのDBを1つ作る。shape境界も含めてpresenceと同じ条件で読む。 */
 const withDb = (fn: (path: string, db: Database) => void): void => {
   const dir = mkdtempSync(join(tmpdir(), "oz-presence-"))
   const path = join(dir, "t.db")
   const db = new Database(path)
   try {
-    db.run("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT)")
-    db.run("CREATE TABLE events (id INTEGER PRIMARY KEY, source TEXT)")
-    db.run("CREATE TABLE watchlist (id TEXT PRIMARY KEY, status TEXT)")
+    db.exec(SCHEMA_SQL)
+    db.run("INSERT INTO schema_meta VALUES ('version','4')")
     fn(path, db)
   } finally {
     db.close()
@@ -32,7 +32,11 @@ const withDb = (fn: (path: string, db: Database) => void): void => {
 
 test("未読が無ければ watch の数だけ出す", () => {
   withDb((path, db) => {
-    db.run("INSERT INTO watchlist VALUES ('a','open'),('b','open'),('c','done')")
+    db.run(`INSERT INTO watchlist
+      (id,subject,opened_at,last_activity_at,next_move_owner,status,cooldown_hours)
+      VALUES ('a','a','2026-08-14T00:00:00Z','2026-08-14T00:00:00Z','human','open',24),
+             ('b','b','2026-08-14T00:00:00Z','2026-08-14T00:00:00Z','human','open',24),
+             ('c','c','2026-08-14T00:00:00Z','2026-08-14T00:00:00Z','human','closed',24)`)
     assert.equal(stateLine(path), "watch 2")
   })
 })
@@ -40,8 +44,14 @@ test("未読が無ければ watch の数だけ出す", () => {
 /** 未読は `tick:cursor` より後ろの owner 行。cursor を持たない状態は 0 として読む。 */
 test("未読があれば件数を前に出す", () => {
   withDb((path, db) => {
-    db.run("INSERT INTO events VALUES (1,'owner'),(2,'system'),(3,'owner')")
-    db.run("INSERT INTO watchlist VALUES ('a','open')")
+    db.run(`INSERT INTO events
+      (id,at,kind,source,taint,exposure,provenance,content)
+      VALUES ('1','2026-08-14T00:00:00Z','observe','owner',0,'private','[]','1'),
+             ('2','2026-08-14T00:00:00Z','observe','system',0,'private','[]','2'),
+             ('3','2026-08-14T00:00:00Z','observe','owner',0,'private','[]','3')`)
+    db.run(`INSERT INTO watchlist
+      (id,subject,opened_at,last_activity_at,next_move_owner,status,cooldown_hours)
+      VALUES ('a','a','2026-08-14T00:00:00Z','2026-08-14T00:00:00Z','human','open',24)`)
     assert.equal(stateLine(path), "未読 2 / watch 1")
     db.run("INSERT INTO schema_meta VALUES ('tick:cursor','2')")
     assert.equal(stateLine(path), "未読 1 / watch 1")
@@ -50,6 +60,16 @@ test("未読があれば件数を前に出す", () => {
 
 test("DB が読めなければ文は作らない", () => {
   assert.equal(stateLine(join(tmpdir(), "oz-presence-無い.db")), undefined)
+})
+
+test("旧versionのDBは部分的に表示しない", () => {
+  withDb((path, db) => {
+    db.run("UPDATE schema_meta SET value='2' WHERE key='version'")
+    db.run(`INSERT INTO watchlist
+      (id,subject,opened_at,last_activity_at,next_move_owner,status,cooldown_hours)
+      VALUES ('a','a','2026-08-14T00:00:00Z','2026-08-14T00:00:00Z','human','open',24)`)
+    assert.equal(stateLine(path), undefined)
+  })
 })
 
 /**
@@ -64,7 +84,9 @@ test("文が作れなくても online で組み立てる", () => {
 
 test("文が作れたら活動として載る", () => {
   withDb((path, db) => {
-    db.run("INSERT INTO watchlist VALUES ('a','open')")
+    db.run(`INSERT INTO watchlist
+      (id,subject,opened_at,last_activity_at,next_move_owner,status,cooldown_hours)
+      VALUES ('a','a','2026-08-14T00:00:00Z','2026-08-14T00:00:00Z','human','open',24)`)
     const p = presence(path)
     assert.equal(p.status, "online")
     // type 4 は前置きの付かない表示。観測(別セッションの GUILD_CREATE)で state がそのまま返る。

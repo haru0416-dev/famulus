@@ -446,8 +446,7 @@ test("既読位置は場所ごとに持つ — 片方に書いても、もう片
   }
 })
 
-/** 場所ごとに分ける前の位置。引き継がないと、DM に残っている会話を一度だけ全部読む。 */
-test("DM の既読位置は、場所ごとに分ける前のものを引き継ぐ", async () => {
+test("旧い全体 cursor は読まず、DM の位置をチャンネル単位で初期化する", async () => {
   const dc = await fakeDiscord([
     { id: "60", content: "去年の話", author: { id: OWNER } },
     { id: "61", content: "おととしの話", author: { id: OWNER } },

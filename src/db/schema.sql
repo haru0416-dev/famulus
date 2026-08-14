@@ -1,247 +1,188 @@
--- open-zero の DB スキーマ。ストア: bun:sqlite(`Database`、src/db/sqlite.ts 経由)。
--- 設計原則:
---   1. 正本は events。belief_slots / events_fts は projection(silent overwrite 禁止)。
---   2. 時刻は ISO-8601 UTC 'Z'。現在時刻とローカル日付境界は src/core/time.ts を使う。
---   3. bool は INTEGER 0/1。直列化値は JSON を TEXT で保持し json_valid で守る。
---   4. **ここに在るのは、読み書きする側が実際に書かれているテーブルだけ。**
---      先取りで置いたテーブルは「その仕組みが在る」と読まれてしまうので置かない(docs/adr/0007)。
--- 実行時の PRAGMA(接続時に適用、ここには書かない): journal_mode=WAL, foreign_keys=ON, busy_timeout。
+-- open-zero schema v4. Existing databases are not migrated; rebuild from this file.
 
--- スキーマ版管理(移植・マイグレーションの土台)。
-CREATE TABLE IF NOT EXISTS schema_meta (
-  key   TEXT PRIMARY KEY,
+CREATE TABLE schema_meta (
+  key TEXT PRIMARY KEY,
   value TEXT NOT NULL
-);
+) STRICT;
 
--- ============================================================================
--- 1. メモリ正本: events(append-only。読み書きは src/services/Memory.ts)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS events (
-  id          TEXT PRIMARY KEY,                       -- ULID/UUID(生成は app)
-  at          TEXT NOT NULL,                          -- IsoUtc(発生時刻)
-  kind        TEXT NOT NULL CHECK (kind IN ('observe','belief','forget','redact','import')),
-  source      TEXT NOT NULL CHECK (source IN ('owner','calendar','gmail','web','system')),
-  taint       INTEGER NOT NULL CHECK (taint IN (0,1)),      -- 不信データ由来(gmail/web)
-  exposure    TEXT NOT NULL CHECK (exposure IN ('private','public')),
-  supersedes  TEXT REFERENCES events(id),             -- lineage(訂正/忘却/抹消の対象)。observe/import は NULL
-  provenance  TEXT NOT NULL CHECK (json_valid(provenance)),  -- SourceRef[] の JSON
-  content     TEXT CHECK (content IS NULL OR json_valid(content))  -- JsonValue。redact 後は NULL
-);
-CREATE INDEX IF NOT EXISTS idx_events_at        ON events(at);
-CREATE INDEX IF NOT EXISTS idx_events_kind_at   ON events(kind, at);
-CREATE INDEX IF NOT EXISTS idx_events_supersedes ON events(supersedes);
+-- Memory source of truth. seq is the explicit cursor used by tick and dream.
+CREATE TABLE events (
+  seq                 INTEGER PRIMARY KEY,
+  id                  TEXT NOT NULL UNIQUE,
+  at                  TEXT NOT NULL,
+  kind                TEXT NOT NULL CHECK (kind IN ('observe','belief','redact','import')),
+  source              TEXT NOT NULL CHECK (source IN ('owner','calendar','gmail','web','system')),
+  taint               INTEGER NOT NULL CHECK (taint IN (0,1)),
+  exposure            TEXT NOT NULL CHECK (exposure IN ('private','public')),
+  supersedes          TEXT REFERENCES events(id),
+  provenance          TEXT NOT NULL CHECK (json_valid(provenance)),
+  content             TEXT CHECK (content IS NULL OR json_valid(content)),
+  search_text         TEXT,
+  origin_kind         TEXT,
+  origin_id           TEXT,
+  belief_slot         TEXT,
+  valid_from          TEXT,
+  invalidated_reason  TEXT,
+  evidence_event_id   TEXT REFERENCES events(id),
+  evidence_quote      TEXT,
+  CHECK ((origin_kind IS NULL) = (origin_id IS NULL)),
+  CHECK ((kind = 'belief') = (belief_slot IS NOT NULL AND valid_from IS NOT NULL)),
+  CHECK (kind = 'belief' OR (invalidated_reason IS NULL AND evidence_event_id IS NULL AND evidence_quote IS NULL))
+) STRICT;
+CREATE INDEX idx_events_at ON events(at, seq);
+CREATE INDEX idx_events_kind_at ON events(kind, at, seq);
+CREATE INDEX idx_events_supersedes ON events(supersedes);
+CREATE INDEX idx_events_belief ON events(belief_slot, valid_from, seq) WHERE kind = 'belief';
+CREATE UNIQUE INDEX idx_events_origin ON events(origin_kind, origin_id)
+  WHERE origin_id IS NOT NULL AND content IS NOT NULL;
 
--- append-only 不変条件。**黙って上書きさせない。**
--- DELETE は常に禁止。UPDATE は「content を NULL にする」redact 経路のみ許し、他列の変更は禁止。
-CREATE TRIGGER IF NOT EXISTS events_no_delete
+CREATE TRIGGER events_no_delete
 BEFORE DELETE ON events
 BEGIN
-  SELECT RAISE(ABORT, 'events is append-only: DELETE forbidden (use a redact/forget event)');
+  SELECT RAISE(ABORT, 'events is append-only: DELETE forbidden');
 END;
 
-CREATE TRIGGER IF NOT EXISTS events_immutable_except_redact
+CREATE TRIGGER events_immutable_except_redact
 BEFORE UPDATE ON events
 WHEN
-  NEW.id IS NOT OLD.id OR NEW.at IS NOT OLD.at OR NEW.kind IS NOT OLD.kind
-  OR NEW.source IS NOT OLD.source OR NEW.taint IS NOT OLD.taint
-  OR NEW.exposure IS NOT OLD.exposure OR NEW.supersedes IS NOT OLD.supersedes
-  OR NEW.provenance IS NOT OLD.provenance
-  OR NEW.content IS NOT NULL              -- 許すのは content := NULL(抹消)だけ
+  NEW.seq IS NOT OLD.seq OR NEW.id IS NOT OLD.id OR NEW.at IS NOT OLD.at OR NEW.kind IS NOT OLD.kind
+  OR NEW.source IS NOT OLD.source OR NEW.taint IS NOT OLD.taint OR NEW.exposure IS NOT OLD.exposure
+  OR NEW.supersedes IS NOT OLD.supersedes OR NEW.provenance IS NOT OLD.provenance
+  OR NEW.origin_kind IS NOT OLD.origin_kind OR NEW.origin_id IS NOT OLD.origin_id
+  OR NEW.belief_slot IS NOT OLD.belief_slot OR NEW.valid_from IS NOT OLD.valid_from
+  OR NEW.invalidated_reason IS NOT OLD.invalidated_reason OR NEW.evidence_event_id IS NOT OLD.evidence_event_id
+  OR NEW.evidence_quote IS NOT OLD.evidence_quote OR NEW.content IS NOT NULL OR NEW.search_text IS NOT NULL
 BEGIN
-  SELECT RAISE(ABORT, 'events is append-only: only content:=NULL (redact)is permitted');
+  SELECT RAISE(ABORT, 'events is append-only: only content/search_text redaction is permitted');
 END;
 
--- ============================================================================
--- 2. projection: belief_slots(現在解決済みの事実)/ events_fts(検索)
---    どちらも events から再構築可能。正本ではない。
--- ============================================================================
--- **時間軸を2本持つ**(bitemporal)。1本だと「6月に転職が終わっていたことを8月に知った」が書けず、
--- 「8月に転職が終わった」としか記録できない。事実がいつ真だったかと、DB がいつ知ったかは別の話。
---   valid time       …valid_from / valid_until。**その事実がいつ真だったか**
---   transaction time …updated_at。**DB がいつそれを知ったか**
--- 上書きはしない。古い値は valid_until を打って閉じるだけで、行としては残る
--- (Zep/Graphiti の edge invalidation、SCD Type 2、複式簿記の赤伝と同じ形)。
--- projection なので events から再構築できる。正本ではない。
-CREATE TABLE IF NOT EXISTS belief_slots (
-  slot         TEXT NOT NULL,                        -- 事実のキー(例: 'dentist.next_appt')
-  value        TEXT CHECK (value IS NULL OR json_valid(value)),  -- **この区間の**値(JsonValue)
-  exposure     TEXT NOT NULL CHECK (exposure IN ('private','public')),
-  resolved_from TEXT NOT NULL REFERENCES events(id),  -- どの belief event が確立したか(訂正鮮度)
-  updated_at   TEXT NOT NULL,                         -- transaction time: DB が知った時刻(IsoUtc)
-  valid_from   TEXT NOT NULL,                         -- valid time: いつからそうなったか
-  valid_until  TEXT,                                  -- いつまでそうだったか。**NULL = 今も真**
-  -- 何がこの値を終わらせたか。STALE(arXiv 2605.06527)の言う「無効化の出所を残す」。
-  -- 理由なしに閉じられた区間は、後から見て訂正なのか記録漏れなのか判別できない。
-  invalidated_by     TEXT REFERENCES events(id),
-  invalidated_reason TEXT,
-  PRIMARY KEY (slot, valid_from)
-);
-
--- slot ごとに「今の値」は高々1本。**この部分 UNIQUE がバイテンポラルの不変条件そのもの**で、
--- 区間を閉じ忘れたまま次を入れると、ここで落ちる(黙って2つの現在値が並ばない)。
-CREATE UNIQUE INDEX IF NOT EXISTS idx_belief_current
-  ON belief_slots (slot)WHERE valid_until IS NULL;
-CREATE INDEX IF NOT EXISTS idx_belief_history
-  ON belief_slots (slot, valid_from, valid_until);
-
--- 全文検索の projection。日本語は trigram tokenizer。unicode61 は日本語を分かち書きできず
--- 「会議」で「明日の会議資料」が引けない。3文字以上は FTS、2文字以下は Memory.recall が
--- text への LIKE 走査にフォールバックする。vector 検索はまだ無い。
-CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+CREATE VIRTUAL TABLE events_fts USING fts5(
   event_id UNINDEXED,
   text,
   tokenize = 'trigram'
 );
 
--- ============================================================================
--- 3. proposals(提案。状態機械の実装は src/services/Proposals.ts)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS proposals (
+-- Belief history is derived from immutable belief events. The next claim closes the previous interval.
+CREATE VIEW belief_slots AS
+WITH timeline AS (
+  SELECT
+    belief_slot AS slot,
+    content AS value,
+    exposure,
+    id AS resolved_from,
+    at AS updated_at,
+    valid_from,
+    LEAD(valid_from) OVER (PARTITION BY belief_slot ORDER BY valid_from, seq) AS valid_until,
+    LEAD(invalidated_reason) OVER (PARTITION BY belief_slot ORDER BY valid_from, seq) AS invalidated_reason
+  FROM events
+  WHERE kind = 'belief'
+)
+SELECT * FROM timeline WHERE value IS NOT NULL;
+
+CREATE TABLE proposals (
   id             TEXT PRIMARY KEY,
-  -- **1種だけ。** 前は7種あったが、作れるのは plan だけだった(docs/adr/0033)
-  kind           TEXT NOT NULL CHECK (kind = 'plan'),
-  created_at     TEXT NOT NULL,                       -- IsoUtc
-  -- 承認カード面
+  created_at     TEXT NOT NULL,
   summary        TEXT NOT NULL,
   assessment     TEXT NOT NULL,
   ask            TEXT NOT NULL,
-  -- 完全性ゲート5要素。名指しできない案は提案にしない
   c_what         TEXT NOT NULL,
   c_when         TEXT NOT NULL,
   c_who          TEXT NOT NULL CHECK (c_who IN ('famulus','human')),
   c_how          TEXT NOT NULL,
   c_how_verified TEXT NOT NULL,
-  -- 実行内容(JSON に直列化して丸ごと持つ)
   payload        TEXT NOT NULL CHECK (json_valid(payload)),
   provenance     TEXT NOT NULL CHECK (json_valid(provenance)),
-  -- **実行の3状態は落とした。** 承認しても動かす仕組みが無い(docs/adr/0033)。付ける日に足す。
-  status         TEXT NOT NULL CHECK (status IN
-                   ('proposed','approved','deferred','denied','expired')),
-  deferred_until TEXT,                                -- deferred 用の旧列。現在の書き手は無い
-  expires_at     TEXT NOT NULL,                       -- created_at + MAX_PENDING_DAYS
-  deny_reason    TEXT,                                -- deny 時。次の生成へ還流(学習信号)
-  -- **決着ではなく、決着待ちについての結論。** 承認はユーザーしか出せないので、tick 側は
-  -- 「今回できることは無い」で終わる。それを一度書いたら、同じ件で起こさない(docs/adr/0028)。
-  settled_at     TEXT,                                -- tick が結論を置いた時刻。NULL = まだ何も言っていない
-  settled_note   TEXT                                 -- そのとき何と結論したか。次の回のプロンプトに渡す
-);
-CREATE INDEX IF NOT EXISTS idx_proposals_status  ON proposals(status);
-CREATE INDEX IF NOT EXISTS idx_proposals_expires ON proposals(expires_at)WHERE status = 'proposed';
-CREATE INDEX IF NOT EXISTS idx_proposals_deferred ON proposals(deferred_until)WHERE status = 'deferred';
+  status         TEXT NOT NULL CHECK (status IN ('proposed','approved','denied','expired')),
+  expires_at     TEXT NOT NULL,
+  deny_reason    TEXT,
+  settled_at     TEXT,
+  settled_note   TEXT,
+  CHECK ((status = 'denied') = (deny_reason IS NOT NULL)),
+  CHECK ((settled_at IS NULL) = (settled_note IS NULL))
+) STRICT;
+CREATE INDEX idx_proposals_status ON proposals(status, created_at DESC);
+CREATE INDEX idx_proposals_expires ON proposals(expires_at) WHERE status = 'proposed';
 
--- 承認記録。誰が・いつ・何を(hash)承認したかを独立レコードに。
--- **照合する側はまだ無い。** 承認後に payload が差し替わっていないかを後から見られるように残すだけ。
-CREATE TABLE IF NOT EXISTS approvals (
-  id             TEXT PRIMARY KEY,
-  proposal_id    TEXT NOT NULL REFERENCES proposals(id),
-  approver       TEXT NOT NULL CHECK (approver = 'owner'),  -- v1 は所有者1名固定
-  approver_ref   TEXT NOT NULL,                       -- Discord user id(interaction の照合元)
-  at             TEXT NOT NULL,                       -- IsoUtc
-  verb           TEXT NOT NULL CHECK (verb IN ('approve','edit')),
-  payload_hash   TEXT NOT NULL,                       -- 承認時に表示していた payload の sha256
-  edited_payload TEXT CHECK (edited_payload IS NULL OR json_valid(edited_payload))  -- edit 時のみ
-);
-CREATE INDEX IF NOT EXISTS idx_approvals_proposal ON approvals(proposal_id);
+CREATE TABLE proposal_actions (
+  seq           INTEGER PRIMARY KEY,
+  id            TEXT NOT NULL UNIQUE,
+  proposal_id   TEXT NOT NULL REFERENCES proposals(id),
+  at            TEXT NOT NULL,
+  action        TEXT NOT NULL CHECK (action IN ('approve','deny','expire')),
+  actor         TEXT NOT NULL CHECK (actor IN ('owner','system')),
+  actor_ref     TEXT,
+  reason        TEXT,
+  payload_hash  TEXT,
+  latency_ms    INTEGER NOT NULL CHECK (latency_ms >= 0),
+  CHECK ((action = 'approve') = (payload_hash IS NOT NULL)),
+  CHECK ((action = 'deny') = (reason IS NOT NULL)),
+  CHECK (action != 'approve' OR actor = 'owner'),
+  CHECK (action != 'expire' OR actor = 'system')
+) STRICT;
+CREATE UNIQUE INDEX idx_proposal_terminal ON proposal_actions(proposal_id);
+CREATE INDEX idx_proposal_actions_at ON proposal_actions(at, seq);
 
--- ============================================================================
--- 4. ledger(全 run・全 turn の記録。unpriced も 0円にしない)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS ledger (
-  id           TEXT PRIMARY KEY,
-  at           TEXT NOT NULL,                         -- IsoUtc
-  kind         TEXT NOT NULL,                         -- 'turn' | 'run' | 'briefing' | 'scout' ...
-  role         TEXT,                                  -- src/model/Runner.ts の Role、または autonomous
-  model        TEXT,                                  -- 使用モデル id
-  -- 入力は3つに割れて返る。**in_tok だけ見ると嘘になる**(docs/adr/0005)。
-  -- 総入力 = in_tok + cache_read + cache_write。どれか1つを「入力」と呼ばない。
-  in_tok       INTEGER NOT NULL DEFAULT 0,            -- キャッシュに載らなかった分だけ
-  out_tok      INTEGER NOT NULL DEFAULT 0,
-  cache_read   INTEGER NOT NULL DEFAULT 0,            -- キャッシュから再利用された入力
-  cache_write  INTEGER NOT NULL DEFAULT 0,            -- 初回に書いた分(定義文・system はここに入る)
-  usd          REAL NOT NULL DEFAULT 0,
-  unpriced     INTEGER NOT NULL DEFAULT 0 CHECK (unpriced IN (0,1)),  -- 単価不明を黙って0円にしない
-  proposal_id  TEXT REFERENCES proposals(id),         -- 提案に紐づく記録用。現在の書き手は無い
-  summary      TEXT,                                  -- traceOf() で短縮したモデル応答
+CREATE TABLE ledger (
+  seq          INTEGER PRIMARY KEY,
+  id           TEXT NOT NULL UNIQUE,
+  at           TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  role         TEXT,
+  model        TEXT,
+  in_tok       INTEGER NOT NULL DEFAULT 0 CHECK (in_tok >= 0),
+  out_tok      INTEGER NOT NULL DEFAULT 0 CHECK (out_tok >= 0),
+  cache_read   INTEGER NOT NULL DEFAULT 0 CHECK (cache_read >= 0),
+  cache_write  INTEGER NOT NULL DEFAULT 0 CHECK (cache_write >= 0),
+  summary      TEXT,
   provenance   TEXT CHECK (provenance IS NULL OR json_valid(provenance))
-);
-CREATE INDEX IF NOT EXISTS idx_ledger_at   ON ledger(at);
-CREATE INDEX IF NOT EXISTS idx_ledger_kind ON ledger(kind, at);
+) STRICT;
+CREATE INDEX idx_ledger_at ON ledger(at, seq);
+CREATE INDEX idx_ledger_role_at ON ledger(role, at) WHERE role IS NOT NULL;
 
--- ============================================================================
--- 5. watchlist(監視中の未決事項。滞留の検知は src/services/Attention.ts)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS watchlist (
-  id              TEXT PRIMARY KEY,
-  subject         TEXT NOT NULL,                      -- 何を watch しているか(例: 'A社 契約更新の返信')
-  opened_at       TEXT NOT NULL,                      -- IsoUtc
-  last_activity_at TEXT NOT NULL,                     -- 最終動き(滞留日数の起点)
-  -- famulus = 自分。**`counterparty` は落とした** — 実データ0件(docs/adr/0033)
-  next_move_owner TEXT NOT NULL CHECK (next_move_owner IN ('human','famulus')),
-  status          TEXT NOT NULL CHECK (status IN ('open','closed')),
-  source_ref      TEXT CHECK (source_ref IS NULL OR json_valid(source_ref)),  -- SourceRef
-  -- 発火の記録。**登録した時刻ではなく、実際に一周回した時刻で冷却を数える。**
-  last_run_at     TEXT,                               -- 最後に回した時刻。NULL = 一度も回していない
-  cooldown_hours  REAL NOT NULL DEFAULT 24,           -- 回した後、次にプロンプトに載せるまで
-  run_count       INTEGER NOT NULL DEFAULT 0,         -- 通算で何周回したか
-  last_result     TEXT,                               -- 前回回して分かったこと。次の回に渡す
-  -- 順番の記録。**回した時刻とは別**。冷却が同時に明けた watch を全部載せずに、
-  -- 載せた時刻の古い順に少数だけ出す。回さずに終えたぶんは次の回で後ろへ回る(docs/adr/0028)。
-  last_shown_at   TEXT                                -- 最後にプロンプトに載せた時刻。NULL = 一度も載せていない
-);
-CREATE INDEX IF NOT EXISTS idx_watchlist_open ON watchlist(status)WHERE status = 'open';
+CREATE TABLE watchlist (
+  id               TEXT PRIMARY KEY,
+  subject          TEXT NOT NULL,
+  opened_at        TEXT NOT NULL,
+  last_activity_at TEXT NOT NULL,
+  next_move_owner  TEXT NOT NULL CHECK (next_move_owner IN ('human','famulus')),
+  status           TEXT NOT NULL CHECK (status IN ('open','closed')),
+  source_ref       TEXT CHECK (source_ref IS NULL OR json_valid(source_ref)),
+  last_run_at      TEXT,
+  cooldown_hours   REAL NOT NULL DEFAULT 24 CHECK (cooldown_hours > 0),
+  run_count        INTEGER NOT NULL DEFAULT 0 CHECK (run_count >= 0),
+  last_result      TEXT,
+  last_shown_at    TEXT,
+  CHECK (
+    (run_count = 0 AND last_run_at IS NULL AND last_result IS NULL)
+    OR (run_count > 0 AND last_run_at IS NOT NULL AND last_result IS NOT NULL)
+  )
+) STRICT;
+CREATE INDEX idx_watchlist_open ON watchlist(last_activity_at) WHERE status = 'open';
 
--- ============================================================================
--- 6. questions(問いレジストリ。belief と question を分けるための独立 DB)
---    「未 probe の仮説」を belief に昇格させないための独立 DB。
--- ============================================================================
-CREATE TABLE IF NOT EXISTS questions (
+CREATE TABLE watch_runs (
+  seq       INTEGER PRIMARY KEY,
+  watch_id  TEXT NOT NULL REFERENCES watchlist(id),
+  at        TEXT NOT NULL,
+  result    TEXT NOT NULL
+) STRICT;
+CREATE INDEX idx_watch_runs_at ON watch_runs(at, seq);
+CREATE INDEX idx_watch_runs_watch ON watch_runs(watch_id, seq);
+
+CREATE TABLE questions (
   id                TEXT PRIMARY KEY,
   question          TEXT NOT NULL,
-  opened_at         TEXT NOT NULL,                    -- IsoUtc
+  opened_at         TEXT NOT NULL,
   status            TEXT NOT NULL CHECK (status IN ('open','answered','dropped')),
-  confidence        TEXT NOT NULL CHECK (confidence IN ('unverified','confirmed'))  -- probe 前は unverified
-                    DEFAULT 'unverified',
+  confidence        TEXT NOT NULL DEFAULT 'unverified' CHECK (confidence IN ('unverified','confirmed')),
   answer            TEXT,
-  resolved_event_id TEXT REFERENCES events(id)        -- answered 時、根拠 event
-);
-CREATE INDEX IF NOT EXISTS idx_questions_open ON questions(status)WHERE status = 'open';
+  resolved_event_id TEXT REFERENCES events(id),
+  CHECK ((status = 'open') = (answer IS NULL))
+) STRICT;
+CREATE INDEX idx_questions_open ON questions(opened_at) WHERE status = 'open';
 
--- ============================================================================
--- 7. decisions(承認・却下の生ログ。deny 還流・提示から判断までの所要)
---     集計済みの重みは持たず、必要なら decisions を直接集計する。
--- ============================================================================
-CREATE TABLE IF NOT EXISTS decisions (
-  id          TEXT PRIMARY KEY,
-  proposal_id TEXT NOT NULL REFERENCES proposals(id),
-  at          TEXT NOT NULL,                          -- IsoUtc
-  verb        TEXT NOT NULL CHECK (verb IN ('approve','edit','deny','later','expire')),
-  kind        TEXT NOT NULL,                          -- 提案 kind(飽和検知を kind 別に見る)
-  latency_ms  INTEGER                                 -- 提示→承認の所要(親指の速さ = UX 指標)
-);
-CREATE INDEX IF NOT EXISTS idx_decisions_at ON decisions(at);
-
--- ============================================================================
--- 8. turns(会話ターンのログ。working/episodic 補助・監査)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS turns (
-  id         TEXT PRIMARY KEY,
-  at         TEXT NOT NULL,                           -- IsoUtc
-  surface    TEXT NOT NULL CHECK (surface IN ('discord','cli','web')),
-  input      TEXT NOT NULL CHECK (json_valid(input)),   -- TurnInput(リダクション後)
-  output     TEXT NOT NULL CHECK (json_valid(output)),  -- TurnOutput(リダクション後)
-  ledger_id  TEXT REFERENCES ledger(id)
-);
-CREATE INDEX IF NOT EXISTS idx_turns_at ON turns(at);
-
--- ============================================================================
--- 9. workspaces(コンテナの workspace。読み書きは src/core/workspaces.ts)
---     **ファイルシステムが知らないことだけ置く。** 大きさと最後に触った時刻は
---     `.data/runs/<name>` を走査すれば分かるので列にしない(持つと必ずずれる)。
--- ============================================================================
-CREATE TABLE IF NOT EXISTS workspaces (
-  name       TEXT PRIMARY KEY,                        -- .data/runs の下の名前(runDir が正規化した後)
-  purpose    TEXT NOT NULL,                           -- 何のための場所か。次の tick はこれを読んで選ぶ
-  created_at TEXT NOT NULL,                           -- IsoUtc
-  keep       INTEGER NOT NULL DEFAULT 0                -- 1 なら cleanup の対象外。書けるのはホスト側だけ
-             CHECK (keep IN (0, 1))
-);
+CREATE TABLE workspaces (
+  name       TEXT PRIMARY KEY,
+  purpose    TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  keep       INTEGER NOT NULL DEFAULT 0 CHECK (keep IN (0,1))
+) STRICT;

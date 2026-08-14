@@ -24,24 +24,22 @@ import { Governance } from "../src/services/Governance.ts"
 import { Ledger } from "../src/services/Ledger.ts"
 import { withHarness } from "./helpers.ts"
 
-test("run は結果を返し、role 付きで記録する(定額枠なので usd=0)", async () => {
+test("run は結果を返し、role 付きで記録する", async () => {
   await withHarness(
     async (h) => {
       const out = await h.run(
         Effect.gen(function* () {
           const runner = yield* Runner
-          const r = yield* runner.run({ role: "dialogue", prompt: "こんにちは" })
+          const r = yield* runner.run({ role: "claude-opus-5", kind: "run", prompt: "こんにちは" })
           const t = yield* (yield* Ledger).today()
-          const row = yield* (yield* Db).get("SELECT role, model, usd, unpriced FROM ledger")
+          const row = yield* (yield* Db).get("SELECT role, model FROM ledger")
           return { r, t, row }
         }),
       )
       assert.equal(out.r.text, "はい")
-      assert.equal(out.r.model, ROLE_MODEL.dialogue)
+      assert.equal(out.r.model, "claude-opus-5")
       assert.equal(out.t.runs, 1)
-      assert.equal(out.row?.role, "dialogue")
-      assert.equal(out.row?.usd, 0)
-      assert.equal(out.row?.unpriced, 0)
+      assert.equal(out.row?.role, "claude-opus-5")
       assert.equal(h.calls.length, 1)
       assert.equal(h.calls[0]?.prompt, "こんにちは")
     },
@@ -57,6 +55,7 @@ test("構造化応答が schema に合わなければ失敗として返す", asy
           const runner = yield* Runner
           yield* runner.run({
             role: "scout",
+            kind: "run",
             prompt: "判定して",
             schema: rs(v.object({ ok: v.boolean() })),
           })
@@ -77,7 +76,7 @@ test("halt が立っていると run はモデルに到達しない", async () =
         Effect.gen(function* () {
           yield* (yield* Governance).writeHalt("停止", "2026-08-08T09:00:00Z")
           const runner = yield* Runner
-          yield* runner.run({ role: "dialogue", prompt: "走るな" })
+          yield* runner.run({ role: "claude-opus-5", kind: "run", prompt: "走るな" })
         }),
       )
       assert.equal((e as { _tag: string })._tag, "Halt")
@@ -101,7 +100,7 @@ test("クォータ枯渇後はリセット時刻まで再実行を抑止する",
       const first = await h.fail(
         Effect.gen(function* () {
           const runner = yield* Runner
-          yield* runner.run({ role: "dialogue", prompt: "1回目" })
+          yield* runner.run({ role: "claude-opus-5", kind: "run", prompt: "1回目" })
         }),
       )
       assert.equal((first as { _tag: string })._tag, "RunnerFailed")
@@ -109,7 +108,7 @@ test("クォータ枯渇後はリセット時刻まで再実行を抑止する",
       const second = await h.fail(
         Effect.gen(function* () {
           const runner = yield* Runner
-          yield* runner.run({ role: "dialogue", prompt: "2回目" })
+          yield* runner.run({ role: "claude-opus-5", kind: "run", prompt: "2回目" })
         }),
       )
       // リセット前のクォータへ毎 run 再試行しない。
@@ -126,7 +125,7 @@ test("利用可能なクォータシグナルは再実行抑止を残さない",
       const left = await h.run(
         Effect.gen(function* () {
           const runner = yield* Runner
-          yield* runner.run({ role: "scout", prompt: "要約" })
+          yield* runner.run({ role: "scout", kind: "run", prompt: "要約" })
           return yield* (yield* Db).meta("quota:claude-max")
         }),
       )
@@ -142,7 +141,7 @@ test("役割→モデルは静的表。role 名でなければモデル id そ�
       Effect.gen(function* () {
         const runner = yield* Runner
         return {
-          dialogue: runner.plan("dialogue"),
+          dialogue: runner.plan("claude-opus-5"),
           scout: runner.plan("scout"),
           raw: runner.plan("claude-haiku-4-5"),
         }
@@ -151,10 +150,6 @@ test("役割→モデルは静的表。role 名でなければモデル id そ�
     assert.equal(plans.dialogue.model, "claude-opus-5")
     assert.equal(plans.scout.model, "gpt-5.6-luna")
     assert.equal(plans.raw.model, "claude-haiku-4-5")
-    // 全経路が定額利用。ここが "usd" に変わったら従量課金に戻っている。
-    assert.equal(plans.dialogue.meter, "quota")
-    assert.equal(plans.scout.meter, "quota")
-    assert.equal(plans.raw.meter, "quota")
     // クォータは別々に数える。同じ pool になっていると、作業を GPT に振り分けても対話が止まる。
     assert.equal(plans.dialogue.pool, "claude-max")
     assert.equal(plans.scout.pool, "chatgpt-rmod")
@@ -313,7 +308,7 @@ test("精査役は対話と別のモデル・別の枠から出る", async () =>
       const out = await h.run(
         Effect.gen(function* () {
           const runner = yield* Runner
-          return { dialogue: runner.plan("dialogue"), reviewer: runner.plan("reviewer") }
+          return { dialogue: runner.plan("claude-opus-5"), reviewer: runner.plan("reviewer") }
         }),
       )
       assert.notEqual(out.reviewer.model, out.dialogue.model)

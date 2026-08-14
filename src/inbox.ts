@@ -18,7 +18,14 @@ export const drainInbox: Effect.Effect<number, DbFailed, Discord | Memory> = Eff
   const discord = yield* Discord
   const mem = yield* Memory
   const batch = yield* discord.inbox()
-  for (const m of batch.items) yield* mem.remember({ source: "owner", content: m.text, at: nowIso() })
+  for (const m of batch.items) {
+    yield* mem.remember({
+      source: "owner",
+      content: m.text,
+      at: nowIso(),
+      origin: { kind: "discord", id: m.id },
+    })
+  }
   // 記録してから cursor を進める。逆順だと `remember` が失敗した回の項目が cursor より前に
   // 残って二度と読まれない。この順なら最悪でも二重に記録するだけ。
   yield* discord.seen(batch)

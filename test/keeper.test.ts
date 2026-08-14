@@ -10,6 +10,7 @@ import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import { keep, keepGrounded } from "../src/agent/keeper.ts"
+import { Db } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
 import { withHarness } from "./helpers.ts"
 
@@ -65,12 +66,19 @@ test("上げたものは確定値になり、既存の slot は区間が継が�
       const out = await h.run(
         Effect.gen(function* () {
           const mem = yield* Memory
+          const db = yield* Db
           yield* mem.believe("dentist.next_appt", "8/5(水)18:00", { validFrom: "2026-07-01T00:00:00Z" })
-          const line = yield* keep({ material: MATERIAL })
+          const evidence = yield* mem.remember({ source: "owner", content: MATERIAL })
+          const line = yield* keep({ material: MATERIAL, evidence: [{ id: evidence, text: MATERIAL }] })
+          const grounded = yield* db.get(
+            "SELECT evidence_event_id,evidence_quote FROM events WHERE belief_slot='dentist.next_appt' ORDER BY seq DESC LIMIT 1",
+          )
           return {
             line,
             cur: yield* mem.belief("dentist.next_appt"),
             hist: yield* mem.beliefHistory("dentist.next_appt"),
+            grounded,
+            evidence,
           }
         }),
       )
@@ -79,6 +87,7 @@ test("上げたものは確定値になり、既存の slot は区間が継が�
       assert.equal(out.hist.length, 2)
       assert.equal(out.hist[0]?.value, "8/5(水)18:00")
       assert.equal(out.hist[0]?.validUntil, "2026-08-08T00:00:00Z")
+      assert.equal(out.grounded?.evidence_event_id, out.evidence)
       // 引用が写せずに除外した件数は、保存対象が無かったのとは別に残す。
       assert.match(out.line, /1 件を確定値として保存/)
       assert.match(out.line, /引用が判定対象に無く 1 件を除外した/)
@@ -150,6 +159,35 @@ test("保存対象が無い回でも、何を見たかは残る", async () => {
       assert.match(line, /確言していない/)
     },
     [{ text: "", structured: { looked: "予定の話だけで、確言していない", values: [] } }],
+  )
+})
+
+test("引用に対応するowner eventが無ければbeliefを保存しない", async () => {
+  await withHarness(
+    async (h) => {
+      const out = await h.run(
+        Effect.gen(function* () {
+          const mem = yield* Memory
+          const evidence = yield* mem.remember({ source: "owner", content: "別の発言" })
+          const line = yield* keep({
+            material: MATERIAL,
+            evidence: [{ id: evidence, text: "owner: 別の発言" }],
+          })
+          return { line, belief: yield* mem.belief("dentist.next_appt") }
+        }),
+      )
+      assert.equal(out.belief, undefined)
+      assert.match(out.line, /引用が判定対象に無く 1 件を除外した/)
+    },
+    [
+      {
+        text: "",
+        structured: {
+          looked: "予約変更を見た",
+          values: [{ slot: "dentist.next_appt", value: "8/12 18:00", quote: "来週の水曜18時に変更した" }],
+        },
+      },
+    ],
   )
 })
 

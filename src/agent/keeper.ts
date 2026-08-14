@@ -88,6 +88,11 @@ export interface KeptValue {
   readonly reason?: string
 }
 
+export interface EvidenceSource {
+  readonly id: string
+  readonly text: string
+}
+
 /** 空白を無視して比べる。写すときに改行や字下げが揃い直ることがある。 */
 const bare = (s: string): string => s.replace(/\s/g, "")
 
@@ -121,6 +126,7 @@ export const keepGrounded = (values: readonly KeptValue[] | undefined, material:
  */
 export const keep = (opts: {
   material: string
+  evidence?: readonly EvidenceSource[]
   since?: string
   signal?: AbortSignal
   /** 判定対象の見出し。対象期間を広げて呼ぶ側(dream)が「1回ぶんではない」と書けるようにする。 */
@@ -166,18 +172,25 @@ export const keep = (opts: {
 
     const res = out.success.structured as { looked: string; values: KeptValue[] }
     const grounded = keepGrounded(res.values, opts.material)
-    const kept = grounded.filter((v) => !already.has(v.slot))
-    const dropped = (res.values?.length ?? 0) - grounded.length
-    const late = grounded.length - kept.length
-    for (const v of kept) {
+    const novel = grounded.filter((v) => !already.has(v.slot))
+    const kept = novel.flatMap((value) => {
+      const quote = bare(value.quote)
+      const evidenceEventId = opts.evidence?.find((e) => bare(e.text).includes(quote))?.id
+      return evidenceEventId === undefined ? [] : [{ value, evidenceEventId }]
+    })
+    const dropped = (res.values?.length ?? 0) - grounded.length + (novel.length - kept.length)
+    const late = grounded.length - novel.length
+    for (const { value: v, evidenceEventId } of kept) {
       yield* mem.believe(v.slot, v.value, {
         ...(v.validFrom ? { validFrom: v.validFrom } : {}),
         ...(v.reason ? { reason: v.reason } : {}),
+        evidenceEventId,
+        evidenceQuote: v.quote,
       })
     }
     const head =
       kept.length === 0 ? `${tag}: 保存対象は無かった` : `${tag}: ${kept.length} 件を確定値として保存`
-    const body = kept.map((v) => `${v.slot}=${v.value}`).join(" / ")
+    const body = kept.map(({ value: v }) => `${v.slot}=${v.value}`).join(" / ")
     // 除外した数も残す。引用が写せずに除外したのと、本体が先に書いていたのと、
     // そもそも保存対象が無かったのは全部別の話。混ぜると、どれが起きているか読めない。
     const tail = [

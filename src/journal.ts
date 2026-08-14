@@ -7,7 +7,7 @@
  *
  *   1. 呼ばれた道具の並び(`content.tools`)…AI SDK の `onStepFinish` が数えた実際の呼び出し
  *   2. その回の窓に残ったもの…提案・下書き・通知・コンテナ実行・確定した事実の行数
- *   3. モデル使用量(`ledger`)…run 数、出力トークン数、実費
+ *   3. モデル使用量(`ledger`)…run 数、出力トークン数
  *
  * 窓は `[content.tick, event.at]`。前者は digest を取った時刻、後者は記録を書いた時刻で、
  * その間がこの回の実働。窓の外で起きたことは数えない — 数えると、15分前の poll が入れた
@@ -39,15 +39,8 @@ export interface Entry {
   readonly left: Left
   /** モデルを呼んだ回数。 */
   readonly runs: number
-  /**
-   * 出したトークン。実費より先に出す。
-   *
-   * いま走っているモデルは定額利用で、`usd` は 0 のまま入る(単価表に載らないので `unpriced` も
-   * 立たない)。0 だけを見せると、10回ツールを呼んだ実行と1回で終えた実行を区別できない。
-   * 出力側だけを取るのは、入力がキャッシュの当たり外れで桁ごと動くため — 回どうしを比べられない。
-   */
+  /** 出力側だけを取る。入力はキャッシュの当たり外れで桁ごと動き、回どうしを比べにくい。 */
   readonly outTok: number
-  readonly usd: number
 }
 
 /** 窓の中に増えた行。0 も 0 と書く — 「何も残らなかった回」を読めるようにするため。 */
@@ -97,7 +90,7 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
       // 起点だけで切って「以降ぜんぶ」にすると、次の回のぶんが混ざる。
       const left = yield* countLeft(at, wroteAt)
       const burn = yield* db.get(
-        `SELECT COUNT(*)runs, COALESCE(SUM(usd), 0)usd, COALESCE(SUM(out_tok), 0)out_tok
+        `SELECT COUNT(*)runs, COALESCE(SUM(out_tok), 0)out_tok
            FROM ledger WHERE at >= ?AND at <= ?`,
         at,
         wroteAt,
@@ -117,7 +110,6 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
         left,
         runs: Number(burn?.runs ?? 0),
         outTok: Number(burn?.out_tok ?? 0),
-        usd: Number(burn?.usd ?? 0),
       })
     }
     return out
@@ -126,9 +118,7 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
 /**
  * 窓の中に増えた行を数える。tick の報告は読まない。
  *
- * `ran`(watch を実行した記録)だけは events に残らず watchlist の1行を上書きするので、
- * 後の回に上書きされたぶんは数から消える。消えることを承知で数えている —
- * 呼んだかどうかは道具の並びに残っているので、そちらと突き合わせれば読める。
+ * watch実行はwatch_runsへ追記されるため、後の実行で古い回から消えない。
  */
 const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed, Db> =>
   Effect.gen(function* () {
@@ -154,11 +144,7 @@ const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed
       fromIso,
       toIso,
     )
-    const wr = yield* db.get(
-      "SELECT COUNT(*)n FROM watchlist WHERE last_run_at >= ?AND last_run_at <= ?",
-      fromIso,
-      toIso,
-    )
+    const wr = yield* db.get("SELECT COUNT(*)n FROM watch_runs WHERE at >= ?AND at <= ?", fromIso, toIso)
     return {
       proposals: Number(pr?.n ?? 0),
       drafts: Number(ev?.drafts ?? 0),
@@ -239,8 +225,6 @@ const workLine = (e: Entry): string =>
     e.steps === undefined ? "手数の記録なし" : `${e.steps}手`,
     ...(e.ms === undefined ? [] : [took(e.ms)]),
     `${e.runs}run 出力${tok(e.outTok)}`,
-    // $0 は書かない。定額の枠で走った回に「$0.000」と出すと、無料で済んだように読める。
-    ...(e.usd > 0 ? [`$${e.usd.toFixed(3)}`] : []),
     ...(e.cutOff ? [`**止まった: ${e.cutOff}**`] : []),
   ].join(" / ")
 
@@ -274,7 +258,7 @@ export const logPost = (e: Entry): string =>
     ...(e.cutOff ? [`- **止まった** ${e.cutOff}`] : []),
     `- 実行条件 ${e.reasons.join(" / ") || "記録なし"}`,
     `- 実働 ${e.steps === undefined ? "手数の記録なし" : `${e.steps}手`}${e.ms === undefined ? "" : ` / ${took(e.ms)}`}`,
-    `- 推論 ${e.runs}run / 出力${tok(e.outTok)}${e.usd > 0 ? ` / $${e.usd.toFixed(3)}` : ""}`,
+    `- 推論 ${e.runs}run / 出力${tok(e.outTok)}`,
     `- 道具 ${e.tools?.length ? tally(e.tools) : "記録なし"}`,
     `- 残った ${leftLine(e.left, "なし")}`,
   ].join("\n")

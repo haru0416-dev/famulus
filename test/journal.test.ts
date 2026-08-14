@@ -127,24 +127,18 @@ test("窓の中に増えた行だけ数える — 前後の回のぶんは混ざ
   })
 })
 
-test("実費は窓の中の ledger だけを足す", async () => {
+test("run 数と出力tokenは窓の中の ledger だけを足す", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
         const db = yield* Db
-        for (const [id, at, usd, out] of [
-          ["l0", "2026-08-13T05:59:00Z", 9, 9000],
-          ["l1", "2026-08-13T06:00:05Z", 0.2, 800],
-          ["l2", "2026-08-13T06:00:25Z", 0.05, 400],
-          ["l3", "2026-08-13T06:01:00Z", 9, 9000],
+        for (const [id, at, out] of [
+          ["l0", "2026-08-13T05:59:00Z", 9000],
+          ["l1", "2026-08-13T06:00:05Z", 800],
+          ["l2", "2026-08-13T06:00:25Z", 400],
+          ["l3", "2026-08-13T06:01:00Z", 9000],
         ] as const) {
-          yield* db.run(
-            "INSERT INTO ledger (id, at, kind, usd, out_tok)VALUES (?, ?, 'run', ?, ?)",
-            id,
-            at,
-            usd,
-            out,
-          )
+          yield* db.run("INSERT INTO ledger (id, at, kind, out_tok)VALUES (?, ?, 'run', ?)", id, at, out)
         }
       }),
     )
@@ -155,19 +149,17 @@ test("実費は窓の中の ledger だけを足す", async () => {
     assert.ok(e)
     assert.equal(e.runs, 2)
     assert.equal(e.outTok, 1200)
-    assert.equal(Number(e.usd.toFixed(3)), 0.25)
-    assert.match(logPost(e), /- 推論 2run \/ 出力1\.2k \/ \$0\.250/)
+    assert.match(logPost(e), /- 推論 2run \/ 出力1\.2k/)
   })
 })
 
-/** 定額の枠で走った回は `usd` が 0 で入る。0 円と書くと、無料で済んだように読める。 */
-test("実費が 0 の回に $0.000 とは書かない — 出したトークンは出す", async () => {
+test("金額欄を持たず、出したトークンを出す", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
         const db = yield* Db
         yield* db.run(
-          "INSERT INTO ledger (id, at, kind, usd, out_tok)VALUES ('m1', '2026-08-13T08:00:10Z', 'turn', 0, 830)",
+          "INSERT INTO ledger (id, at, kind, out_tok)VALUES ('m1', '2026-08-13T08:00:10Z', 'turn', 830)",
         )
       }),
     )
@@ -298,7 +290,6 @@ test("Discord に出す行は、携帯の幅に収まる", () => {
     left: { proposals: 1, drafts: 0, tells: 1, shells: 0, beliefs: 0, watchRuns: 0 },
     runs: 17,
     outTok: 33_700,
-    usd: 0,
   }
   const over = logPost(e)
     .split("\n")

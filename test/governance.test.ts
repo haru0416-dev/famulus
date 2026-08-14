@@ -1,22 +1,20 @@
 /**
  * 統治の検査。ここが通らないなら移植は失敗という性質だけを並べる。
  *
- * とくに「quota の run が USD 上限を飛ばす」は、飛ばさない実装でもテストは書けてしまうので
- * 意図的に「今日の USD が上限を超えている状態」を作った上で quota が通ることを見ている。
  */
 
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import { Db } from "../src/services/Db.ts"
-import { type BudgetConfig, buildFencedPrompt, EGRESS_ALLOW, Governance } from "../src/services/Governance.ts"
+import { type BudgetConfig, buildFencedPrompt, Governance } from "../src/services/Governance.ts"
 import { withHarness } from "./helpers.ts"
 
 const AT = "2026-08-08T09:00:00Z"
 const NOW = Date.parse(AT)
-const base = { meter: "quota" as const, pool: "claude-max", model: "claude-opus-5" }
+const base = { pool: "claude-max" }
 
-const SMALL: BudgetConfig = { dailyRuns: 2, autonomousRuns: 60, dailyUsd: 20, monthlyUsd: 200 }
+const SMALL: BudgetConfig = { dailyRuns: 2, autonomousRuns: 60 }
 
 test("halt は precheck を止め、明示解除するまで自動で明けない", async () => {
   await withHarness(async (h) => {
@@ -154,7 +152,7 @@ test("日次 run 数の上限は効くが、halt は立てない(翌日には自
 
 test("自走が枠を使い切っても対話は止まらない(仕切りであって停止ではない)", async () => {
   await withHarness(async (h) => {
-    const split: BudgetConfig = { dailyRuns: 10, autonomousRuns: 2, dailyUsd: 20, monthlyUsd: 200 }
+    const split: BudgetConfig = { dailyRuns: 10, autonomousRuns: 2 }
     await h.run(
       Effect.gen(function* () {
         const db = yield* Db
@@ -186,88 +184,6 @@ test("自走が枠を使い切っても対話は止まらない(仕切りであ�
         assert.equal(halt, undefined)
       }),
     )
-  })
-})
-
-test("定額枠(quota)の run は USD 上限を飛ばす — 従量(usd)は同じ状態で止まる", async () => {
-  await withHarness(async (h) => {
-    await h.run(
-      Effect.gen(function* () {
-        const db = yield* Db
-        yield* db.run(
-          "INSERT INTO ledger (id, at, kind, role, usd)VALUES ('big', ?, 'run', 'dialogue', 99.0)",
-          AT,
-        )
-      }),
-    )
-
-    // quota: 限界費用 0 なので通る。ここが止まると「サブスクを買った意味」が消える。
-    await h.run(
-      Effect.gen(function* () {
-        const gov = yield* Governance
-        yield* gov.precheck({ ...base, meter: "quota", at: AT, nowMs: NOW })
-      }),
-    )
-
-    // usd: 同じ状態で止まる。
-    const e = await h.fail(
-      Effect.gen(function* () {
-        const gov = yield* Governance
-        yield* gov.precheck({ ...base, meter: "usd", at: AT, nowMs: NOW })
-      }),
-    )
-    assert.equal((e as { _tag: string })._tag, "Halt")
-    assert.match((e as { reason: string }).reason, /日次 USD 上限/)
-  })
-})
-
-test("従量経路の単価未登録モデルは事前に拒否する(quota では問わない)", async () => {
-  await withHarness(async (h) => {
-    const hasPricing = (m: string) => m === "known"
-
-    const e = await h.fail(
-      Effect.gen(function* () {
-        const gov = yield* Governance
-        yield* gov.precheck({ ...base, meter: "usd", model: "unknown", at: AT, nowMs: NOW, hasPricing })
-      }),
-    )
-    assert.equal((e as { _tag: string })._tag, "UnpricedModel")
-
-    await h.run(
-      Effect.gen(function* () {
-        const gov = yield* Governance
-        yield* gov.precheck({ ...base, meter: "quota", model: "unknown", at: AT, nowMs: NOW, hasPricing })
-      }),
-    )
-  })
-})
-
-test("egress は allowlist のホストだけ通す", async () => {
-  await withHarness(async (h) => {
-    await h.run(
-      Effect.gen(function* () {
-        const gov = yield* Governance
-        yield* gov.checkEgress("https://discord.com/api/v10/channels")
-        yield* gov.checkEgress("https://www.googleapis.com/gmail/v1/users/me/messages")
-      }),
-    )
-
-    for (const bad of [
-      "https://evil.example.com/x",
-      "https://discord.com.evil.example/x", // サフィックス偽装
-      "file:///etc/passwd",
-      "not a url",
-    ]) {
-      const e = await h.fail(
-        Effect.gen(function* () {
-          const gov = yield* Governance
-          yield* gov.checkEgress(bad)
-        }),
-      )
-      assert.equal((e as { _tag: string })._tag, "EgressDenied", bad)
-    }
-
-    assert.ok(EGRESS_ALLOW.includes("discord.com"))
   })
 })
 

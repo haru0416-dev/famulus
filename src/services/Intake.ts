@@ -823,7 +823,7 @@ const makeIntake = () =>
       return { added, skipped }
     })
 
-    return { scan, material, ingest, ingestMemories, ingestedIds } as const
+    return { scan, material, ingest, ingestMemories } as const
   })
 
 export class Intake extends Context.Service<Intake, Effect.Success<ReturnType<typeof makeIntake>>>()(

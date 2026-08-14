@@ -1,7 +1,6 @@
 /**
  * 公開 web を読み、このホストの内側へ向く URL を拒否する経路。
  *
- * コネクタ側の egress は allowlist(Governance の EGRESS_ALLOW)で足りる。宛先が数えられるから。
  * 調査の読み取りは宛先を列挙できないので、形で拒否する。IPv4 の loopback・私設・link-local・
  * CGNAT と、IPv6 の ::/::1・fc00::/7・fe80 で始まるアドレスを拒否する。
  * ufw は受信だけを見ていて送信は検査しないので、ここで止めないとモデルの書いた URL 一本で

@@ -39,7 +39,7 @@ test("提案は proposed で始まり、実行はされない", async () => {
   })
 })
 
-test("approve は approvals 行と status 遷移を必ず一緒に残す", async () => {
+test("approve は action 行と status 遷移を必ず一緒に残す", async () => {
   await withHarness(async (h) => {
     const out = await h.run(
       Effect.gen(function* () {
@@ -48,18 +48,16 @@ test("approve は approvals 行と status 遷移を必ず一緒に残す", async
         const id = yield* p.create(draft())
         const r = yield* p.approve(id)
         const row = yield* p.get(id)
-        const ap = yield* p.approvalOf(id)
-        const dec = yield* db.get("SELECT verb FROM decisions WHERE proposal_id = ?", id)
-        return { r, row, ap, verb: dec?.verb }
+        const action = yield* db.get("SELECT * FROM proposal_actions WHERE proposal_id = ?", id)
+        return { r, row, action }
       }),
     )
     assert.equal(out.row.status, "approved")
-    assert.equal(out.ap?.approver, "owner")
-    assert.equal(out.ap?.verb, "approve")
+    assert.equal(out.action?.actor, "owner")
+    assert.equal(out.action?.action, "approve")
     // 承認時に見ていた payload の指紋が残る = 後から中身が変わったら実行ゲートで弾ける。
-    assert.equal(out.ap?.payload_hash, payloadHash(out.row.payload))
-    assert.equal(out.r.payloadHash, out.ap?.payload_hash)
-    assert.equal(out.verb, "approve")
+    assert.equal(out.action?.payload_hash, payloadHash(out.row.payload))
+    assert.equal(out.r.payloadHash, out.action?.payload_hash)
   })
 })
 
@@ -84,7 +82,7 @@ test("二重承認はできない(承認済みは承認の対象ではない)", 
     const n = await h.run(
       Effect.gen(function* () {
         const db = yield* Db
-        const r = yield* db.get("SELECT COUNT(*)n FROM approvals WHERE proposal_id = ?", id)
+        const r = yield* db.get("SELECT COUNT(*)n FROM proposal_actions WHERE proposal_id = ?", id)
         return Number(r?.n ?? 0)
       }),
     )

@@ -477,7 +477,7 @@ function buildTools(state: TurnState) {
             // 完全性ゲート5要素(what/when/who/how/howVerified)は入力スキーマが強制している。
             // 名指しできない案を提案にしない規律を、指示ではなく schema 側に置いてある。
             const proposals = yield* Proposals
-            const id = yield* proposals.create({ kind: "plan", ...data })
+            const id = yield* proposals.create(data)
             return `提案 ${id.slice(0, 8)} を登録した。実行はしていない — 承認(oz approve)を待つ。`
           }),
         ),
@@ -990,10 +990,7 @@ function buildTools(state: TurnState) {
               )
             }
             // 入力は3列(素・キャッシュ読み・キャッシュ書き)の和。今日の run を全部足したもの。
-            return (
-              `${t.day}: run ${t.runs} 回 / 入力 ${t.inTok} tok・出力 ${t.outTok} tok` +
-              ` / 従量課金換算 $${t.usd.toFixed(4)} / ${states.join(" / ")}`
-            )
+            return `${t.day}: run ${t.runs} 回 / 入力 ${t.inTok} tok・出力 ${t.outTok} tok / ${states.join(" / ")}`
           }),
         ),
     }),
@@ -1004,6 +1001,8 @@ function buildTools(state: TurnState) {
 export interface Turn {
   readonly text: string
   readonly steps: number
+  /** このターンのowner入力を保存したevent。自走入力ではsystem event。 */
+  readonly inputEventId?: string
   /**
    * 実際に呼ばれた道具の名前を、呼ばれた順に。同じものが続けば続いた回数だけ並ぶ。
    *
@@ -1080,7 +1079,8 @@ export function createAssistant(opts: AssistantOptions = {}) {
      * 投げ返すと、呼ぶ側(tick)が締めの書き込みに辿り着けない。
      */
     async respond(input: string, o: { signal?: AbortSignal | undefined } = {}): Promise<Turn> {
-      state.lastInputEventId = await observe(input)
+      const inputEventId = await observe(input)
+      state.lastInputEventId = inputEventId
       const sent: ModelMessage[] = [...history, { role: "user", content: input }]
       // 利用者へ返すのはツールループが終わった step の本文だけ。ツールを呼ぶ step に書かれた
       // 「調べます」の類は経過で、積むと CONDUCT の「経過を書かない」と衝突する。
@@ -1100,11 +1100,22 @@ export function createAssistant(opts: AssistantOptions = {}) {
           },
         })
         history = [...sent, ...res.response.messages]
-        return { text: said.join("\n\n"), steps: res.steps.length, tools }
+        return {
+          text: said.join("\n\n"),
+          steps: res.steps.length,
+          tools,
+          ...(inputEventId ? { inputEventId } : {}),
+        }
       } catch (e) {
         // 切られた回の途中経過は継がない。道具呼び出しに結果が付いていない列を次のターンへ
         // 渡すと、以後そのターンごと拒否される。書けた文だけ返して、会話は前の回のまま置く。
-        return { text: said.join("\n\n"), steps, tools, cutOff: causeReason(e) }
+        return {
+          text: said.join("\n\n"),
+          steps,
+          tools,
+          cutOff: causeReason(e),
+          ...(inputEventId ? { inputEventId } : {}),
+        }
       }
     },
   }

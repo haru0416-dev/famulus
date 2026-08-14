@@ -32,17 +32,6 @@ export class DailyRunLimit extends Data.TaggedError("DailyRunLimit")<{
   readonly limit: number
 }> {}
 
-/** 単価未登録モデルの事前拒否(従量経路のみ。記録されずに USD 上限を通過する経路を防ぐ)。 */
-export class UnpricedModel extends Data.TaggedError("UnpricedModel")<{
-  readonly model: string
-}> {}
-
-/** Governance 管理下のコネクタに対する egress allowlist 違反。 */
-export class EgressDenied extends Data.TaggedError("EgressDenied")<{
-  readonly url: string
-  readonly reason: string
-}> {}
-
 /** 送信直前検査(pre-send verify)での差し戻し。 */
 export class DeliveryRejected extends Data.TaggedError("DeliveryRejected")<{
   readonly reason: string
@@ -84,17 +73,13 @@ export class DbFailed extends Data.TaggedError("DbFailed")<{
 }> {}
 
 /** governance が出しうる拒否の総和。ツール実行前・送信前のゲートはこれを返す。 */
-export type Refusal = Halt | QuotaCooldown | DailyRunLimit | UnpricedModel | EgressDenied | DeliveryRejected
+export type Refusal = Halt | QuotaCooldown | DailyRunLimit | DeliveryRejected
 
 /**
  * 包まれた失敗から、いちばん内側の理由を一行で取り出す。ここで返した文字列がそのまま
  * 「止まった: …」として DB に残り、ユーザーが読む1行になる。
  *
- * 元は Flue ランタイムが dispatch の失敗を `Agent run failed (submission sub_…)` にまとめてしまい、
- * 表に出た文字列だけを記録すると自律実行上限への到達も provider の失敗も区別できなかった
- * (docs/adr/0011)。実際の理由は内側の `meta.reason` にあった。
- *
- * Flue を外しても入れ子の形は残る。いま事前検査が投げるのは素の `Error` で、道具ループが
+ * 事前検査が投げるのは素の `Error` で、道具ループが
  * それをさらに入れ子にすることがある。だから `cause` を辿り、いちばん内側の `message` を返す —
  * 実測では halt 中の1ターンが `Error: 停止中(halt): …` として出ていて、
  * `String(e)` のままだと先頭に `Error: ` が付いたまま記録される。
@@ -106,8 +91,6 @@ export function causeReason(e: unknown): string {
   let deepest: string | undefined
   while (cur && typeof cur === "object" && !seen.has(cur)) {
     seen.add(cur)
-    const meta = (cur as { meta?: { reason?: unknown } }).meta
-    if (typeof meta?.reason === "string" && meta.reason) return meta.reason
     const msg = (cur as { message?: unknown }).message
     if (typeof msg === "string" && msg) deepest = msg
     cur = (cur as { cause?: unknown }).cause
@@ -126,10 +109,6 @@ export function describeRefusal(r: Refusal): string {
     }
     case "DailyRunLimit":
       return `日次 run 上限に到達(${r.count}/${r.limit})`
-    case "UnpricedModel":
-      return `単価未登録のモデルは従量経路で走らせない: ${r.model}`
-    case "EgressDenied":
-      return `egress 拒否: ${r.reason}`
     case "DeliveryRejected":
       return `送信前検査で差し戻し: ${r.reason}`
   }

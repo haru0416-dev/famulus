@@ -257,6 +257,27 @@ test("回した時刻を渡して後から記録できる。先の時刻は取�
   })
 })
 
+test("存在しないwatchの実行記録に失敗してもtransactionを残さない", async () => {
+  await withHarness(async (h) => {
+    const failed = await h.fail(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        yield* att.ranWatch("missing-watch", "該当なし")
+      }),
+    )
+    assert.equal((failed as { _tag: string })._tag, "NotFound")
+    const id = await h.run(
+      Effect.gen(function* () {
+        const att = yield* Attention
+        const id = yield* att.watch("失敗後にも追加できるwatch", "famulus")
+        yield* att.ranWatch(id, "正常に記録できた")
+        return id
+      }),
+    )
+    assert.ok(id.length > 0)
+  })
+})
+
 /**
  * 順番の検査。冷却は「いつまで載せないか」しか決めない。
  *
@@ -492,9 +513,9 @@ test("期限が近い承認待ちは実行条件になる", async () => {
         const db = yield* Db
         const att = yield* Attention
         yield* db.run(
-          `INSERT INTO proposals (id, kind, created_at, summary, assessment, ask,
+          `INSERT INTO proposals (id, created_at, summary, assessment, ask,
              c_what, c_when, c_who, c_how, c_how_verified, payload, provenance, status, expires_at)
-           VALUES ('p1','plan','2026-08-08T09:00:00Z','歯医者に変更依頼','根拠','判断',
+           VALUES ('p1','2026-08-08T09:00:00Z','歯医者に変更依頼','根拠','判断',
                    'w','t','famulus','h','v','{}','[]','proposed', ?)`,
           new Date(T0 + hours(24)).toISOString(),
         )
@@ -526,9 +547,9 @@ const denied = (n: number, at: string, reason: string | null) =>
   Effect.gen(function* () {
     const db = yield* Db
     yield* db.run(
-      `INSERT INTO proposals (id, kind, created_at, summary, assessment, ask,
+      `INSERT INTO proposals (id, created_at, summary, assessment, ask,
          c_what, c_when, c_who, c_how, c_how_verified, payload, provenance, status, expires_at, deny_reason)
-       VALUES (?,'plan',?,?,'根拠','判断','w','t','famulus','h','v','{}','[]','denied',?,?)`,
+       VALUES (?,?,?,'根拠','判断','w','t','famulus','h','v','{}','[]','denied',?,?)`,
       `d${n}`,
       at,
       `${n} 件目の用件`,
@@ -547,8 +568,6 @@ test("断られた提案はプロンプトに載る — ただし実行条件に
       Effect.gen(function* () {
         const att = yield* Attention
         yield* denied(1, "2026-08-08T08:00:00Z", "希望日が経過した")
-        // 理由の無いものは載せない。出し直しを止める材料になっていない。
-        yield* denied(2, "2026-08-08T08:30:00Z", null)
         yield* att.commit({ active: true, at: new Date(T0).toISOString() })
       }),
     )

@@ -267,9 +267,7 @@ const blocked = Effect.gen(function* () {
   const model = tickModel()
   return yield* gov
     .precheck({
-      meter: "quota",
       pool: poolForModel(model),
-      model,
       at: nowIso(),
       nowMs: Date.now(),
       lane: "autonomous",
@@ -408,14 +406,17 @@ async function tick(): Promise<string> {
     // 途中で止まった回のやり取りは、確かめられたかどうかが判断できる形になっていない。
     let kept: string | undefined
     if (spokenTo && !cutOff) {
-      const material = d.newEvents
-        .filter((e) => e.source === "owner" && e.taint === 0)
-        .map(renderEvent)
-        .join("\n")
+      const evidence = d.newEvents.filter((e) => e.source === "owner" && e.taint === 0)
+      const material = evidence.map(renderEvent).join("\n")
       // `since` はこの回の起点。本体が既に確定させた slot を keeper が言い換え直さないための線。
-      kept = await run(keep({ material, since: d.at, signal: AbortSignal.timeout(KEEP_MS) })).catch(
-        (e: unknown) => `keeper: 落ちた(${causeReason(e)})`,
-      )
+      kept = await run(
+        keep({
+          material,
+          evidence: evidence.map((e) => ({ id: e.id, text: renderEvent(e) })),
+          since: d.at,
+          signal: AbortSignal.timeout(KEEP_MS),
+        }),
+      ).catch((e: unknown) => `keeper: 落ちた(${causeReason(e)})`)
       log(kept)
     }
 

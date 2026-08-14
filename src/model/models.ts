@@ -124,7 +124,6 @@ export interface ModelCallOptions {
   /** 与えると構造化応答を要求する(Claude は StructuredOutput、GPT は Responses の json_schema)。 */
   readonly jsonSchema?: unknown
   readonly timeoutMs?: number
-  readonly bin?: string
   readonly signal?: AbortSignal
   /** テキスト差分の逐次通知。 */
   readonly onText?: (delta: string) => void

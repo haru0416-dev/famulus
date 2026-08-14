@@ -10,18 +10,6 @@ import assert from "node:assert/strict"
 import { test } from "vitest"
 import { causeReason } from "../src/core/errors.ts"
 
-/** Flue ランタイムが投げていた形。理由は外側に出ず、内側の `meta.reason` にだけあった。 */
-const metaError = (reason: string): Error => {
-  const inner = Object.assign(new Error("dispatch failed"), {
-    meta: { operation: "dispatch(sub_01X)", reason },
-  })
-  return Object.assign(new Error("Agent run failed (submission sub_01X)."), { cause: inner })
-}
-
-test("包まれた理由を取り出す", () => {
-  assert.equal(causeReason(metaError("日次 run 上限に到達(60/60)")), "日次 run 上限に到達(60/60)")
-})
-
 /**
  * `Error: ` を頭に付けない。いまゲートが投げるのは素の `Error` で、
  * `String(e)` のまま記録すると「止まった: Error: 停止中(halt): …」になる。
@@ -42,8 +30,8 @@ test("取り出せるものが無ければ元の文字列を返す", () => {
 })
 
 test("何段包まれていても辿る", () => {
-  const deep = Object.assign(new Error("外"), {
-    cause: { cause: metaError("pool claude-max は再実行抑止中") },
+  const deep = new Error("外", {
+    cause: new Error("中", { cause: new Error("pool claude-max は再実行抑止中") }),
   })
   assert.equal(causeReason(deep), "pool claude-max は再実行抑止中")
 })
