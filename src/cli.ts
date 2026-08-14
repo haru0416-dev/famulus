@@ -150,7 +150,7 @@ const card = (p: ProposalRow) =>
     `状態      : ${STATUS_LABEL[p.status] ?? p.status}${p.deny_reason ? ` — ${p.deny_reason}` : ""}`,
     `作成      : ${p.created_at}   期限: ${p.expires_at}`,
     // tick 側の結論。承認の代わりではない — 「自分の側では進まない」と書いただけで、
-    // 提案はまだユーザーの判断を待っている(docs/adr/0028)。
+    // 提案はまだユーザーの判断を待っている。
     ...(p.settled_note ? [`tick の結論: ${p.settled_note}(${p.settled_at})`] : []),
     "",
     `見出し    : ${p.summary}`,
@@ -225,7 +225,7 @@ const program = (argv: readonly string[]) =>
           discord.configured()
             ? `Discord: 会話 ${place(dc.talk, dc.dm)} / 下書き ${place(dc.draft, dc.dm)} — リアクションも自由文も受けられる`
             : "Discord: 宛先が無い(.env の OPEN_ZERO_DISCORD_TOKEN が空)",
-          // 進み具合は落とす先を持たない(docs/adr/0030)。指していなければ出ないので、
+          // 進み具合は落とす先を持たない。指していなければ出ないので、
           // ここで言わないと「動いていないのか、出す先が無いのか」が分からない。
           dc.log
             ? `進み具合: チャンネル ${dc.log} に1回1行(呼びかけなし)`
@@ -273,7 +273,7 @@ const program = (argv: readonly string[]) =>
       /**
        * `attention` が「これから何を見るか」で、こちらは「実際に何をしたか」。
        * 自分で書いた報告(`言った`)だけでは進み具合を確かめられないので、
-       * 呼んだ道具の並びと、窓の中に増えた行数を別の欄に置く(docs/adr/0030)。
+       * 呼んだ道具の並びと、窓の中に増えた行数を別の欄に置く。
        */
       case "journal": {
         const n = Number(rest.find((a) => /^\d+$/.test(a)) ?? 10)

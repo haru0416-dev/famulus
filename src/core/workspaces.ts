@@ -67,7 +67,7 @@ const entriesOf = (dir: string) => {
  *
  * 明示的に再帰走査して `lstat` で確認する。symlink は辿らず、容量にも含めない。
  * regular file の hard link は `dev:ino` で1回だけ数え、同じ実体の重複加算を避ける。
- * この方針はリンク構造で走査量と容量が膨らむのを防ぐためのもの(docs/adr/0026)。
+ * この方針はリンク構造で走査量と容量が膨らむのを防ぐためのもの。
  */
 export const scanTree = (dir: string): TreeStat => {
   let bytes = 0

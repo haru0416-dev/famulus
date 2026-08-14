@@ -8,7 +8,7 @@
  *
  * 受け取りを tick(15分間隔)から分けてあるのは、返事の待ち時間を間隔から外すため。
  * websocket にしないのは再接続とセッション再開を自前で持たずに済ませるため。
- * オンライン表示だけは gateway が要るので別プロセス(src/presence.ts / docs/adr/0027)。
+ * オンライン表示だけは gateway が要るので別プロセス(src/presence.ts)。
  *
  * 続けて打たれた行は次のポーリングでまとめて読まれ、tick の起動は1回だけ行う。
  */
@@ -37,7 +37,7 @@ const RETRY_MS = 180_000
 
 /**
  * tick の systemd unit を起動する。実行中の oneshot に `start` を重ねても待ち行列には積まれず、2回目は実行
- * されない(docs/adr/0003)。走行中に届いたぶんは DB に未読として残るので、次の起動で拾い直す。
+ * されない。走行中に届いたぶんは DB に未読として残るので、次の起動で拾い直す。
  */
 async function wake(): Promise<{ started: boolean; note: string }> {
   const unit = tickUnit()

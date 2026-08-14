@@ -1,7 +1,7 @@
 /**
  * 受信箱を DB に移す。tick と poll の両方から呼ばれる。
  *
- * 読む先は Discord だけ(docs/adr/0029)。ntfy を併用していたときは、片方の cursor が
+ * 読む先は Discord だけ。ntfy を併用していたときは、片方の cursor が
  * ずれても気付けなかった。
  *
  * source は owner。書き手の判定は author id で見るので、チャンネルに他人が入っても

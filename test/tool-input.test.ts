@@ -4,7 +4,7 @@
  * `vs()` に `validate` が無かった間、モデルが返した引数は何の検査も受けずに `execute` へ入っていた。
  * 実測(2026-08-13): `{"hours":"24","extra":"余計な鍵"}` を返させると、`hours` は文字列のまま、
  * 必須の `reason` は `undefined` のまま道具が走り、結果は「成功」として記録された。
- * valibot のスキーマは JSON Schema を作るためだけに使われていた(docs/adr/0025)。
+ * valibot のスキーマは JSON Schema を作るためだけに使われていた。
  */
 
 import assert from "node:assert/strict"

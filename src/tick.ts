@@ -43,9 +43,9 @@ loadEnv()
 /**
  * 1回の tick に許す時間。上限を付けないと無限に待つ。
  *
- * 300 秒では下書きの日が入り切らない(docs/adr/0012)。書いて精査に出して直してもう一度出す形になり、
+ * 300 秒では下書きの日が入り切らない。書いて精査に出して直してもう一度出す形になり、
  * 実測した回は 270 秒の時点でまだ3稿目を書いていた。unit の `TimeoutStartSec` は 600 秒なので、
- * その内側に収まる範囲で伸ばす。コンテナの上限(180 秒)との差は広がる方向なので ADR 0002 は保たれる。
+ * その内側に収まる範囲で伸ばす。個々のコンテナ走行は180秒で先に切り、締め処理の時間を残す。
  */
 const TIMEOUT_MS = Number(process.env.OPEN_ZERO_TICK_TIMEOUT_MS ?? 420_000)
 
@@ -97,7 +97,7 @@ function renderPendingSection(d: Digest): string | undefined {
   if (d.pending.length === 0) return undefined
   return [
     "## 返事待ちの提案(あなたは決められない。ユーザーが見るのを待っている)",
-    // 前回の結論を一緒に渡す。watch の `前回:` と同じ形(docs/adr/0017)。
+    // 前回の結論を一緒に渡す。watch の `前回:` と同じ形。
     ...d.pending.map((p) => {
       const expiry = p.daysLeft >= 0 ? `あと ${p.daysLeft} 日で期限切れ` : "期限切れ"
       const head = `- ${short(p.id)} ${p.summary}(${expiry})`
@@ -114,7 +114,7 @@ function renderPendingSection(d: Digest): string | undefined {
 function renderRefusedSection(d: Digest): string | undefined {
   if (d.refused.length === 0) return undefined
   return [
-    // watch に前回の結果を渡すのと同じ(docs/adr/0017)。断られた側を渡さないと、
+    // watch に前回の結果を渡すのと同じ。断られた側を渡さないと、
     // まっさらな状態で同じ相手に同じ用件を出し直す。
     "## 断られた提案(同じ形をもう一度出さない)",
     ...d.refused.map((p) => `- ${p.summary}\n  → ${p.reason}`),
@@ -238,7 +238,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
       // watch を並べておきながら同じ文で「動かなくてよい」と言うことになる。実測(直近40回の実働)では
       // watch で起きた9回のうち7回が道具呼び出し4回以下だった。逆に「必ず何かやれ」と書くと
       // 用の無い watch と提案が増える。分けるのは件数ではなく、載っているかどうか。
-      // この分岐そのものの結果は測れていない(前後1回ずつでは差が出なかった。docs/adr/0028)。
+      // この分岐そのものの結果は測れていない(前後1回ずつでは差が出なかった)。
       ...(spokenTo
         ? [
             "**訊き返してよい。** 相手はいま画面の前にいる。分岐が決められないなら、",
@@ -302,7 +302,7 @@ async function tick(): Promise<string> {
 
   // ── 実行条件が無い。ここで終わるのが正常。モデルは1回も呼ばない。
   if (d.idle) {
-    // ただし1日1回だけ、何日ぶんかの見直しをここで回す(docs/adr/0018)。
+    // ただし1日1回だけ、何日ぶんかの見直しをここで回す。
     // idle の回に置く理由は、返信を待たせないため。見直しは Luna で 30 秒前後かかるので、
     // 話しかけられた回に挟むとその秒数だけ返事が遅れる。実行条件が無い回なら誰も待っていない。
     // その日に idle の回が一度も来なければ翌日へ回る — 対象期間は 7 日あり、`dream:through` が
@@ -311,7 +311,7 @@ async function tick(): Promise<string> {
       ? await run(dream()).catch((e: unknown) => `dream: 失敗(${causeReason(e)})`)
       : undefined
     if (dreamed) log(dreamed)
-    // 削除処理も1日1回(docs/adr/0019)。実行済み状態は別に持つ — 見直しが失敗した日に
+    // 削除処理も1日1回。実行済み状態は別に持つ — 見直しが失敗した日に
     // 掃除まで止まると、データの増加だけが進む。こちらはモデルを呼ばないのでクォータにも関係しない。
     const swept = (await run(cleanupDue(d.at)))
       ? await run(cleanup()).catch((e: unknown) => `cleanup: 失敗(${causeReason(e)})`)
@@ -376,7 +376,7 @@ async function tick(): Promise<string> {
     const prompt = buildPrompt(d, spokenTo, await run(listWorkspaces))
     // 「載せた」を記録するのはここ。digest の中ではない — digest は実行条件が無い回にも
     // 走るので、そこで印を付けると誰も読んでいない一覧を載せたことにして順番だけが進む。
-    // 切られた回でも記録は残す。載ったことは事実で、次は他のものに順番を渡す(docs/adr/0028)。
+    // 切られた回でも記録は残す。載ったことは事実で、次は他のものに順番を渡す。
     if (d.stalled.length > 0) {
       await run(
         Effect.gen(function* () {
@@ -401,7 +401,7 @@ async function tick(): Promise<string> {
     // ことがあり、それが「9回走らせて何が分かったか」の唯一の記録になる。
     const text = (turn.text || (cutOff ? `(${cutOff}。この回の締めの文は書けていない)` : "")).trim()
 
-    // ── 締めの keeper。ユーザーが話した回にだけ通る(docs/adr/0014)。
+    // ── 締めの keeper。ユーザーが話した回にだけ通る。
     // 材料はユーザーの発言そのもので、外から来たものは渡さない。切られた回は通さない —
     // 途中で止まった回のやり取りは、確かめられたかどうかが判断できる形になっていない。
     let kept: string | undefined
@@ -436,7 +436,7 @@ async function tick(): Promise<string> {
           kind: "observe",
           source: "system",
           // やったことと、やったと書いたことを別の欄に置く。`said` は自分で書いた報告なので、
-          // それだけでは外から進み具合を確かめられない(docs/adr/0030)。`tools` は実際に呼ばれた
+          // それだけでは外から進み具合を確かめられない。`tools` は実際に呼ばれた
           // 道具の並び、`steps` は手数、`ms` は掛かった時間 — どれも呼び出し側で数えた値。
           // 切られた回は `cutOff` も残す。止まったことが `said` に書かれるとは限らない。
           content: {
@@ -469,7 +469,7 @@ async function tick(): Promise<string> {
           reasonKey: d.reasonKey,
           upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
         })
-        // ── 進み具合を1行だけ出す(docs/adr/0030)。呼びかけない。
+        // ── 進み具合を1行だけ出す。呼びかけない。
         // 動くたびに出るものなので、名指しを付けると通知が鳴り続けて、鳴っても見なくなる。
         // 出す先が指してなければ何も起きない(`Desk` の "log" は DM に落ちない)。
         //

@@ -129,7 +129,7 @@ test("自分が動く番の watch は実行条件になる — ただしcooldown
 })
 
 /**
- * 実行しても静かにならない、を止める(docs/adr/0013)。
+ * 実行しても静かにならない状態を止める。
  *
  * `next_move_owner = 'famulus'` は無条件で滞留に入るので、`last_activity_at` を更新しても
  * 自分持ちの watch は次の tick で再び処理対象になる。実際にそうなり、モデルは最終走行時刻を
@@ -283,7 +283,7 @@ test("存在しないwatchの実行記録に失敗してもtransactionを残さ�
  *
  * 同じ日に登録した watch は同時刻に再提示可能になり、対象がすべて同時に掲載候補になる。実測では6件が
  * 毎回そろって載り、tick はその一覧を読み直すだけで1件も回さずに終えていた(34回中20回が
- * 呼び出し2回以下)。載せる数に上限を置き、載せた順に後ろへ送る — docs/adr/0028。
+ * 呼び出し2回以下)。載せる数に上限を置き、載せた順に後ろへ送る。
  */
 const sixWatches = Effect.gen(function* () {
   const att = yield* Attention
@@ -528,7 +528,7 @@ test("期限が近い承認待ちは実行条件になる", async () => {
     assert.match(d.reasons.join(), /期限が近い承認待ち/)
 
     // 結論を1回書いたら、同じ件を実行条件にしない。承認を出せるのはユーザーだけなので、
-    // 再実行しても「あなた待ちです」をもう一度書くところまでしか進まない(docs/adr/0028)。
+    // 再実行しても「あなた待ちです」をもう一度書くところまでしか進まない。
     await h.run(
       Effect.gen(function* () {
         const proposals = yield* Proposals
@@ -560,7 +560,7 @@ const denied = (n: number, at: string, reason: string | null) =>
 
 /**
  * 断られたことを次の回に渡す。渡さないと、同じ相手に同じ用件を出し直す。
- * watch に前回の結果を渡すのと同じ理由(docs/adr/0013 / 0017)。
+ * watch に前回の結果を渡すのと同じ理由。
  */
 test("断られた提案はプロンプトに載る — ただし実行条件にはしない", async () => {
   await withHarness(async (h) => {

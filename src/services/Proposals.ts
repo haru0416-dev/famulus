@@ -27,14 +27,14 @@ import { nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 /**
- * 提案の種類。`plan` の1つだけ(docs/adr/0033)。
+ * 提案の種類。`plan` の1つだけ。
  *
  * 前は7種あった(`reminder` `research` `vault-update` `outbound-draft` `skill-promote` `skill-retire`)。
  * 全部 famulus-zero から持ってきた種類で、こちらのコードが作れるのは `plan` だけだった
  * — 実データも8件全部 `plan`。種別が7つあると、読んだ側は「6つの経路がある」と読む。
  */
 /**
- * 提案の状態。実行の3つ(`executing` `executed` `failed`)は落とした(docs/adr/0033)。
+ * 提案の状態。実行の3つ(`executing` `executed` `failed`)は落とした。
  *
  * 承認しても実行する仕組みが無い。到達しない状態を残すと、`oz list` を読んだ側が
  * 「承認すれば動く」と読む。実行を付ける日が来たら、そのときに足す。
@@ -260,7 +260,7 @@ const makeProposals = () =>
      * 毎回同じ結論を書き直す(実測で4回、いずれも道具呼び出し4回以下)。
      *
      * 書いた後は `digest` が実行条件に数えない。一覧からは消さない — 承認はまだ要る。
-     * `ranWatch` の記録分離と同じ考え方で、settle 自体の決定は docs/adr/0028。
+     * `ranWatch` と同じく、実行したことと対象を一覧に残すことを別に記録する。
      * 上書きしてよい: 状況が動けば結論も変わる。
      */
     const settle = (idOrPrefix: string, note: string, opts?: { at?: string }) =>

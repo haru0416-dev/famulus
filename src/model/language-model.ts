@@ -16,7 +16,7 @@
  *
  * ## 統治の側へ渡すもの
  * クォータシグナルと従量課金換算額は `providerMetadata[PROVIDER_META]` に載せる。トークン数は V4 の `usage` が
- * 素・キャッシュ読み・キャッシュ書きを最初から分けて持つので、そのまま入る(docs/adr/0005)。
+ * 素・キャッシュ読み・キャッシュ書きを最初から分けて持つので、そのまま入る。
  */
 
 import type {
@@ -233,7 +233,7 @@ export function claudeCliModel(modelId: string): LanguageModelV4 {
         raw: undefined,
       },
       usage: {
-        // 入力は3つ足して数える(docs/adr/0005)。V4 は最初からこの3列を持つ。
+        // 入力は3つ足して数える。V4 は最初からこの3列を持つ。
         inputTokens: {
           total: u.inTok + u.cacheRead + u.cacheWrite,
           noCache: u.inTok,

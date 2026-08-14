@@ -123,7 +123,7 @@ test("scanTree は子孫を含む最大 mtime と合計サイズを返す", asyn
 
 /**
  * 同じ実体を2回数えない。workspace の中身はほとんどが `node_modules` で、
- * bun の isolated はそこを symlink と hard link で組む。数え直すと大きさが数倍に出る(docs/adr/0026)。
+ * bun の isolated はそこを symlink と hard link で組む。数え直すと大きさが数倍に出る。
  */
 test("scanTree は symlink の先へ降りない", () => {
   const dir = mkdtempSync(join(tmpdir(), "oz-scan-sym-"))

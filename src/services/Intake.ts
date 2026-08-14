@@ -57,7 +57,7 @@ const TYPED_MARK = `"promptSource":"${TYPED}"`
  *
  * 含有判定は Buffer のままやる。utf8 の文字列に起こす手間は読み取り自体より重く、
  * 実測(0.63G / 295 本)で 161ms → 1,544ms になる。元ログの大半は道具の入出力で、
- * その中身をこちらは一度も読まない(docs/adr/0026)。
+ * その中身をこちらは一度も読まない。
  */
 function readTypedRaw(path: string): string | undefined {
   const buf = readFileSync(path)
@@ -189,7 +189,7 @@ function readSession(path: string): { ref: SessionRef; turns: Turn[]; rawBytes: 
  *
  * `scan` が要るのは「どの回がまだ入っていないか」だけで、応答の地の文は一度も見ない。
  * owner の発話になり得るのは `TYPED_MARK` を含む行だけなので、そこだけ解く —
- * 実測で 223,864 行 → 1,891 行(docs/adr/0026)。数え方は `readSession` と同じ条件なので、
+ * 実測で 223,864 行 → 1,891 行。数え方は `readSession` と同じ条件なので、
  * 返る `turns` は全行を解いたときと一致する。
  */
 function readSessionRef(path: string): SessionRef | undefined {
@@ -651,7 +651,7 @@ const makeIntake = () =>
      * 済んだ回は、開く前に外す。Claude Code の作業ログはファイル名が sessionId なので、
      * 中を読まなくても取り込み済みかどうかが分かる。読み終えてから `sessionId` で外す形だと、
      * 生ログの大半を占める「もう入っている回」を毎回開き直すことになる —
-     * 実測で 295 本 0.63G のうち 81 本が済みで、その 81 本がほぼ全部の量だった(docs/adr/0026)。
+     * 実測で 295 本 0.63G のうち 81 本が済みで、その 81 本がほぼ全部の量だった。
      * 名前が sessionId と違うファイルは済みの集合に当たらないので、これまで通り開いて読む。
      */
     const scan = (limit = 20) =>

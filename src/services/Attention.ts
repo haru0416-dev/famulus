@@ -17,7 +17,7 @@ import { Db } from "./Db.ts"
 
 /**
  * 次に処理する主体。`famulus` は自律エージェント(SOUL.md の名前)。
- * `counterparty`(第三者)は実データ0件のまま落とした(docs/adr/0033)。
+ * `counterparty`(第三者)は実データ0件のまま落とした。
  */
 export type NextMove = "human" | "famulus"
 
@@ -67,7 +67,7 @@ export interface PendingProposal {
 }
 
 /**
- * 断られた提案と理由。同じ用件をもう一度出さないためにプロンプトへ渡す(docs/adr/0017)。
+ * 断られた提案と理由。同じ用件をもう一度出さないためにプロンプトへ渡す。
  * 渡していなかったときは、同じ用件が3回出されて3回とも断られた。
  */
 export interface RefusedProposal {
@@ -114,7 +114,7 @@ export interface Digest {
 export const STALLED_DAYS = 3
 
 /**
- * watch を実行した後、次にプロンプトに載せるまでの既定時間(docs/adr/0013)。
+ * watch を実行した後、次にプロンプトに載せるまでの既定時間。
  *
  * `last_activity_at` では止まらない。`digest` は `next_move_owner = 'famulus'` の watch を
  * 無条件で滞留に入れるので、実行して `touchWatch` しても次の tick で再び処理対象になる。列が無かった
@@ -123,7 +123,7 @@ export const STALLED_DAYS = 3
  */
 export const WATCH_COOLDOWN_HOURS = 24
 /**
- * 1回の tick で載せる watch の上限(docs/adr/0028)。
+ * 1回の tick で載せる watch の上限。
  *
  * 同じ日に登録した watch は同じ時刻に再提示可能になり、対象がすべて同時に掲載候補になる。
  * 直近40回を調べると6件が同時に載る状態が続き、watch が実行条件になった9回のうち

@@ -4,8 +4,8 @@
  *   統治        … モデル呼び出し1回ごとのゲートは src/model/governed.ts の middleware が持つ。
  *                 ここには置かない — 道具ループは1回のターンで何度もモデルを呼ぶので、
  *                 開始時に1回の位置に置くと検査が最初の1回きりになる。
- *   propose     … 外に出る行為は提案を1件書くだけ。その提案を実行する経路は無い
- *                 (docs/adr/0007)。ユーザーが自分で動かす。
+ *   propose     … 外に出る行為は提案を1件書くだけ。その提案を実行する経路は無い。
+ *                 ユーザーが自分で動かす。
  *                 隔離したコンテナの中で完結する `shell` はこの制限に掛からない。
  *   respond()   … 今答えている入力そのものを observe イベントとして DB に落としてから走る。
  *
@@ -76,7 +76,7 @@ const MIN_RUN_MS = 15_000
 
 /**
  * 精査役1回の上限。実測 31 秒(1200字の下書きに対して指摘3件、出力 1759 token)で、
- * 指摘を多く返した回で 3366 token。倍を見て 90 秒に置いた(docs/adr/0012)。
+ * 指摘を多く返した回で 3366 token。倍を見て 90 秒に置いた。
  */
 const REVIEW_MS = 90_000
 
@@ -485,7 +485,7 @@ function buildTools(state: TurnState) {
 
     /**
      * 承認待ちについて「今回できることは無い」を1回だけ書く道具。提案の状態は動かさない。
-     * `ran` と同じ形で、呼ばないと同じ件が期限まで毎回実行条件になる(docs/adr/0028)。
+     * `ran` と同じ形で、呼ばないと同じ件が期限まで毎回実行条件になる。
      */
     settle: tool({
       description:
@@ -789,7 +789,7 @@ function buildTools(state: TurnState) {
      * 承認は要らない — 出るのはユーザーしか居ない場所(DM か、ユーザーが用意した囲いの中)だけ。
      *
      * 出し先は Discord の会話。`draft` とは場所を分ける — あちらはリアクションで判断を返す文、
-     * こちらは読むだけの文。混在させると、返答が必要な投稿を見落としやすくなる(docs/adr/0029)。
+     * こちらは読むだけの文。混在させると、返答が必要な投稿を見落としやすくなる。
      */
     tell: tool({
       description:
@@ -915,7 +915,7 @@ function buildTools(state: TurnState) {
             // この呼び出しにも締切を渡す。渡さないと精査役だけが tick の持ち時間の外で走る。
             // 実測した回は、締切が切れた後もここで待ち続けて外から殺すまで終わらなかった。
             // そうなると `commit` に届かず再実行抑止の起点が進まないので、次のタイマーでも同じ条件で
-            // 実行され、同じ処理段階で停止する(ADR 0002 が止めたはずの繰り返しがここから始まる)。
+            // 実行され、同じ処理段階で停止する。
             const left = remainingMs()
             if (left < REVIEW_MS + RUN_RESERVE_MS) {
               return `出していない。精査に回す時間が残っていない(${remainingLabel()})。本文は捨てずに、次の回で最初に呼ぶ。`
@@ -938,7 +938,7 @@ function buildTools(state: TurnState) {
             if (review._tag === "Failure") {
               return `出していない。精査役を呼べなかった(${causeReason(review.failure)})。本文は捨てずに、次の回でもう一度呼ぶ。`
             }
-            // 精査役が「出す」と言ったときだけ出す(docs/adr/0031、判断そのものは drafting.ts)。
+            // 精査役が「出す」と言ったときだけ出す。判断そのものは drafting.ts に置く。
             const outcome = reviewOutcome(review.success.structured as Review | undefined, title, body)
             if (!outcome.post) return outcome.text
             const id = yield* discord.post({
@@ -1008,7 +1008,7 @@ export interface Turn {
    *
    * 締めの文(`text`)は自分で書いた報告なので、やったと書いてあることと
    * やったことがずれる。ずれても外から分かるように、呼び出しの跡を別に残す。
-   * 切られた回も、そこまでに呼ばれたぶんは残る(docs/adr/0030)。
+   * 切られた回も、そこまでに呼ばれたぶんは残る。
    */
   readonly tools: readonly string[]
   /** 止まった理由。最後まで書けていれば undefined。 */

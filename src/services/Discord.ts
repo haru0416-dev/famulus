@@ -1,15 +1,15 @@
 /**
- * Discord。ユーザーとの入出力はここだけ(docs/adr/0029)。
+ * Discord。ユーザーとの入出力はここだけ。
  *
  * gateway でメッセージを受信しない。ボタン(interaction)は3秒以内の応答が要るため使わず、
  * リアクションと自由文を `src/poll.ts` から30秒ごとに REST で取得する。
- * オンライン表示だけは別プロセスの gateway 接続が担う(src/presence.ts / docs/adr/0027)。
+ * オンライン表示だけは別プロセスの gateway 接続が担う(src/presence.ts)。
  *
  * 出す先は用途で分ける(`Desk`)。ミュートの単位が用途と一致する。チャンネルは id を env で
- * 指す。名前で引くと改名した日に出なくなる(docs/adr/0015)。
+ * 指す。名前で引くと改名した日に出なくなる。
  *
  * 返事は最後に話しかけられた場所へ返す。リアクションを押させるものはスレッドを立てる
- * — スレッド外の自由文はどの1件への返事か判定できない(docs/adr/0016)。
+ * — スレッド外の自由文はどの1件への返事か判定できない。
  *
  * token / owner id が無ければ何もせず undefined を返す。tick を止めない。
  */
@@ -41,8 +41,8 @@ export interface Tap {
 /**
  * 出す先の種類。呼ぶ側はチャンネル id を知らなくてよい。
  *
- * `talk` は会話、`draft` は外に出す文(リアクションを押させる)、`log` は進み具合
- * (docs/adr/0030)。`talk` と `draft` は指す先が無ければ DM に落ちるが、`log` は落ちない
+ * `talk` は会話、`draft` は外に出す文(リアクションを押させる)、`log` は進み具合。
+ * `talk` と `draft` は指す先が無ければ DM に落ちるが、`log` は落ちない
  * — 1回動くたびに1行出るので、DM に混ぜると会話が埋まる。
  */
 export type Desk = "talk" | "draft" | "log"
@@ -70,7 +70,7 @@ export interface Inbound {
  *
  * 読むことと記録することを分けてあるのは、記録前に cursor が進むと、記録が失敗した回の項目が
  * 二度と読まれないから。絞り込みは id の比較なので、cursor 以前の項目はチャンネルに残って
- * いても拾えない(docs/adr/0029)。
+ * いても拾えない。
  */
 export interface Batch {
   /** 届いた順に並べたもの。 */
@@ -220,7 +220,7 @@ const makeDiscord = () =>
     /**
      * 出す先を決める。`talk` は最後に話しかけられたチャンネルが最優先。
      * `log` は指してあるチャンネルにしか出さない — 落とす先を持たせると進み具合の1行が
-     * 会話や DM に混ざる(docs/adr/0030)。
+     * 会話や DM に混ざる。
      */
     const channel = (to: Desk = "talk"): Effect.Effect<string | undefined, DbFailed> =>
       Effect.gen(function* () {
@@ -249,7 +249,7 @@ const makeDiscord = () =>
      * スレッド内メッセージの channel_id から返事の宛先を特定できる。
      *
      * 立てた直後に cursor を起点へ置く。置かないと「cursor を持たないチャンネル」の扱いになり、
-     * 最初の1通が取り込まれないまま cursor だけ進む(docs/adr/0015)。
+     * 最初の1通が取り込まれないまま cursor だけ進む。
      */
     const branch = (ch: string, messageId: string, name: string): Effect.Effect<void, DbFailed> =>
       Effect.gen(function* () {
@@ -400,7 +400,7 @@ const makeDiscord = () =>
 
     /**
      * cursor を DB に書く。`inbox` の返り値を記録し終えた側が呼ぶ。
-     * 呼ばずに終えた回は次に同じものをもう一度読む(docs/adr/0029)。
+     * 呼ばずに終えた回は次に同じものをもう一度読む。
      */
     const seen = (b: Batch): Effect.Effect<void, DbFailed> =>
       Effect.gen(function* () {

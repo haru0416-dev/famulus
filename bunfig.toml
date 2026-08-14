@@ -1,5 +1,5 @@
 # node_modules を平坦に並べない。宣言していない依存が、他の誰かの依存として引けてしまう形を塞ぐ。
 # pnpm から移したときの理由がこれで、実際 npm では `valibot` が package.json に無いまま通っていた
-# (docs/adr/0022)。既定の hoisted に戻すと、その穴も戻る。
+# 既定の hoisted に戻すと、その穴も戻る。
 [install]
 linker = "isolated"

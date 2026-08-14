@@ -7,7 +7,7 @@
  *
  * 境界に docker を選んだのは、srt(bubblewrap)と headless の `claude -p` を実測して不採用にしたから。
  * 前者は AppArmor が入れ子の userns を拒否するので動かず、後者は workspace の中にも書けない。
- * どちらの失敗も、越えるには sudo かサンドボックスの解除が要る。不採用の経緯は docs/adr/0001。
+ * どちらの失敗も、越えるには sudo かサンドボックスの解除が要るため許可しない。
  *
  * docker は sudo 無しで通り、「workspace には書ける / `/home/haru` は見えない /
  * `--network none` なら外に出られない」が同時に成り立つ。中に資格情報を持ち込まないので、

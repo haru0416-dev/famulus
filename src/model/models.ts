@@ -19,7 +19,7 @@ export const CLAUDE_POOL = "claude-max"
  * 「GPT を実行したから Claude を停止する」(逆も)が起きる。消費先が違うので集計単位も分ける。
  *
  * 値が経路名と一致しないのは、DB(`quota:<pool>` と ledger の provenance)に記録済みの履歴と
- * 同じ鍵でないと、改名した時点でクールダウンと集計が過去分と繋がらなくなるから(docs/adr/0035)。
+ * 同じ鍵でないと、改名した時点でクールダウンと集計が過去分と繋がらなくなる。
  */
 export const CODEX_POOL = "chatgpt-rmod"
 
