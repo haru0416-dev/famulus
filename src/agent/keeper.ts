@@ -152,7 +152,7 @@ export const keep = (opts: {
 
     // この回で既に確定した slot には触らない。keeper は主処理が保存しなかった値を補完する側であって、
     // 同じ値を再保存する処理ではない。触ると、主処理が書いた値を数十秒後に言い換えた区間が追加され、
-    // 履歴が寿命1分未満の行で埋まる(実際にそうなった)。
+    // 有効期間が1分未満の履歴行が増え続ける(実際にそうなった)。
     const since = opts.since
     const already = new Set(
       since === undefined ? [] : slots.filter((s) => s.updatedAt >= since).map((s) => s.slot),

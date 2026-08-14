@@ -118,7 +118,7 @@ export const cleanup = (opts?: {
   dry?: boolean
   /** 共有キャッシュの上限(MB)。既定は CACHE_MAX_MB。 */
   cacheMaxMb?: number
-  /** コンテナを数える手。ここだけホストの docker に触るので、検査では差し替える。 */
+  /** コンテナ列挙処理。ここだけホストの docker に触るので、検査では差し替える。 */
   orphans?: (dry: boolean) => Promise<{ removed: string[]; kept: string[] }>
 }) =>
   Effect.gen(function* () {

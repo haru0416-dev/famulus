@@ -596,7 +596,7 @@ test("閉じた区間の belief は検索で『確定』として前に出ない
     const current = rows.filter((r) => r.is_current === 1)
     assert.equal(current.length, 1, "今の値は1本だけ")
     assert.match(String(current[0]?.text), /もう終わった/)
-    // 古い値も残ってはいる。消さないが、今の事実の顔はさせない。
+    // 古い値も履歴に残すが、現在の確定値としては表示しない。
     assert.match(renderRecall(rows), /確定\(旧版\)/)
   })
 })

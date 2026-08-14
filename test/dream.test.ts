@@ -24,7 +24,7 @@ const seed = Effect.gen(function* () {
   const mem = yield* Memory
   yield* mem.remember({ kind: "observe", source: "owner", content: "月曜の発言", at: "2026-08-10T01:00:00Z" })
   yield* mem.remember({ kind: "observe", source: "owner", content: "火曜の発言", at: "2026-08-11T01:00:00Z" })
-  // 自分が書いたもの。ユーザーが言ったことではないので確定に上げてよい材料ではない。
+  // 自分が書いたもの。ユーザーが言ったことではないので確定値の保存対象ではない。
   yield* mem.remember({
     kind: "observe",
     source: "system",
@@ -121,7 +121,7 @@ test("材料の見出しに、1回ぶんではないと書いてある", async (
       assert.match(system, /別々の機会/)
       // 足すだけで、keeper の本文は残っている(判定を2本に割らない)。
       assert.match(system, /写せないなら保存しません/)
-      // 繰り返しから上げるものの名前空間を固定する(割れると片方しか引けない)。
+      // 繰り返しから保存する値の名前空間を固定する(割れると片方しか引けない)。
       assert.match(system, /`interest\.` で始めます/)
     },
     [{ text: "", structured: { looked: "見た", values: [] } }],

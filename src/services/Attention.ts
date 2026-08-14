@@ -38,12 +38,12 @@ export interface WatchRow {
   readonly last_shown_at: string | null
 }
 
-/** watch している件に、経過日数と冷却の残りを添えたもの。プロンプトに載せるかの判断材料。 */
+/** watch している件に、経過日数とcooldownの残りを添えたもの。プロンプトに載せるかの判断材料。 */
 export interface WatchView extends WatchRow {
   readonly stalledDays: number
-  /** 冷却が明けているか。明けていないものはプロンプトに載せない。 */
+  /** cooldownが終了しているか。終了前のものはプロンプトに載せない。 */
   readonly dueNow: boolean
-  /** 冷却明けまでの時間。0 なら今すぐ実行してよい。 */
+  /** cooldownの残り時間。0 なら今すぐ実行してよい。 */
   readonly dueInHours: number
 }
 
@@ -92,32 +92,32 @@ export interface Digest {
   readonly at: string
   readonly cursor: number
   readonly newEvents: readonly ObservedEvent[]
-  /** この回に載せるぶんだけ(最大 `STALLED_SHOW_MAX` 件)。冷却明けの全部ではない。 */
+  /** この回に載せるぶんだけ(最大 `STALLED_SHOW_MAX` 件)。cooldown終了後の全部ではない。 */
   readonly stalled: readonly WatchView[]
-  /** 冷却は明けているが、この回は載せなかった件数。プロンプトに数だけ出す。 */
+  /** cooldownは終了しているが、この回は載せなかった件数。プロンプトに数だけ出す。 */
   readonly stalledHeld: number
   readonly openQuestions: readonly QuestionRow[]
   readonly pending: readonly PendingProposal[]
   readonly refused: readonly RefusedProposal[]
   readonly sinceLastActiveHours: number
   readonly reasons: readonly string[]
-  /** 理由の組み合わせ(件数を除いたもの)。前回と同じなら次の冷却が伸びる。`commit` に渡す。 */
+  /** 理由の組み合わせ(件数を除いたもの)。前回と同じなら次のcooldownが伸びる。`commit` に渡す。 */
   readonly reasonKey: string
-  /** この tick で満たすべきだった冷却時間。指数バックオフの適用状況を外から見るため。 */
+  /** この tick で満たすべきだったcooldown時間。指数バックオフの適用状況を外から見るため。 */
   readonly cooldownHours: number
-  /** 今日ぶんの下書きがまだ出ていない。冷却を無視して実行条件になる(1日1回しか立たない)。 */
+  /** 今日ぶんの下書きがまだ出ていない。cooldownを無視して実行条件になる(1日1回しか成立しない)。 */
   readonly draftDue: boolean
   readonly idle: boolean
 }
 
-/** human-owned watch を滞留とみなす日数。famulus-owned はこの日数を待たず、個別冷却だけを見る。 */
+/** human-owned watch を滞留とみなす日数。famulus-owned はこの日数を待たず、個別cooldownだけを見る。 */
 export const STALLED_DAYS = 3
 
 /**
  * watch を実行した後、次にプロンプトに載せるまでの既定時間(docs/adr/0013)。
  *
  * `last_activity_at` では止まらない。`digest` は `next_move_owner = 'famulus'` の watch を
- * 無条件で滞留に入れるので、実行して `touchWatch` しても次の tick でまた上がる。列が無かった
+ * 無条件で滞留に入れるので、実行して `touchWatch` しても次の tick で再び処理対象になる。列が無かった
  * ときは、モデルが最終走行時刻を subject の文字列に書き込んで登録し直していた。
  * 判定は `last_run_at` と `run_count` で行う。
  */
@@ -125,10 +125,10 @@ export const WATCH_COOLDOWN_HOURS = 24
 /**
  * 1回の tick で載せる watch の上限(docs/adr/0028)。
  *
- * 同じ日に登録した watch は同じ日に冷却が明けるので、明けたぶんが全部そろって上がる。
- * 直近40回を調べると6件が同時に載る状態が続き、watch で起きた9回のうち
+ * 同じ日に登録した watch は同じ時刻に再提示可能になり、対象がすべて同時に掲載候補になる。
+ * 直近40回を調べると6件が同時に載る状態が続き、watch が実行条件になった9回のうち
  * 7回が道具呼び出し4回以下で終わっていた。載せなかったぶんは `last_shown_at` の古い順で
- * 次の回に上がる。3 は 420 秒の持ち時間から採った。
+ * 次の回に掲載する。3 は 420 秒の持ち時間から採った。
  *
  * 上限そのものの結果は測れていない。6件同時の状態を再現して前後1回ずつ走らせたが、
  * 上限なしの回も 11 手 / 305 秒で1件を実行しており、短い終わり方は再現しなかった。
@@ -137,24 +137,24 @@ export const WATCH_COOLDOWN_HOURS = 24
 export const STALLED_SHOW_MAX = 3
 /** 承認待ちがこの日数以内に期限切れになるなら、tick でユーザーに思い出させる材料にする。 */
 export const EXPIRING_DAYS = 2
-/** 何も無くてもこの時間が経ったら1回起こす(反応するだけの機械にしないための下限)。 */
+/** 外部入力が無くても、この時間が経過したら定期確認を実行条件に追加する。 */
 export const IDLE_WAKE_HOURS = 24
 /** tick のプロンプトに載せる「断られたぶん」の数。実行条件には数えない。 */
 export const REFUSED_LIMIT = 5
 
 /**
- * 一度動いたら、この時間は新しい入力が無いかぎり動かない。
+ * 一度実行したら、この時間は新しい入力が無いかぎり再実行しない。
  *
- * 「未解決の問いがある」「watch が動いていない」は、動いても解消しない理由になりうる
- * (ユーザーしか答えられない問い、相手待ちの案件)。冷却が無いと同じ理由で回り続ける。
- * 外から新しい入力が来たときだけ飛び越える。
+ * 「対応対象のwatchが残っている」「承認待ちの期限が近い」は、実行しても解消しない理由になりうる。
+ * cooldownが無いと同じ理由で回り続ける。
+ * 外部から新しい入力が来た場合だけ、このcooldownを適用しない。
  */
 export const ACTIVE_COOLDOWN_HOURS = 1.5
 
 /**
- * 同じ理由で続けて起きるほど、次に起きるまでを倍にする。
+ * 同じ理由で実行が続くほど、次回までのcooldownを倍にする。
  *
- * `ACTIVE_COOLDOWN_HOURS` は間隔を空けるだけなので、動いても解消しない理由だと
+ * `ACTIVE_COOLDOWN_HOURS` は間隔を空けるだけなので、実行しても解消しない理由だと
  * 1.5 時間ごとに同じ材料で回り続ける。理由の組み合わせが前回と同じなら
  * 1.5h → 3h → 6h → 12h → 24h と伸ばす。外から新しい入力が来たら 0 に戻る。
  */
@@ -231,7 +231,7 @@ const makeAttention = () =>
       })
 
     /**
-     * 実行した記録を付ける。冷却はここからしか始まらない。
+     * 実行した記録を付ける。cooldownはここからしか始まらない。
      *
      * `touchWatch`(動きがあった)と分けてある。相手から返事が来たのは動きだが自分は実行していない。
      * 逆に、何も出てこなかった回も実行したことに数える。
@@ -239,8 +239,8 @@ const makeAttention = () =>
      * `result` は次に実行するときの起点にする。無かったときは AI追跡の watch 3件が全部
      * 「HN の新着を全部見る」になり、差分を言えたことが無かった。
      *
-     * `at` は実行した時刻で、記録した時刻ではない。後から記録するとき今の時刻を入れると冷却が
-     * その分ずれるので、過去は渡せる。未来は取らない(渡せると冷却を好きなだけ伸ばせる)。
+     * `at` は実行した時刻で、記録した時刻ではない。後から記録するとき今の時刻を入れるとcooldownが
+     * その分ずれるので、過去は渡せる。未来は取らない(渡せるとcooldownを好きなだけ伸ばせる)。
      */
     const ranWatch = (idOrPrefix: string, result: string, ranAt?: string) =>
       Effect.gen(function* () {
@@ -396,12 +396,12 @@ const makeAttention = () =>
           cursor,
         )) as unknown as ObservedEvent[]
 
-        // 冷却が終了したものだけ。`next_move_owner = 'famulus'` は無条件で候補に入るので、
+        // cooldownが終了したものだけ。`next_move_owner = 'famulus'` は無条件で候補に入るので、
         // `dueNow` を挟まないと自分持ちの watch は確認後も毎回の tick で処理対象になり続ける。
         const due = (yield* openWatches(nowMs)).filter(
           (w) => w.dueNow && (w.next_move_owner === "famulus" || w.stalledDays >= STALLED_DAYS),
         )
-        // 載せた時刻の古い順。冷却が同時に明けたぶんに順番を付けるのはこの列だけ。
+        // 載せた時刻の古い順。cooldownが同時に終了した対象に順番を付けるのはこの列だけ。
         // NULL(一度も載せていない)を先頭に置く。同着は最後の動きが古いほうから。
         const queued = [...due].sort((a, b) => {
           const sa = a.last_shown_at ?? ""
@@ -473,14 +473,14 @@ const makeAttention = () =>
         // 新しい入力が無いなら、直前に動いたばかりの tick は実行しない(自己起動ループを止める)。
         const cooled = sinceLastActiveHours >= cooldownHours
         if (cooled) {
-          // 冷却が終了した全部の数を書く。載せる数で書くと、6件待っている回と
+          // cooldownが終了した全部の数を書く。載せる数で書くと、6件待っている回と
           // 3件しか無い回が同じ文になり、後ろに何件溜まっているかが出ない。
           if (queued.length > 0) reasons.push(`対応対象の watch が ${queued.length} 件`)
           if (expiring.length > 0) reasons.push(`期限が近い承認待ちが ${expiring.length} 件`)
           if (overdue) reasons.push(`前回の実働から ${IDLE_WAKE_HOURS} 時間以上`)
         }
 
-        // 冷却の対象外にする。1日に1回しか成立しない条件で、抑えると夕方に別の理由で動いた日は
+        // cooldownの対象外にする。1日に1回しか成立しない条件で、抑えると夕方に別の理由で動いた日は
         // 下書きが生成されない。
         const draftDue =
           localHour(at) >= dailyDraftHour() && (yield* db.meta("daily:draft")) !== dayRange(at).key

@@ -28,7 +28,7 @@ const age = (path: string, daysAgo: number): void => {
   utimesSync(path, t, t)
 }
 
-/** コンテナを数える手の差し替え。検査からホストの docker には触らない。 */
+/** コンテナ列挙処理の差し替え。検査からホストの docker には触らない。 */
 const noOrphans = async (): Promise<{ removed: string[]; kept: string[] }> => ({ removed: [], kept: [] })
 
 const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): Promise<void> => {

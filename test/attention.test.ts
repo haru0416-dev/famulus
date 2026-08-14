@@ -1,8 +1,8 @@
 /**
- * 自走の検査。「起きるべきときに起き、起きるべきでないときに起きない」だけを見る。
+ * 自律実行条件の検査。実行条件が必要なときだけ成立することを見る。
  *
  * tick で怖いのは動かないことではなく、止まらないことのほう。
- * 自分の書き込みで自分を起こす / 解消しない理由で永久に起こす、の2つは実装を見ても気づきにくく、
+ * system由来の書き込みによる自己再実行 / 解消しない理由による無限再実行、の2つは実装を見ても気づきにくく、
  * 気づくのは「一晩で枠を使い切っていた」ときになる。だからここで固定する。
  */
 
@@ -25,8 +25,8 @@ import { withHarness } from "./helpers.ts"
 const T0 = Date.parse("2026-08-08T09:00:00Z")
 const hours = (n: number) => n * 3_600_000
 
-// 日次の下書きは別の軸。時刻だけで立つ理由なので、起床条件の検査からは外しておく
-// — 混ざると「入力で起きた」のか「20時を過ぎた」のかが assert から区別できない。
+// 日次の下書きは別の軸。時刻だけで成立する理由なので、通常の実行条件の検査からは外しておく
+// — 混ざると「入力が実行条件になった」のか「20時を過ぎた」のかが assert から区別できない。
 process.env.OPEN_ZERO_DAILY_HOUR = "99"
 
 const digestAt = (ms: number) =>
@@ -35,7 +35,7 @@ const digestAt = (ms: number) =>
     return yield* att.digest(ms)
   })
 
-test("何も無ければ起きない — 前回の実働から24時間経つと1回だけ起きる", async () => {
+test("何も無ければidleになる — 前回の実働から24時間経つと定期確認が実行条件になる", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -45,22 +45,22 @@ test("何も無ければ起きない — 前回の実働から24時間経つと1
     )
 
     const quiet = await h.run(digestAt(T0 + hours(1)))
-    assert.equal(quiet.idle, true, "1時間後は起きない")
+    assert.equal(quiet.idle, true, "1時間後は実行条件がない")
 
     const later = await h.run(digestAt(T0 + hours(IDLE_WAKE_HOURS + 1)))
-    assert.equal(later.idle, false, "24時間経てば経過時間だけで起きる")
+    assert.equal(later.idle, false, "24時間経てば経過時間だけで実行条件になる")
     assert.match(later.reasons.join(), /前回の実働/)
   })
 })
 
-test("自分が書いたもの(source=system)では起きない — 外から来た入力だけが起こす", async () => {
+test("source=systemは実行条件にしない — 外部入力だけを新着の実行条件にする", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
         const mem = yield* Memory
         yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
-        // tick が自分の結果を残す。これで起きたら自家中毒。
+        // tick が自身の結果を残す。これが実行条件になると自己再実行ループになる。
         yield* mem.remember({ source: "system", content: { tick: "動いた" } })
       }),
     )
@@ -81,7 +81,7 @@ test("自分が書いたもの(source=system)では起きない — 外から来
   })
 })
 
-test("commit は tick 自身の書き込みも消費する(同じ入力で二度起きない)", async () => {
+test("commit は tick 自身の書き込みも消費する(同じ入力を二度実行条件にしない)", async () => {
   await withHarness(async (h) => {
     const before = await h.run(
       Effect.gen(function* () {
@@ -103,12 +103,12 @@ test("commit は tick 自身の書き込みも消費する(同じ入力で二度
         return yield* att.digest(T0 + hours(0.1))
       }),
     )
-    assert.equal(after.newEvents.length, 0, "見た入力でもう一度起きない")
+    assert.equal(after.newEvents.length, 0, "処理済みの入力を再び実行条件にしない")
     assert.equal(after.idle, true)
   })
 })
 
-test("自分が動く番の watch は実行条件になる — ただし冷却中は実行しない", async () => {
+test("自分が動く番の watch は実行条件になる — ただしcooldown中は実行しない", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -119,7 +119,7 @@ test("自分が動く番の watch は実行条件になる — ただし冷却�
     )
 
     const early = await h.run(digestAt(T0 + hours(ACTIVE_COOLDOWN_HOURS - 0.1)))
-    assert.equal(early.idle, true, "冷却中は同じ watch で起きない")
+    assert.equal(early.idle, true, "cooldown中は同じ watch を実行条件にしない")
 
     const cooled = await h.run(digestAt(T0 + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
     assert.equal(cooled.idle, false)
@@ -132,11 +132,11 @@ test("自分が動く番の watch は実行条件になる — ただし冷却�
  * 実行しても静かにならない、を止める(docs/adr/0013)。
  *
  * `next_move_owner = 'famulus'` は無条件で滞留に入るので、`last_activity_at` を更新しても
- * 自分持ちの watch は次の tick でまた上がってくる。実際にそうなり、モデルは最終走行時刻を
+ * 自分持ちの watch は次の tick で再び処理対象になる。実際にそうなり、モデルは最終走行時刻を
  * subject の文字列に書き込んで登録し直すという回避をしていた(列が無いのでそうするしかない)。
- * 止めるのは経過日数ではなく、実行した時刻と冷却。
+ * 止めるのは経過日数ではなく、実行した時刻とcooldown。
  */
-test("一周回した watch は、冷却が明けるまでプロンプトに載らない", async () => {
+test("一周回した watch は、cooldownが終了するまでプロンプトに載らない", async () => {
   await withHarness(async (h) => {
     const id = await h.run(
       Effect.gen(function* () {
@@ -162,10 +162,10 @@ test("一周回した watch は、冷却が明けるまでプロンプトに載�
     )
 
     const quiet = await h.run(digestAt(T0 + hours(12)))
-    assert.equal(quiet.stalled.length, 0, "回した直後は上がらない")
+    assert.equal(quiet.stalled.length, 0, "実行直後は掲載対象にならない")
 
     const back = await h.run(digestAt(T0 + hours(26)))
-    assert.equal(back.stalled.length, 1, "冷却が明ければまた上がる")
+    assert.equal(back.stalled.length, 1, "cooldownが終了すれば再び掲載対象になる")
     assert.equal(back.stalled[0]?.run_count, 1)
     // 前回の結果を渡さないと、毎回まっさらな状態で同じ一覧を読み直すことになる。
     assert.equal(back.stalled[0]?.last_result, "8/8 時点で新着に該当なし")
@@ -193,7 +193,7 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
     )
 
     // 動きがあった(touchWatch)と、自分が実行した(ranWatch)は別のこと。
-    // 相手から返事が来ても自分は何もしていないので、冷却は始まらない。
+    // 相手から返事が来ても自分は何もしていないので、cooldownは始まらない。
     await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
@@ -202,7 +202,7 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
     )
 
     const mid = await h.run(digestAt(T0 + hours(48)))
-    assert.equal(mid.stalled.length, 0, "動きがあっても、回した冷却は明けない")
+    assert.equal(mid.stalled.length, 0, "外部の更新があっても、cooldownは短縮しない")
     const [w] = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
@@ -213,14 +213,14 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
     assert.equal(w?.dueInHours, 120.5)
 
     const after = await h.run(digestAt(T0 + hours(169)))
-    assert.equal(after.stalled.length, 1, "週が明ければ上がる")
+    assert.equal(after.stalled.length, 1, "設定したcooldownが終了すれば掲載対象になる")
   })
 })
 
 /**
  * 後から記録する道。これが無いと記録そのものが見送られる。
  *
- * 数時間前に実行したものを「今」で記録すると、冷却がその分だけ後ろへずれる。実際に、
+ * 数時間前に実行したものを「今」で記録すると、cooldownがその分だけ後ろへずれる。実際に、
  * ずれるくらいなら呼ばないという判断が起き(端から端まで走らせた回で観測)、watch はプロンプトに残った。
  */
 test("回した時刻を渡して後から記録できる。先の時刻は取らない", async () => {
@@ -244,9 +244,9 @@ test("回した時刻を渡して後から記録できる。先の時刻は取�
     const before = await h.run(digestAt(T0 + hours(23)))
     assert.equal(before.stalled.length, 0)
     const after = await h.run(digestAt(T0 + hours(25)))
-    assert.equal(after.stalled.length, 1, "冷却は回した時刻から数える(記録の分だけ後ろへずれない)")
+    assert.equal(after.stalled.length, 1, "cooldownは実行時刻から数える(記録の分だけ後ろへずれない)")
 
-    // 未来は取らない。取ると、一度の記録で好きなだけ冷却を伸ばせる。
+    // 未来は取らない。取ると、一度の記録で好きなだけcooldownを伸ばせる。
     const far = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
@@ -279,9 +279,9 @@ test("存在しないwatchの実行記録に失敗してもtransactionを残さ�
 })
 
 /**
- * 順番の検査。冷却は「いつまで載せないか」しか決めない。
+ * 順番の検査。cooldownは「いつまで載せないか」しか決めない。
  *
- * 同じ日に登録した watch は同じ日に明けるので、明けたぶんが全部そろって上がる。実測では6件が
+ * 同じ日に登録した watch は同時刻に再提示可能になり、対象がすべて同時に掲載候補になる。実測では6件が
  * 毎回そろって載り、tick はその一覧を読み直すだけで1件も回さずに終えていた(34回中20回が
  * 呼び出し2回以下)。載せる数に上限を置き、載せた順に後ろへ送る — docs/adr/0028。
  */
@@ -294,14 +294,14 @@ const sixWatches = Effect.gen(function* () {
   return ids
 })
 
-test("冷却が同時に明けても、1回に載せるのは上限まで。残りは件数だけ渡す", async () => {
+test("複数のcooldownが同時に終了しても、1回に載せるのは上限まで。残りは件数だけ渡す", async () => {
   await withHarness(async (h) => {
     const ids = await h.run(sixWatches)
     const d = await h.run(digestAt(T0 + hours(2)))
 
     assert.equal(d.stalled.length, STALLED_SHOW_MAX, "載せるのは上限まで")
-    assert.equal(d.stalledHeld, 6 - STALLED_SHOW_MAX, "残りは落とすのではなく預かる")
-    // 実行条件は冷却が終了した全件の数。載せた数で書くと、6件待っている回と3件しかない回が
+    assert.equal(d.stalledHeld, 6 - STALLED_SHOW_MAX, "上限を超えた分は除外せず次回分として保持する")
+    // 実行条件はcooldownが終了した全件の数。載せた数で書くと、6件待っている回と3件しかない回が
     // 同じ文になり、後ろに何件溜まっているかがどこにも出なくなる。
     assert.match(d.reasons.join(), /watch が 6 件/)
     assert.deepEqual(
@@ -376,7 +376,7 @@ test("自分が動く番でない watch は、一定期間更新が無いとき�
   })
 })
 
-test("未解決の問いは実行条件にしない(自分では解消できないので永久に実行することになる)", async () => {
+test("未解決の問いは実行条件にしない(自分では解消できず無限再実行になるため)", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -386,13 +386,13 @@ test("未解決の問いは実行条件にしない(自分では解消できな�
       }),
     )
     const d = await h.run(digestAt(T0 + hours(4)))
-    assert.equal(d.idle, true, "問いがあるだけでは起きない")
-    assert.equal(d.openQuestions.length, 1, "起きたときの材料としては渡す")
+    assert.equal(d.idle, true, "問いがあるだけでは実行条件にならない")
+    assert.equal(d.openQuestions.length, 1, "別の実行条件が成立したときの入力には含める")
   })
 })
 
 /**
- * 問いの出口。答えるのと取り下げるのは別で、片方しか無いとプロンプトが一方通行で埋まる。
+ * 問いの終了経路。回答と取り下げは別で、片方しか無いと不要な問いが上限を占有し続ける。
  * 実行条件ではないぶん見落としやすいが、上限に達したプロンプトは新しい問いを除外する — そこまで見る。
  */
 test("答えないまま取り下げられる。理由は残る", async () => {
@@ -452,7 +452,7 @@ test("不要になった未解決質問が上限を占有すると新しい問�
   })
 })
 
-test("同じ理由で起き続けると冷却が倍に伸びる。新しい入力が来れば元に戻る", async () => {
+test("同じ理由で実行が続くとcooldownが倍に伸びる。新しい入力が来れば元に戻る", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {
@@ -462,7 +462,7 @@ test("同じ理由で起き続けると冷却が倍に伸びる。新しい入�
       }),
     )
 
-    // 1.5h → 3h → 6h … と伸びる。毎回「冷却が明けたので起きて、動いても解消しなかった」を再現する。
+    // 1.5h → 3h → 6h … と伸びる。毎回「cooldown後に再実行したが理由は解消しなかった」を再現する。
     let at = T0
     const seen: number[] = []
     for (let i = 0; i < 8; i++) {
@@ -483,11 +483,11 @@ test("同じ理由で起き続けると冷却が倍に伸びる。新しい入�
 
     const capped = await h.run(digestAt(at + hours(MAX_COOLDOWN_HOURS)))
     assert.equal(capped.cooldownHours, MAX_COOLDOWN_HOURS)
-    assert.equal(capped.idle, false, "伸びきっても1日1回は起きる")
+    assert.equal(capped.idle, false, "上限に達しても1日1回は実行条件になる")
     const tooSoon = await h.run(digestAt(at + hours(MAX_COOLDOWN_HOURS - 1)))
-    assert.equal(tooSoon.idle, true, "上限に達したら24時間は起きない")
+    assert.equal(tooSoon.idle, true, "上限に達したら24時間は再実行しない")
 
-    // 外から入力が来たら後退は解ける。
+    // 外部入力が来たら指数バックオフをリセットする。
     const fresh = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
@@ -498,11 +498,11 @@ test("同じ理由で起き続けると冷却が倍に伸びる。新しい入�
         return d
       }),
     )
-    assert.equal(fresh.idle, false, "冷却中でも新しい入力なら起きる")
-    assert.equal(fresh.reasonKey, "", "新しい入力で起きたら後退は数え直し")
+    assert.equal(fresh.idle, false, "cooldown中でも新しい入力は実行条件になる")
+    assert.equal(fresh.reasonKey, "", "新しい入力では指数バックオフを最初から数え直す")
 
     const back = await h.run(digestAt(at + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
-    assert.equal(back.cooldownHours, ACTIVE_COOLDOWN_HOURS, "冷却が最短に戻っている")
+    assert.equal(back.cooldownHours, ACTIVE_COOLDOWN_HOURS, "cooldownが最短に戻っている")
   })
 })
 
@@ -527,8 +527,8 @@ test("期限が近い承認待ちは実行条件になる", async () => {
     assert.equal(d.pending.length, 1)
     assert.match(d.reasons.join(), /期限が近い承認待ち/)
 
-    // 結論を1回書いたら、同じ件では起こさない。承認を出せるのはユーザーだけなので、
-    // ここで起きても進むのは「あなた待ちです」をもう一度書くところまで(docs/adr/0028)。
+    // 結論を1回書いたら、同じ件を実行条件にしない。承認を出せるのはユーザーだけなので、
+    // 再実行しても「あなた待ちです」をもう一度書くところまでしか進まない(docs/adr/0028)。
     await h.run(
       Effect.gen(function* () {
         const proposals = yield* Proposals
@@ -536,8 +536,8 @@ test("期限が近い承認待ちは実行条件になる", async () => {
       }),
     )
     const after = await h.run(digestAt(T0 + hours(8)))
-    assert.equal(after.idle, true, "結論を置いた提案では起きない")
-    // 一覧からは消さない。承認はまだ要るので、別件で起きた回のプロンプトには載る。
+    assert.equal(after.idle, true, "結論を置いた提案は実行条件にしない")
+    // 一覧からは消さない。承認はまだ要るので、別件の実行時にはプロンプトへ載る。
     assert.equal(after.pending.length, 1)
     assert.equal(after.pending[0]?.settled_note, "承認はユーザーしか出せない。こちらからは進まない。")
   })
@@ -576,7 +576,7 @@ test("断られた提案はプロンプトに載る — ただし実行条件に
       d.refused.map((r) => [r.summary, r.reason]),
       [["1 件目の用件", "希望日が経過した"]],
     )
-    // 済んだ話で起きても何も進まない。理由に数えると同じ却下で永久に起きる。
+    // 却下済みの提案を実行条件にしても処理は進まない。同じ却下による無限再実行を避ける。
     assert.equal(d.idle, true)
     assert.equal(d.reasons.length, 0)
   })
@@ -600,10 +600,10 @@ test("断られたぶんは新しい順に決めた数だけ — 古いものか
 })
 
 /**
- * 1日1本の下書き。回数がユーザーの集中の切断回数なので、日を跨ぐまで二度立たないことを固定する。
- * 冷却の外に出してあるのも意図的で、夕方に別件で動いた日に下書きが落ちないため。
+ * 1日1本の下書き。同日に下書き生成条件が二度成立しないことを固定する。
+ * cooldownの対象外にしてあるのは、夕方に別件を処理した日でも下書き生成を省略しないため。
  */
-test("下書きは決めた時刻から1日1回だけ立つ", async () => {
+test("下書き生成条件は決めた時刻から1日1回だけ成立する", async () => {
   const keep = process.env.OPEN_ZERO_DAILY_HOUR
   process.env.OPEN_ZERO_DAILY_HOUR = "17"
   try {
@@ -615,7 +615,7 @@ test("下書きは決めた時刻から1日1回だけ立つ", async () => {
         }),
       )
       const due = await h.run(digestAt(T0 + hours(0.5)))
-      assert.equal(due.draftDue, true, "時刻を過ぎたら冷却中でも立つ")
+      assert.equal(due.draftDue, true, "時刻を過ぎたらcooldown中でも成立する")
       assert.match(due.reasons.join(), /下書き/)
 
       await h.run(
@@ -625,18 +625,18 @@ test("下書きは決めた時刻から1日1回だけ立つ", async () => {
         }),
       )
       const done = await h.run(digestAt(T0 + hours(1)))
-      assert.equal(done.draftDue, false, "その日ぶんが済んでいれば二度は立たない")
+      assert.equal(done.draftDue, false, "その日ぶんが済んでいれば二度は成立しない")
       assert.equal(done.idle, true)
 
       const nextDay = await h.run(digestAt(T0 + hours(23)))
-      assert.equal(nextDay.draftDue, true, "日が変われば立ち直る")
+      assert.equal(nextDay.draftDue, true, "日が変われば再び成立する")
     })
   } finally {
     process.env.OPEN_ZERO_DAILY_HOUR = keep
   }
 })
 
-test("決めた時刻より前には立たない — その日の走行記録がまだ無い", async () => {
+test("決めた時刻より前は下書き生成条件が成立しない — その日の走行記録がまだ無い", async () => {
   const keep = process.env.OPEN_ZERO_DAILY_HOUR
   process.env.OPEN_ZERO_DAILY_HOUR = "23"
   try {
@@ -679,7 +679,7 @@ test("走っている最中に届いたぶんは既読にしない — 返さな
     )
     assert.equal(after.newEvents.length, 1, "見ていない入力は残る")
     assert.equal(after.newEvents[0]?.content, '"2本目"')
-    assert.equal(after.idle, false, "残っている限り次の tick が起きる")
+    assert.equal(after.idle, false, "未処理入力が残っている限り次の tick の実行条件になる")
   })
 })
 
