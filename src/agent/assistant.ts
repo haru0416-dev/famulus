@@ -485,11 +485,11 @@ function buildTools(state: TurnState) {
 
     /**
      * 承認待ちについて「今回できることは無い」を1回だけ書く道具。提案の状態は動かさない。
-     * `ran` と同じ形で、呼ばないと同じ件が期限まで毎回実行条件になる。
+     * `record_watch_run` と同じ形で、呼ばないと同じ件が期限まで毎回実行条件になる。
      */
-    settle: tool({
+    record_pending_conclusion: tool({
       description:
-        "返事待ちの提案について、今回できることが無いという結論を残す。**提案は取り下げられない** — 承認を出せるのはユーザーだけで、これは「自分の側では進まない」と記録するだけ。呼ぶとこの件は次回の実行条件から外れ、一覧には残り続ける。呼ばないと、この件がtickの実行条件に残り、同じ結論を書き直すことになる。状況が変わったら上書きしてよい。",
+        "返事待ちの提案について、今回できることが無いという結論を残す。**提案は取り下げられない** — 承認を出せるのはユーザーだけで、これは「自分の側では進まない」と記録するだけ。呼ぶとこの件は次回の実行条件から外れ、一覧には残り続ける。呼ばないと、この件が自動処理の実行条件に残り、同じ結論を書き直すことになる。状況が変わったら上書きしてよい。",
       inputSchema: vs(
         v.object({
           id: v.pipe(v.string(), v.description("提案の id(先頭8文字でよい)。")),
@@ -513,7 +513,7 @@ function buildTools(state: TurnState) {
     // これが無いと、cycle が実行されても参照対象が無く、毎回ゼロから考え直すことになる。
     watch: tool({
       description:
-        "決着していない件を継続確認項目(watch)として登録する。famulus(open-zero) が次に対応する未処理項目は次回の自律実行時、human(ユーザー) が次に対応する項目は一定期間更新が無いときに提示される。`ran` で対応結果を記録した後は、設定時間が経過すると再び提示される。**同じ件を登録し直さない** — 状態を確認するか open-zero 側の担当作業を進めたら ran を使う。",
+        "決着していない件を継続確認項目(watch)として登録する。famulus(open-zero) が次に対応する未処理項目は次回の自律実行時、human(ユーザー) が次に対応する項目は一定期間更新が無いときに提示される。`record_watch_run` で対応結果を記録した後は、設定時間が経過すると再び提示される。**同じ件を登録し直さない** — 状態を確認するか open-zero 側の担当作業を進めたら `record_watch_run` を使う。",
       inputSchema: vs(
         v.object({
           subject: v.pipe(
@@ -548,7 +548,7 @@ function buildTools(state: TurnState) {
         ),
     }),
 
-    ran: tool({
+    record_watch_run: tool({
       description:
         "継続確認項目(watch)の状態確認、または open-zero 側の担当作業の結果を記録する。**対応したら必ず呼ぶ** — 呼ばないと同じ項目が次回もプロンプトに載る。変化が無くても呼ぶ(変化なしも次回の判断材料になる)。result は次回対応の基準になるので、実施内容と結果を具体的に書く。**以前の対応結果を記録し忘れていたなら、そのときの時刻を `at` で渡して今から記録してよい** — 再提示待機時間は渡した時刻から数えるので、後ろへずれない。",
       inputSchema: vs(
@@ -1056,7 +1056,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
         return yield* mem.remember({
           kind: "observe",
           source: own ? "system" : "owner",
-          content: own ? { tickPrompt: text } : { said: text },
+          content: own ? { cyclePrompt: text } : { said: text },
           ...(own ? { text: "" } : {}),
           at: nowIso(),
         })

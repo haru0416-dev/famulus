@@ -339,7 +339,7 @@ test("索引に入れなかった行は検索に出ない — DB には残る", 
       Effect.gen(function* () {
         const mem = yield* Memory
         yield* mem.remember({ content: "面談は9時から" })
-        yield* mem.remember({ source: "system", content: { tickPrompt: "面談 面談 面談" }, text: "" })
+        yield* mem.remember({ source: "system", content: { cyclePrompt: "面談 面談 面談" }, text: "" })
         return { hits: yield* mem.recall("面談"), all: yield* mem.count }
       }),
     )

@@ -31,7 +31,7 @@ const cycleUnit = (): string => process.env.OPEN_ZERO_CYCLE_UNIT ?? "open-zero-c
 /**
  * 再起動を試すまでの最小間隔。クォータ枯渇や停止で cycle が即時終了したとき、未読は残るので
  * 毎回起動を試すことになる。30秒ごとにそれを行うと処理されない起動要求が積み上がる。
- * cycle が正常に終わった直後の未読には適用しない(下の `ran`)。
+ * cycle が正常に終わった直後の未読には適用しない(下の `completed`)。
  */
 const RETRY_MS = 180_000
 
@@ -79,8 +79,8 @@ async function poll(): Promise<string> {
       // cycle は見終えた行までしか cursor を進めない。`cycle:last` は completeCycle でしか進まないので、
       // クォータ枯渇や停止で処理されなかった回はここに入らず、RETRY_MS の側で間隔を空ける。
       const lastRaw = yield* db.meta("cycle:last")
-      const ran = !!lastRaw && !!wokeRaw && Date.parse(lastRaw) >= Date.parse(wokeRaw)
-      return { count: got, unread, wake: got > 0 || ran || since >= RETRY_MS }
+      const completed = !!lastRaw && !!wokeRaw && Date.parse(lastRaw) >= Date.parse(wokeRaw)
+      return { count: got, unread, wake: got > 0 || completed || since >= RETRY_MS }
     }),
   )
 

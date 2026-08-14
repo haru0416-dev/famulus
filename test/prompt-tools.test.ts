@@ -30,7 +30,7 @@ const NOT_TOOLS = new Set([
   "owner", // DB の列の値
   "source", // DB の列名(誰が書いたか)。keeper と dream が材料を絞るのに使う
   "completeCycle", // Attention の関数(cooldownの起点を進める側)。モデルからは呼べない
-  "at", // 道具の引数名(`ran` に渡す、実際に回した時刻)
+  "at", // 道具の引数名(`record_watch_run` に渡す、実際に回した時刻)
   "since", // keeper の引数名(この回の起点)。モデルには見えない
   "purpose", // 道具の引数名(`shell` に渡す、その workspace は何のための場所か)
   "signal", // respond() の引数名(呼ぶ側が締切で切るための AbortSignal)。モデルには見えない

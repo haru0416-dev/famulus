@@ -87,7 +87,7 @@ function renderWatchSection(d: CyclePlan): string | undefined {
           "",
         ]
       : []),
-    "状態を確認するか open-zero 側の担当作業を進めたら `ran` で結果を残す。**変化が無くても残す** — 呼ばないと次回も対応対象になる。",
+    "状態を確認するか open-zero 側の担当作業を進めたら `record_watch_run` で結果を残す。**変化が無くても残す** — 呼ばないと次回も対応対象になる。",
     "**以前対応した結果を記録し忘れているなら、そのときの時刻を `at` に渡して今記録する。**",
     "再提示待機時間はその時刻から数えるので後ろへずれない。件名に対応記録を書き込むのではなく、ここを使う。",
   ].join("\n")
@@ -104,10 +104,10 @@ function renderPendingSection(d: CyclePlan): string | undefined {
       return p.settled_note ? `${head}\n  前回: ${p.settled_note}` : head
     }),
     "",
-    "**今回できることが無いなら `settle` で一行残す。** 残すとこの件は次回の実行条件から外れる",
+    "**今回できることが無いなら `record_pending_conclusion` で一行残す。** 残すとこの件は次回の実行条件から外れる",
     "(一覧には残る — 承認はまだ要る)。呼ばないと、この件を理由に自動処理が毎回実行され、",
     "毎回同じ「あなた待ちです」を書き直すことになる。**前回の結論が既に載っているなら、",
-    "同じことをもう一度書かない。**状況が動いたときだけ `settle` を上書きする。",
+    "同じことをもう一度書かない。**状況が動いたときだけ `record_pending_conclusion` を上書きする。",
   ].join("\n")
 }
 
@@ -247,7 +247,7 @@ function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Works
         : d.stalled.length > 0
           ? [
               "**上の「対応対象の watch」から、この回で少なくとも1件に対応する。** human が次に動くものは状態を確認し、",
-              "famulus が次に動くものは自分の担当作業を進める。対応して `ran` に残せば、",
+              "famulus が次に動くものは自分の担当作業を進める。対応して `record_watch_run` に残せば、",
               "**変化が無い結果でもこの回の成果になる。** 一覧を眺めて終えた回だけが何も残さない。",
               "そのうえで**新しく仕事を作らない。** 用が無いのに watch を増やしたり提案を出したりしない。",
             ]
