@@ -87,6 +87,8 @@ export interface SessionRef {
 export interface Material {
   readonly ref: SessionRef
   readonly text: string
+  /** `said` の照合元。応答側に同じ文があっても根拠にしない。 */
+  readonly ownerText: string
   /** 選別の結果。生バイト → 残したバイト。 */
   readonly rawBytes: number
   readonly keptBytes: number
@@ -457,13 +459,14 @@ interface Digest {
 }
 
 /**
- * 引用の無い項目を落とす。スキーマの `required` は空文字を止めない。
+ * owner の原文から引けない項目を落とす。スキーマの `required` は空文字や捏造を止めない。
  *
  * 指示で頼むだけにすると、素材から引けなかった回に空の `said` を付けて形だけ通してくる。
  * 「引用できないものは残さない」を守るのはここ(モデルが提案し、こちら側が決定的に弾く)。
+ * 素材全体ではなく owner の発話だけに照合する。agent がユーザーの言葉を推測して書いていても根拠にはならない。
  */
-const quoted = <T extends { said?: unknown }>(xs: readonly T[] | undefined): T[] =>
-  (xs ?? []).filter((x) => typeof x.said === "string" && x.said.trim() !== "")
+const quoted = <T extends { said?: unknown }>(xs: readonly T[] | undefined, ownerText: string): T[] =>
+  (xs ?? []).filter((x) => typeof x.said === "string" && x.said !== "" && ownerText.includes(x.said))
 
 /**
  * 日本語の割合。0 に近いものは、日本語で探しても当たらない。
@@ -674,6 +677,10 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
         const m: Material = {
           ref: found.ref,
           text,
+          ownerText: found.turns
+            .filter((t) => t.who === "owner")
+            .map((t) => t.text)
+            .join("\n"),
           rawBytes: found.rawBytes,
           keptBytes: Buffer.byteLength(text),
         }
@@ -701,12 +708,12 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
           schema: DIGEST_SCHEMA,
         })
         const d = (out.structured ?? {}) as Partial<Digest>
-        // 引用の無い項目はここで落ちる。指示ではなくコードが弾く(quoted のコメント参照)。
+        // owner の原文から引けない項目はここで落ちる。指示ではなくコードが弾く(quoted のコメント参照)。
         const digest: Digest = {
           topic: d.topic ?? "",
-          decisions: quoted(d.decisions),
-          preferences: quoted(d.preferences),
-          corrections: quoted(d.corrections),
+          decisions: quoted(d.decisions, m.ownerText),
+          preferences: quoted(d.preferences, m.ownerText),
+          corrections: quoted(d.corrections, m.ownerText),
         }
         const text = render(digest, m.ref)
         const id = yield* mem.remember({

@@ -412,10 +412,10 @@ test("取り込みは1セッション1イベント — system が書いた impor
             { what: "予約は水曜18時", why: "ユーザーの希望", said: "歯医者の予約は水曜の18時にしたい" },
           ],
           preferences: [
-            { what: "予約の確認メールは本人宛てには送らない", said: "確認メールは送らなくていい" },
+            { what: "予約の確認メールは本人宛てには送らない", said: "確認メールは要らないって言ったよね" },
           ],
           corrections: [
-            { what: "確認メールを送ろうとしたのを止められた", said: "確認メールは送らなくていい" },
+            { what: "確認メールを送ろうとしたのを止められた", said: "確認メールは要らないって言ったよね" },
           ],
         },
       },
@@ -439,7 +439,7 @@ test("引用の無い好み・訂正は DB に入らない — 印象と本人�
       assert.equal(out.r?.digest.preferences.length, 1, "引用のあるものだけ残る")
       assert.equal(out.r?.digest.corrections.length, 0, "引用の無い訂正は落ちる")
       const text = String(out.row?.text)
-      assert.ok(text.includes("好み: 確認メールは送らない(「確認メールは送らなくていい」)"), text)
+      assert.ok(text.includes("好み: 確認メールは送らない(「確認メールは要らないって言ったよね」)"), text)
       assert.doesNotMatch(text, /丁寧な言い回しを好む/, "引用の無い項目は索引にも残らない")
     },
     [
@@ -449,11 +449,40 @@ test("引用の無い好み・訂正は DB に入らない — 印象と本人�
           topic: "歯医者の予約の調整",
           decisions: [],
           preferences: [
-            { what: "確認メールは送らない", said: "確認メールは送らなくていい" },
+            { what: "確認メールは送らない", said: "確認メールは要らないって言ったよね" },
             // モデルが素材から読み取った「印象」。引ける言葉が無いので残さない。
             { what: "丁寧な言い回しを好む", said: "  " },
           ],
           corrections: [{ what: "急かされるのを嫌う", said: "" }],
+        },
+      },
+    ],
+  )
+})
+
+test("owner の原文に無い引用は DB に入らない — agent の推測やモデルの捏造を根拠にしない", async () => {
+  await withHarness(
+    async (h) => {
+      const out = await h.run(
+        Effect.gen(function* () {
+          const intake = yield* Intake
+          const r = yield* intake.ingest(only(yield* intake.scan(10)))
+          return r?.digest
+        }),
+      )
+      assert.deepEqual(out?.preferences, [
+        { what: "確認メールは送らない", said: "確認メールは要らないって言ったよね" },
+      ])
+      assert.deepEqual(out?.corrections, [], "素材に無い文を引用の形にしても残らない")
+    },
+    [
+      {
+        text: "",
+        structured: {
+          topic: "歯医者の予約の調整",
+          decisions: [],
+          preferences: [{ what: "確認メールは送らない", said: "確認メールは要らないって言ったよね" }],
+          corrections: [{ what: "電話を避けたい", said: "電話では連絡しないでほしい" }],
         },
       },
     ],
@@ -528,7 +557,7 @@ test("取り込んだものは検索に出る — 自分の独り言より前、
           topic: "歯医者の予約の調整",
           decisions: [],
           preferences: [
-            { what: "予約の確認メールは本人宛てには送らない", said: "確認メールは送らなくていい" },
+            { what: "予約の確認メールは本人宛てには送らない", said: "確認メールは要らないって言ったよね" },
           ],
           corrections: [],
         },
