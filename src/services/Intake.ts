@@ -458,6 +458,8 @@ interface Digest {
   corrections: Quoted[]
 }
 
+const GRAPHEMES = new Intl.Segmenter("ja", { granularity: "grapheme" })
+
 /**
  * owner の原文から引けない項目を落とす。スキーマの `required` は空文字や捏造を止めない。
  *
@@ -472,11 +474,9 @@ const quoted = <T extends { said?: unknown }>(
   (xs ?? []).filter((x) => {
     if (typeof x.said !== "string") return false
     const said = x.said
+    const length = [...GRAPHEMES.segment(said)].length
     return (
-      said.length >= 4 &&
-      said.length <= 60 &&
-      said.trim() === said &&
-      ownerTurns.some((turn) => turn.includes(said))
+      length >= 4 && length <= 60 && said.trim() === said && ownerTurns.some((turn) => turn.includes(said))
     )
   })
 

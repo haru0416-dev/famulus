@@ -97,7 +97,7 @@ beforeAll(() => {
         "s1",
         "/home/haru/Project/demo",
         "2026-08-01T09:30:00.000Z",
-        "確認メールは要らないって言ったよね",
+        "確認メールは要らないって言ったよね。👍👍",
       ),
       said("失礼しました。確認メールの送付は止めます。"),
     ].join("\n"),
@@ -482,6 +482,7 @@ test("owner の原文に無い引用は DB に入らない — agent の推測�
           decisions: [],
           preferences: [{ what: "確認メールは送らない", said: "確認メールは要らないって言ったよね" }],
           corrections: [
+            { what: "絵文字2文字", said: "👍👍" },
             { what: "電話を避けたい", said: "電話では連絡しないでほしい" },
             { what: "確認メールは予約に不要", said: "要らない。\n確認メール" },
             { what: "長すぎる引用", said: LONG_ASK.repeat(2) },
