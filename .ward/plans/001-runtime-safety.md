@@ -1,0 +1,57 @@
+# 001 Runtime safety foundation
+
+Planned at `2ce2a2a`.
+
+## Why
+
+Configuration is read after imports in entrypoints while `DEFAULT_DB_PATH` is computed at module evaluation (`src/services/Db.ts:35`, `src/cycle.ts:20-41`). Numeric settings are parsed with unchecked `Number()`. The DB uses WAL but has no automated backup or restore rehearsal. Concurrent cycle execution is prevented only by systemd convention, not by a DB claim.
+
+## Scope
+
+In scope: `src/core/env.ts`, new typed config module, entrypoints, `src/services/Db.ts`, `src/db/*`, `src/services/Attention.ts`, `src/cycle.ts`, CLI status/maintenance, tests, deployment docs.
+
+Out of scope: Discord delivery semantics, research schema, external connectors.
+
+## Design
+
+- Load and validate config before service modules consume values.
+- Resolve data, workspace, and cache paths from repository/config root, never caller cwd.
+- Add additive `schema_migrations`; retain schema shape verification after migrations.
+- Add a `cycle_lease` row with owner, acquired_at, heartbeat_at, expires_at.
+- Add SQLite online backup, integrity checks, restore-to-temp verification, and retention.
+- Surface last successful backup, restore verification, lease holder, and config errors in `oz status`.
+
+Lease state: `free -> held -> released`; expired leases may be stolen transactionally. One process owns a lease token and only that token may renew or release it.
+
+## Steps
+
+1. Introduce a schema-validated `Config` value and remove module-level environment reads.
+2. Make every entrypoint call `loadEnv()` then construct `Config` before runtime layers.
+3. Add migration runner and migrate v4 to the next version without rebuilding data.
+4. Implement cycle lease claim, heartbeat, release, and expired-lease recovery.
+5. Implement `oz backup`, `oz restore --verify`, and `oz doctor` using SQLite backup APIs and integrity checks.
+6. Add tests for invalid numbers, cwd independence, migration idempotency, two-process lease contention, stale lease recovery, and restore verification.
+
+## Verification
+
+Run:
+
+```sh
+git diff --stat 2ce2a2a..HEAD -- src/core src/db src/services/Db.ts src/services/Attention.ts src/cycle.ts src/cli.ts test
+bun run gate
+bun run oz doctor
+```
+
+Expected: gate passes; invalid config exits before opening a DB; two concurrent cycle probes produce one lease owner; a restored temporary DB passes `integrity_check`, `foreign_key_check`, and schema verification.
+
+## Done criteria
+
+- No service reads process environment at module evaluation.
+- Starting from another cwd opens the configured DB, not a new relative DB.
+- Existing production data survives migration.
+- Concurrent cycle invocations cannot process the same plan.
+- Backup restoration is automatically tested, not merely written.
+
+## Stop conditions
+
+Stop if Bun's SQLite API cannot perform a WAL-safe online backup; select and document a canonical SQLite-supported alternative before continuing.
