@@ -484,6 +484,7 @@ test("owner の原文に無い引用は DB に入らない — agent の推測�
           corrections: [
             { what: "電話を避けたい", said: "電話では連絡しないでほしい" },
             { what: "確認メールは予約に不要", said: "要らない。\n確認メール" },
+            { what: "長すぎる引用", said: LONG_ASK.repeat(2) },
           ],
         },
       },

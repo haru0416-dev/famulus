@@ -405,7 +405,7 @@ function compress(turns: readonly Turn[]): string {
 const QUOTED = (what: string, said: string) =>
   v.object({
     what: v.pipe(v.string(), v.description(what)),
-    said: v.pipe(v.string(), v.maxLength(60), v.description(said)),
+    said: v.pipe(v.string(), v.description(said)),
   })
 
 const SAID = "根拠になった owner: 行からの**そのままの引用**(4〜60文字)。引けないなら項目ごと落とす"
@@ -430,7 +430,7 @@ const DIGEST_SCHEMA = rs(
         v.object({
           what: v.pipe(v.string(), v.description("ユーザーが何を決めたか")),
           why: v.pipe(v.string(), v.description("なぜそう決めたか。ログから読み取れなければ「不明」")),
-          said: v.pipe(v.string(), v.maxLength(60), v.description(SAID)),
+          said: v.pipe(v.string(), v.description(SAID)),
         }),
       ),
       v.description("ユーザーが選んだ・却下した・方針を定めたこと。相手側の成果報告は入れない。"),
@@ -472,7 +472,12 @@ const quoted = <T extends { said?: unknown }>(
   (xs ?? []).filter((x) => {
     if (typeof x.said !== "string") return false
     const said = x.said
-    return said.length >= 4 && said.trim() === said && ownerTurns.some((turn) => turn.includes(said))
+    return (
+      said.length >= 4 &&
+      said.length <= 60 &&
+      said.trim() === said &&
+      ownerTurns.some((turn) => turn.includes(said))
+    )
   })
 
 /**
