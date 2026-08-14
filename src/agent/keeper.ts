@@ -152,7 +152,7 @@ export const keep = (opts: {
       since === undefined ? [] : slots.filter((s) => s.updatedAt >= since).map((s) => s.slot),
     )
 
-    const out = yield* Effect.either(
+    const out = yield* Effect.result(
       runner.run({
         role: "structurer",
         kind: "keep",
@@ -162,9 +162,9 @@ export const keep = (opts: {
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
     )
-    if (out._tag === "Left") return `${tag}: 呼べなかった(${causeReason(out.left)})`
+    if (out._tag === "Failure") return `${tag}: 呼べなかった(${causeReason(out.failure)})`
 
-    const res = out.right.structured as { looked: string; values: KeptValue[] }
+    const res = out.success.structured as { looked: string; values: KeptValue[] }
     const grounded = keepGrounded(res.values, opts.material)
     const kept = grounded.filter((v) => !already.has(v.slot))
     const dropped = (res.values?.length ?? 0) - grounded.length

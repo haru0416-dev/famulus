@@ -20,7 +20,9 @@
  * 照合する側はまだ無い。今あるのは記録だけ。
  */
 import { createHash, randomUUID } from "node:crypto"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 import { Conflict, NotFound } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
@@ -96,8 +98,8 @@ export const payloadHash = (payload: string): string => createHash("sha256").upd
 /** 承認・却下を受け付ける状態。`deferred` は旧状態の行を決着させるために含める。 */
 const DECIDABLE: readonly ProposalStatus[] = ["proposed", "deferred"]
 
-export class Proposals extends Effect.Service<Proposals>()("Proposals", {
-  effect: Effect.gen(function* () {
+const makeProposals = () =>
+  Effect.gen(function* () {
     const db = yield* Db
 
     const create = (input: CreateInput) =>
@@ -264,5 +266,10 @@ export class Proposals extends Effect.Service<Proposals>()("Proposals", {
       db.get("SELECT * FROM approvals WHERE proposal_id = ?ORDER BY at DESC LIMIT 1", proposalId)
 
     return { create, get, list, expireDue, approve, deny, settle, approvalOf } as const
-  }),
-}) {}
+  })
+
+export class Proposals extends Context.Service<Proposals, Effect.Success<ReturnType<typeof makeProposals>>>()(
+  "Proposals",
+) {
+  static readonly layer = Layer.effect(Proposals, makeProposals())
+}

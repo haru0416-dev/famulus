@@ -13,7 +13,9 @@
  *
  * token / owner id が無ければ何もせず undefined を返す。tick を止めない。
  */
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 import type { DbFailed } from "../core/errors.ts"
 import { Db } from "./Db.ts"
 
@@ -158,8 +160,8 @@ const chunks = (text: string): string[] => {
   return out
 }
 
-export class Discord extends Effect.Service<Discord>()("Discord", {
-  effect: Effect.gen(function* () {
+const makeDiscord = () =>
+  Effect.gen(function* () {
     const db = yield* Db
 
     const call = (path: string, init?: RequestInit) =>
@@ -180,7 +182,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         Effect.flatMap((r) =>
           r.ok ? Effect.tryPromise(() => r.json() as Promise<T>) : Effect.succeed(undefined),
         ),
-        Effect.catchAll(() => Effect.succeed(undefined)),
+        Effect.catch(() => Effect.succeed(undefined)),
       )
 
     const meta = <T>(key: string, fallback: T): Effect.Effect<T, DbFailed> =>
@@ -209,7 +211,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         }).pipe(
           Effect.flatMap((r) => Effect.tryPromise(() => r.json() as Promise<{ id?: string }>)),
           Effect.map((j) => j.id),
-          Effect.catchAll(() => Effect.succeed(undefined)),
+          Effect.catch(() => Effect.succeed(undefined)),
         )
         if (opened) yield* db.setMeta("discord:dm", opened)
         return opened
@@ -258,7 +260,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
         }).pipe(
           Effect.flatMap((r) => Effect.tryPromise(() => r.json() as Promise<{ id?: string }>)),
           Effect.map((j) => j.id),
-          Effect.catchAll(() => Effect.succeed(undefined)),
+          Effect.catch(() => Effect.succeed(undefined)),
         )
         if (!made) return
         yield* db.setMeta(`discord:last:${made}`, made)
@@ -282,7 +284,7 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
           }).pipe(
             Effect.flatMap((r) => Effect.tryPromise(() => r.json() as Promise<{ id?: string }>)),
             Effect.map((j) => j.id),
-            Effect.catchAll(() => Effect.succeed(undefined)),
+            Effect.catch(() => Effect.succeed(undefined)),
           )
         }
         if (!last) return last
@@ -434,5 +436,10 @@ export class Discord extends Effect.Service<Discord>()("Discord", {
       })
 
     return { post, inbox, seen, configured, where } as const
-  }),
-}) {}
+  })
+
+export class Discord extends Context.Service<Discord, Effect.Success<ReturnType<typeof makeDiscord>>>()(
+  "Discord",
+) {
+  static readonly layer = Layer.effect(Discord, makeDiscord())
+}

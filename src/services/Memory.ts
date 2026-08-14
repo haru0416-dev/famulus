@@ -8,7 +8,9 @@
  * 溜まらない原因が API の摩擦なら、それは設計の側で消せる。
  */
 import { randomUUID } from "node:crypto"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 import { localStamp, nowIso } from "../core/time.ts"
 import { Db, type Row } from "./Db.ts"
 
@@ -175,8 +177,8 @@ function sanitizeFts(q: string): string {
   return q.replace(/["'*(){}:^-]/g, " ").trim()
 }
 
-export class Memory extends Effect.Service<Memory>()("Memory", {
-  effect: Effect.gen(function* () {
+const makeMemory = () =>
+  Effect.gen(function* () {
     const db = yield* Db
 
     /** イベントを1件追記し、FTS projection も同トランザクションで更新する。 */
@@ -470,5 +472,10 @@ export class Memory extends Effect.Service<Memory>()("Memory", {
       redact,
       count,
     } as const
-  }),
-}) {}
+  })
+
+export class Memory extends Context.Service<Memory, Effect.Success<ReturnType<typeof makeMemory>>>()(
+  "Memory",
+) {
+  static readonly layer = Layer.effect(Memory, makeMemory())
+}

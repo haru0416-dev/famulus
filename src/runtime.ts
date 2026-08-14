@@ -21,13 +21,13 @@ import { Proposals } from "./services/Proposals.ts"
 
 /** Db の上に載る素のサービス群。 */
 const services = Layer.mergeAll(
-  Governance.Default,
-  Memory.Default,
-  Ledger.Default,
-  Proposals.Default,
-  Attention.Default,
-  Intake.Default,
-  Discord.Default,
+  Governance.layer,
+  Memory.layer,
+  Ledger.layer,
+  Proposals.layer,
+  Attention.layer,
+  Intake.layer,
+  Discord.layer,
 )
 
 /**
@@ -90,7 +90,7 @@ export type AppServices =
 export function run<A, E>(effect: Effect.Effect<A, E, AppServices>, rt: AppRuntime = runtime()): Promise<A> {
   return rt.runPromise(
     effect.pipe(
-      Effect.catchAll((e) => (isRefusal(e) ? Effect.die(new RefusedError(e)) : Effect.fail(e))),
+      Effect.catch((e) => (isRefusal(e) ? Effect.die(new RefusedError(e)) : Effect.fail(e))),
     ) as Effect.Effect<A, E, AppServices>,
   )
 }

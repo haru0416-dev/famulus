@@ -276,7 +276,7 @@ const blocked = Effect.gen(function* () {
     })
     .pipe(
       Effect.as(undefined as string | undefined),
-      Effect.catchAll((e) => Effect.succeed(isRefusal(e) ? describeRefusal(e) : String(e))),
+      Effect.catch((e) => Effect.succeed(isRefusal(e) ? describeRefusal(e) : String(e))),
     )
 })
 

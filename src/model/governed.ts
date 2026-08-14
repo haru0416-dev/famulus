@@ -56,7 +56,7 @@ async function gate(model: string): Promise<void> {
         lane: lane(),
       })
       return undefined
-    }).pipe(Effect.catchAll((e) => Effect.succeed(e))),
+    }).pipe(Effect.catch((e) => Effect.succeed(e))),
   )
   if (refusal === undefined) return
   throw new Error(isRefusal(refusal) ? describeRefusal(refusal) : `${refusal._tag}: ${refusal.message}`)
@@ -106,7 +106,7 @@ async function account(
         provenance: { pool: poolForModel(model), notionalUsd, via: "agent" },
         at,
       })
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
   )
 }
 
@@ -119,7 +119,7 @@ async function noteFailure(e: unknown): Promise<void> {
     Effect.gen(function* () {
       const gov = yield* Governance
       yield* gov.noteQuota(quota, at, Date.now())
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
   )
 }
 

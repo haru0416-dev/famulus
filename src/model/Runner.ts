@@ -109,7 +109,7 @@ export interface RunnerApi {
   readonly run: (req: RunnerRequest) => Effect.Effect<RunnerResult, RunError>
 }
 
-export class Runner extends Context.Tag("Runner")<Runner, RunnerApi>() {}
+export class Runner extends Context.Service<Runner, RunnerApi>()("Runner") {}
 
 /**
  * precheck → run → クォータ状態の更新 → 会計 の共通処理。実行本体だけ差し替えられるようにしてある

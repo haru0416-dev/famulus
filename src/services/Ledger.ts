@@ -10,7 +10,9 @@
  * モデルを呼んだ run は必ず role を入れる(入れないと日次上限を適用できない)。
  */
 import { randomUUID } from "node:crypto"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 import { dayRange, monthRange, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 import type { Meter } from "./Governance.ts"
@@ -43,8 +45,8 @@ export interface RecordInput {
   readonly at?: string
 }
 
-export class Ledger extends Effect.Service<Ledger>()("Ledger", {
-  effect: Effect.gen(function* () {
+const makeLedger = () =>
+  Effect.gen(function* () {
     const db = yield* Db
 
     const record = (input: RecordInput) =>
@@ -109,5 +111,10 @@ export class Ledger extends Effect.Service<Ledger>()("Ledger", {
       })
 
     return { record, today } as const
-  }),
-}) {}
+  })
+
+export class Ledger extends Context.Service<Ledger, Effect.Success<ReturnType<typeof makeLedger>>>()(
+  "Ledger",
+) {
+  static readonly layer = Layer.effect(Ledger, makeLedger())
+}

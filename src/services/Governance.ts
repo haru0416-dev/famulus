@@ -10,7 +10,9 @@
  * `meter === "quota"` の run は限界費用 0 なので USD 層を飛ばす。ここを飛ばさないと
  * 「窓が空いているのに金額で止まる」= サブスクを買った意味を捨てることになる。
  */
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 import { DailyRunLimit, EgressDenied, Halt, QuotaCooldown, UnpricedModel } from "../core/errors.ts"
 import { dayRange, monthRange } from "../core/time.ts"
 import { Db } from "./Db.ts"
@@ -126,8 +128,8 @@ export interface PrecheckOptions {
   readonly lane?: Lane
 }
 
-export class Governance extends Effect.Service<Governance>()("Governance", {
-  effect: Effect.gen(function* () {
+const makeGovernance = () =>
+  Effect.gen(function* () {
     const db = yield* Db
 
     const readHalt = Effect.gen(function* () {
@@ -299,5 +301,11 @@ export class Governance extends Effect.Service<Governance>()("Governance", {
       precheck,
       checkEgress,
     } as const
-  }),
-}) {}
+  })
+
+export class Governance extends Context.Service<
+  Governance,
+  Effect.Success<ReturnType<typeof makeGovernance>>
+>()("Governance") {
+  static readonly layer = Layer.effect(Governance, makeGovernance())
+}

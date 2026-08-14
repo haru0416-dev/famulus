@@ -920,7 +920,7 @@ function buildTools(state: TurnState) {
             if (left < REVIEW_MS + RUN_RESERVE_MS) {
               return `出していない。精査に回す時間が残っていない(${remainingLabel()})。本文は捨てずに、次の回で最初に呼ぶ。`
             }
-            const review = yield* Effect.either(
+            const review = yield* Effect.result(
               runner.run({
                 role: "reviewer",
                 kind: "draft-review",
@@ -935,11 +935,11 @@ function buildTools(state: TurnState) {
             )
             // レビュー呼び出しが失敗したときに検査なしで通すと、クォータ利用不能の日だけ無検査の文が公開候補として出る。
             // 日付のフラグはまだ立てていないので、次の回でそのまま出し直せる。
-            if (review._tag === "Left") {
-              return `出していない。精査役を呼べなかった(${causeReason(review.left)})。本文は捨てずに、次の回でもう一度呼ぶ。`
+            if (review._tag === "Failure") {
+              return `出していない。精査役を呼べなかった(${causeReason(review.failure)})。本文は捨てずに、次の回でもう一度呼ぶ。`
             }
             // 精査役が「出す」と言ったときだけ出す(docs/adr/0031、判断そのものは drafting.ts)。
-            const outcome = reviewOutcome(review.right.structured as Review | undefined, title, body)
+            const outcome = reviewOutcome(review.success.structured as Review | undefined, title, body)
             if (!outcome.post) return outcome.text
             const id = yield* discord.post({
               text: `**${title}**\n\n${body}\n\n---\n根拠: ${basis}`,

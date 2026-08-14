@@ -24,7 +24,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 import * as v from "valibot"
 import { nowIso } from "../core/time.ts"
 import { Runner } from "../model/Runner.ts"
@@ -600,8 +602,8 @@ function sections(text: string): { title: string; body: string }[] {
   return out
 }
 
-export class Intake extends Effect.Service<Intake>()("Intake", {
-  effect: Effect.gen(function* () {
+const makeIntake = () =>
+  Effect.gen(function* () {
     const db = yield* Db
     const mem = yield* Memory
 
@@ -822,6 +824,10 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
     })
 
     return { scan, material, ingest, ingestMemories, ingestedIds } as const
-  }),
-  dependencies: [Memory.Default],
-}) {}
+  })
+
+export class Intake extends Context.Service<Intake, Effect.Success<ReturnType<typeof makeIntake>>>()(
+  "Intake",
+) {
+  static readonly layer = Layer.effect(Intake, makeIntake()).pipe(Layer.provide(Memory.layer))
+}

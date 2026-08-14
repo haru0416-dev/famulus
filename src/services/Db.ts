@@ -37,13 +37,13 @@ export interface DbApi {
   readonly setMeta: (key: string, value: string) => Effect.Effect<unknown, DbFailed>
 }
 
-export class Db extends Context.Tag("Db")<Db, DbApi>() {}
+export class Db extends Context.Service<Db, DbApi>()("Db") {}
 
 export const DEFAULT_DB_PATH = process.env.OPEN_ZERO_DB ?? ".data/open-zero.db"
 
 /** 接続を開き、スキーマを適用する。`:memory:` を渡せばプロセス内だけの本物の SQLite。 */
 export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed> =>
-  Layer.scoped(
+  Layer.effect(
     Db,
     Effect.gen(function* () {
       const db = yield* Effect.acquireRelease(

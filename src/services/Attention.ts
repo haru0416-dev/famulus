@@ -8,7 +8,9 @@
  * `digest` はモデルを呼ばない。モデル実行が必要かを SQL だけで決める。
  */
 import { randomUUID } from "node:crypto"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 import { Conflict, NotFound } from "../core/errors.ts"
 import { dayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
@@ -165,8 +167,8 @@ export const dailyDraftHour = (): number => Number(process.env.OPEN_ZERO_DAILY_H
 
 const daysBetween = (fromIso: string, toMs: number) => (toMs - Date.parse(fromIso)) / 86_400_000
 
-export class Attention extends Effect.Service<Attention>()("Attention", {
-  effect: Effect.gen(function* () {
+const makeAttention = () =>
+  Effect.gen(function* () {
     const db = yield* Db
 
     // ── watch(watchlist)
@@ -543,5 +545,10 @@ export class Attention extends Effect.Service<Attention>()("Attention", {
       digest,
       commit,
     } as const
-  }),
-}) {}
+  })
+
+export class Attention extends Context.Service<Attention, Effect.Success<ReturnType<typeof makeAttention>>>()(
+  "Attention",
+) {
+  static readonly layer = Layer.effect(Attention, makeAttention())
+}

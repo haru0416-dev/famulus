@@ -488,7 +488,7 @@ const program = (argv: readonly string[]) =>
           // 途中で枠が閉じたら、そこで止めて済んだぶんは残す。
           // 全体を1トランザクションにすると、最後の1件のクォータ枯渇でそれまで取り込んだぶんまで消える。
           const r = yield* intake.ingest(ref).pipe(
-            Effect.catchAll((e) => {
+            Effect.catch((e) => {
               stopped = isRefusal(e) ? describeRefusal(e) : describe(e)
               return Effect.succeed(undefined)
             }),

@@ -24,7 +24,7 @@
     "@ai-sdk/provider": "^4.0.7",
     "@valibot/to-json-schema": "^1.7.1",
     "ai": "^7.0.62",
-    "effect": "^3.22.1",
+    "effect": "4.0.0-rc.109",
     "valibot": "^1.4.2"
   },
   "devDependencies": {
