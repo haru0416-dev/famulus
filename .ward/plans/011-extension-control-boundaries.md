@@ -112,6 +112,7 @@ For generic publishing, a research/evidence `method` Skill and an article/report
 ```ts
 interface ExecutionRoot {
   readonly id: string
+  readonly owner: ExecutionOwnerRef
   readonly scopeId: string
   readonly rootBudgetId: string
   readonly deadlineAt: string
@@ -129,7 +130,7 @@ interface ExecutionScope {
   readonly credentialScopes: readonly string[]
   readonly workspaces: readonly string[]
   readonly dataScope: DataScope
-  readonly budget: { readonly modelCalls: number; readonly toolCalls: number; readonly tokens?: number }
+  readonly budget: { readonly modelCalls: number; readonly toolCalls: number; readonly tokens?: number; readonly cost?: number }
   readonly deadlineAt: string
   readonly maxDelegationDepth: number
   readonly rootBudgetId: string
@@ -176,6 +177,7 @@ interface ChildDelegationRequest {
 interface ToolBinding {
   readonly toolId: string
   readonly policy: CoreToolPolicyRef
+  readonly implementation: CoreToolImplementationRef
 }
 ```
 
@@ -193,14 +195,15 @@ loop authority = root scope
 - `prepareStep` may reduce tools, model budget, and remaining steps; it cannot add authority.
 - Model switching revalidates provider-native/injected tools against the same scope.
 - Sibling/child loops start with fresh messages and do not inherit SkillPlan, credentials, network, workspace, delivery, or grants unless each item is explicitly compiled into their scope.
-- Domain template expansion reserves from the root ledger within the template ceiling. Child delegation atomically sub-reserves from the parent reservation's unconsumed amount; parent consumption plus all descendant reservations cannot exceed the parent reservation.
-- Batch creation atomically seals stable loop slot IDs, LoopSpecs, generation leases, and all model/tool/token reservations from one root budget ledger. Sibling reservations plus existing consumption cannot exceed the root ceiling; unused reservation is returned on terminal state.
-- Loop identity is unique `(root_id, stable_slot_id)`. `taskInputHash` is the canonical serialization of every typed input that can change the result, including objective/query/transform/prediction/falsifier; `inputHash` is the canonical ordered list of artifact IDs plus content digests. Reapplying the same slot with the same task/input/LoopTemplateRef/Profile/SkillPlan/ResultContract hashes returns the existing LoopSpec; any changed hash is a Conflict rather than a second worker.
+- Domain template expansion reserves model/tool/token/cost vectors from the root ledger within the template ceiling. Child delegation atomically sub-reserves every vector dimension from the parent reservation's unconsumed amount; parent consumption plus all descendant reservations cannot exceed the parent reservation in any dimension.
+- Batch creation atomically seals stable loop slot IDs, LoopSpecs, generation leases, and all model-call/tool-call/token/cost reservations from one root budget ledger. Sibling reservations plus existing consumption cannot exceed the root ceiling in any vector; unused reservation is returned on terminal state.
+- ExecutionRoot identity is unique by immutable `(owner.kind, owner.id)`. A domain row, root row, owner binding, coordinator reserve, and first batch reservation are created atomically; retry returns the same root, never an unbound replacement.
+- Loop identity is unique `(root_id, stable_slot_id)`. `taskInputHash` is the canonical serialization of every typed input that can change the result, including objective/query/transform/prediction/falsifier; `inputHash` is the canonical ordered list of artifact IDs plus content digests. A canonical semantic hash covers every compiled LoopSpec field except row identity/runtime timestamps, including template, Profile, SkillPlan, task/input hashes, prompt/model policy, ordered policy+implementation ToolBindings, scope, ResultContract, budget/stop policy, and format version. Reapplying the same slot with the same semantic hash returns the existing LoopSpec; any changed compiled field is a Conflict rather than a second worker.
 - Models receive bound tool IDs, never credentials or bearer scope objects.
 - The executor receives no SOUL, Skill, conversation, or model-controlled policy.
-- Phase A ToolBindings pin one code-owned CoreToolPolicyRef. Skill tool hints are ignored for authority.
+- Phase A ToolBindings pin one code-owned CoreToolPolicyRef and the exact CoreToolImplementationRef. A resumed loop must resolve those immutable bytes or stop; it never substitutes the current implementation for the pinned generation. Skill tool hints are ignored for authority.
 
-After plan 007, the compiler adds a separate Capability binding variant containing one `CapabilityRef` and one live `CapabilityGrantRef`. Scope origin/method/workspace/data lists remain additional ceilings only; authorization never unions dimensions from different grants. One binding must satisfy the complete normalized resource request.
+After plan 007, the compiler adds a separate Capability binding variant containing one `CapabilityRef`, one immutable `CapabilityImplementationRef`, and one live `CapabilityGrantRef`. Scope origin/method/workspace/data lists remain additional ceilings only; authorization never unions dimensions from different grants. One binding must satisfy the complete normalized resource request, and resume cannot substitute a newer implementation.
 
 ## Loop ownership
 
@@ -272,7 +275,7 @@ Phase A is the initially authorized implementation scope:
 4. Add generation-pinned built-in Skill registry and host-owned `method/presentation` SkillPlan compiler. Start with explicit single-Skill plans, then one measured orthogonal pair such as research method plus publication form.
 5. Use plan 009 ExecutionRoot/LoopSpec and budget primitives. Keep the current interactive parent as an ordinary effect-bound `interactive` profile. Add a separate tool-less coordinator profile only for domains that need bounded fan-out; neither profile is privileged or permanently alive.
 6. Convert researcher/digger delegation into stable-slot loop requests with fresh messages, decreasing scope/depth, explicit SkillPlan, typed result contract, and all-or-none sibling budget reservation. Start at concurrency 1, then enable bounded parallel `all-settled` execution.
-7. Add generic generation lease/reference APIs and live-loop writers for the transitive closure of ProfileRef, each SkillRef, CompositionPolicyRef, LoopTemplateRef, every CoreToolPolicyRef, ResultContractRef, and LoopSpec format/hash. Lease an offered template before coordinator execution and persist canonical SkillPlan/template bytes/hash. Prove an update cannot replace/remove a template between offer, batch creation, and terminal loop. Plan 006 adds the campaign-checkpoint writer and its retention test.
+7. Add generic generation lease/reference APIs and live-loop writers for the transitive closure of ProfileRef, each SkillRef, CompositionPolicyRef, LoopTemplateRef, every CoreToolPolicyRef and CoreToolImplementationRef, ResultContractRef, and LoopSpec format/hash. Lease an offered template before coordinator execution and persist canonical SkillPlan/template/tool-binding bytes/hash. Prove an update cannot replace/remove a template or tool implementation between offer, batch creation, checkpoint resume, and terminal loop. Plan 006 adds the campaign-checkpoint writer and its retention test.
 Phase B is gated, depends on plans 007 and 010 where noted, and is not implemented speculatively:
 
 8. After plan 010, import plugin Skills into the same registry, explicit-selection-only, `exclusive` by default, and initially restricted to leaf worker loops.
@@ -288,9 +291,9 @@ bun run gate
 bun run test:extension-boundaries-e2e
 ```
 
-Phase A required cases: exhaustive production ProfileRef coverage including `scout`, autonomous parent, and direct agents; zero/one Skill and allowed method+presentation pair; same-slot/exclusive conflict rejection; profile/composition/Skill/template/CoreToolPolicy/ResultContract generation update during pinned offers/sibling loops; Skill tool-hint non-union; provider-native external-I/O tool rejection; allowed no-I/O structured-output primitive; journaled replay-safe public Search through a core policy binding; stable-slot same-hash reuse and changed task input/artifact/template/policy conflict; TemplateExpansionRequest cannot choose authority; ChildDelegationRequest requires/intersects parent scope and sub-reserves parent remaining budget; parent consumption plus descendants cannot exceed parent reservation; atomic sibling budget exhaustion; coordinator reserve preservation; bounded concurrency; one sibling crash with terminal sibling retained; all-settled stable result order; child scope/depth/credential/network non-inheritance; and parallel effect intent without direct execution. Prompt-conflict fixtures are quality evaluations, not proof of authority or publication safety.
+Phase A required cases: exhaustive production ProfileRef coverage including `scout`, autonomous parent, and direct agents; zero/one Skill and allowed method+presentation pair; same-slot/exclusive conflict rejection; profile/composition/Skill/template/CoreToolPolicy/CoreToolImplementation/ResultContract generation update during pinned offers/sibling loops and checkpoint resume; missing pinned implementation stops rather than substituting current code; Skill tool-hint non-union; provider-native external-I/O tool rejection; allowed no-I/O structured-output primitive; journaled replay-safe public Search through a core policy+implementation binding; stable-slot same-hash reuse and changed task input/artifact/template/policy/implementation conflict; TemplateExpansionRequest cannot choose authority; ChildDelegationRequest requires/intersects parent scope and atomically sub-reserves parent remaining model/tool/token/cost vectors; parent consumption plus descendants cannot exceed any parent vector; atomic sibling budget/cost exhaustion; coordinator reserve preservation; bounded concurrency; one sibling crash with terminal sibling retained; all-settled stable result order; child scope/depth/credential/network non-inheritance; and parallel effect intent without direct execution. Prompt-conflict fixtures are quality evaluations, not proof of authority or publication safety.
 
-When Phase B is justified, add cross-grant origin/credential laundering denial, credentialed/arbitrary read routed to Operation, raw MCP denied before grant/Operation creation, plugin leaf re-delegation rejection, plugin hook/loop request rejection, one domain-selected idempotent operation-classified commit action, router none/valid/unknown ref and malicious package summary exclusion; crash between domain mutation/event emission, observer atomic request/ack, duplicate delivery, self-recursive causation, revoked grant between event and handler, and observer crash.
+When Phase B is justified, add credentialed/arbitrary read routed to Operation, raw MCP denied before grant/Operation creation, plugin leaf re-delegation rejection, plugin hook/loop request rejection, one domain-selected idempotent operation-classified commit action, router none/valid/unknown ref and malicious package summary exclusion; crash between domain mutation/event emission, observer atomic request/ack, duplicate delivery, self-recursive causation, revoked grant between event and handler, and observer crash.
 
 ## Done criteria
 

@@ -17,20 +17,20 @@ Out of scope: Discord delivery semantics, research schema, external connectors.
 - Load and validate config before service modules consume values.
 - Resolve data, workspace, and cache paths from repository/config root, never caller cwd.
 - Add additive `schema_migrations`; retain schema shape verification after migrations.
-- Add a `cycle_lease` row with owner, acquired_at, heartbeat_at, expires_at.
+- Add a `cycle_lease` row with owner process incarnation (host/boot ID, PID, process start identity), monotonic fence token, acquired_at, heartbeat_at, expires_at.
 - Add SQLite online backup, integrity checks, restore-to-temp verification, and retention.
 - Surface last successful backup, restore verification, lease holder, and config errors in `oz status`.
 
-Lease state: `free -> held -> released`; expired leases may be stolen transactionally. One process owns a lease token and only that token may renew or release it.
+Lease state: `free -> held -> released`; expiry alone never authorizes steal. Recovery first proves the exact old process incarnation is dead (or supervisor kill-and-join succeeds), then transactionally increments the monotonic fence and claims it. If liveness is uncertain or the old process is still alive/paused, recovery refuses to steal. One process owns a lease token and only that owner+fence may renew, commit cycle plan transitions, hand work to an effect gateway, or release it; stale fences fail compare-and-swap.
 
 ## Steps
 
 1. Introduce a schema-validated `Config` value and remove module-level environment reads.
 2. Make every entrypoint call `loadEnv()` then construct `Config` before runtime layers.
 3. Add migration runner and migrate v4 to the next version without rebuilding data.
-4. Implement cycle lease claim, heartbeat, release, and expired-lease recovery.
+4. Implement cycle lease claim, heartbeat, release, process-incarnation liveness checks, kill-and-join recovery where supported, monotonic fencing, and expired-lease recovery that refuses uncertain/live owners. Check the current fence before every durable plan transition and before handing work to model/tool/Delivery gateways; later plans add their own per-attempt fences rather than weakening this root fence.
 5. Implement `oz backup`, `oz restore --verify`, and `oz doctor` using SQLite backup APIs and integrity checks.
-6. Add tests for invalid numbers, cwd independence, migration idempotency, two-process lease contention, stale lease recovery, and restore verification.
+6. Add tests for invalid numbers, cwd independence, migration idempotency, two-process lease contention, paused live owner past expiry refusing steal, dead process incarnation recovery, PID reuse/start-identity mismatch, stale owner commit/effect-handoff fence rejection, and restore verification.
 
 ## Verification
 
@@ -42,7 +42,7 @@ bun run gate
 bun run oz doctor
 ```
 
-Expected: gate passes; invalid config exits before opening a DB; two concurrent cycle probes produce one lease owner; a restored temporary DB passes `integrity_check`, `foreign_key_check`, and schema verification.
+Expected: gate passes; invalid config exits before opening a DB; two concurrent cycle probes produce one lease owner; an expired but live owner cannot be replaced; a dead owner can be replaced with a higher fence and its stale writes are rejected; a restored temporary DB passes `integrity_check`, `foreign_key_check`, and schema verification.
 
 ## Done criteria
 
@@ -50,6 +50,7 @@ Expected: gate passes; invalid config exits before opening a DB; two concurrent 
 - Starting from another cwd opens the configured DB, not a new relative DB.
 - Existing production data survives migration.
 - Concurrent cycle invocations cannot process the same plan.
+- Lease expiry cannot create split-brain: takeover requires proven old-incarnation death and stale fences cannot commit or hand off effects.
 - Backup restoration is automatically tested, not merely written.
 
 ## Stop conditions

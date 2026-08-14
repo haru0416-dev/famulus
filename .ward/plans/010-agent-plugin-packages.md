@@ -48,7 +48,7 @@ Persist only with the first production reader, writer, CLI, and tests:
 - supported schema version
 - immutable install root and separate data root
 - discovered components, quarantined probe results, and diagnostics
-- grants bound to component/server/tool, input/output-schema hashes, Capability/adapter version, credential scope, and package digest
+- grants bound to component/server/tool, immutable CapabilityImplementationRef/code digest, input/output-schema hashes, Capability/adapter version, credential scope, and package digest
 - revoked/disabled state and timestamps
 - generation leases from active consumers: this plan owns Operations/live sessions, plan 011 Phase A owns live-loop refs, plan 006 owns campaign checkpoints, and plan 011's gated observer phase owns handler requests
 
@@ -63,9 +63,9 @@ Manifest `version` is display/update-candidate metadata only. Existing approved 
 5. Import valid Skills as generation-pinned instruction candidates with package provenance. Plan 011 owns selection and turn composition. Loading a Skill never expands tools, budget, network, credentials, or approval scope.
 6. Import MCP entries as disabled provider candidates. Remote origins, redirects, and credential scopes require local configuration; package header/env values are not a secret mechanism.
 7. Use plan 007's quarantined non-LLM probe to connect/initialize/list capabilities. A probe cannot call tools, and failure never enables a candidate.
-8. Bind enabled components to local grants. Any package digest, executable, MCP config, input/output tool schema, adapter, credential scope, or effect classification change invalidates the affected grant.
+8. Bind enabled components to local grants and immutable CapabilityImplementationRefs. Any package digest, executable, MCP config, host adapter code digest, input/output tool schema, adapter, credential scope, or effect classification change invalidates the affected grant.
 9. Route only host-owned, replay-safe read adapters with enforceable origin/method/data constraints inline through restricted profiles. Raw remote MCP tools stay `unknown` and disabled even when described as reads; they cannot receive a grant or create an Operation until a host-owned effect-specific adapter defines effects, resources, schemas, execution, and recovery. Known write/share/money/deploy adapters route through Operations; a missing adapter leaves the candidate discovered but disabled.
-10. Implement generation-based update, capability diff, rollback, disable, and revocation. Keep a generation while any consumer-owned reference exists: Operations/sessions here, live loops in plan 011 Phase A, campaign checkpoints in plan 006, and handler requests in the gated observer phase. Recheck revocation when claiming work and immediately before external I/O; close sessions, kill processes/containers, revoke credential leases, and block egress on revocation. Revocation forbids new I/O but may retain read-only package bytes required by a pinned non-effectful consumer.
+10. Implement generation-based update, capability/implementation diff, rollback, disable, and revocation. Keep package and host-adapter implementation generations while any consumer-owned reference exists: Operations/sessions here, live loops in plan 011 Phase A, campaign checkpoints in plan 006, and handler requests in the gated observer phase. Recheck revocation when claiming work and immediately before external I/O; close sessions, kill processes/containers, revoke credential leases, and block egress on revocation. Revocation forbids new I/O but may retain read-only package bytes required by a pinned non-effectful consumer.
 11. Add marketplace/source acquisition only after local-directory and pinned-repository installs pass the same inspection and rollback tests. Do not invent a registry protocol before the standard defines one or a concrete source requires it.
 
 ## Runtime isolation
@@ -86,7 +86,7 @@ bun run gate
 bun run test:plugins-e2e
 ```
 
-Fixtures must cover a minimal plugin, Skills plus MCP, unknown top-level manifest fields, fatal field errors, unsupported schema, missing optional component locations, symlink escape, archive traversal, component-level failure isolation, disabled-by-default install, no install-time execution, Skill grant non-escalation, forbidden code load from `PLUGIN_DATA`, quarantined probe, probe tool-call denial, raw MCP grant/Operation denial, MCP schema drift, same-schema remote misbehavior remaining a trust risk, update commit crash, startup reconciliation, generation retained by a nonterminal Operation/session, update diff, rollback, revocation with live session, read-only package retention after revocation, `PLUGIN_DATA` preservation, and an effectful MCP tool blocked before Operation creation.
+Fixtures must cover a minimal plugin, Skills plus MCP, unknown top-level manifest fields, fatal field errors, unsupported schema, missing optional component locations, symlink escape, archive traversal, component-level failure isolation, disabled-by-default install, no install-time execution, Skill grant non-escalation, forbidden code load from `PLUGIN_DATA`, quarantined probe, probe tool-call denial, raw MCP grant/Operation denial, MCP schema drift, same-schema remote misbehavior remaining a trust risk, update commit crash, startup reconciliation, package and host-adapter implementation generations retained by a nonterminal Operation/session, same version with changed code digest invalidation, update diff, rollback, revocation with live session, read-only package retention after revocation, `PLUGIN_DATA` preservation, and an effectful MCP tool blocked before Operation creation.
 
 ## Done criteria
 
@@ -100,4 +100,4 @@ Fixtures must cover a minimal plugin, Skills plus MCP, unknown top-level manifes
 
 ## Stop conditions
 
-Stop if implementation requires changing the portable schema or assigning security semantics to client extensions. Stop if an Operation cannot pin package digest, adapter version, MCP configuration, input/output tool schemas, and credential scope. Stop if stdio startup can reach host/network/secrets before its sandbox profile is proven. Stop if marketplace work starts defining a private registry protocol without a concrete interoperable consumer.
+Stop if implementation requires changing the portable schema or assigning security semantics to client extensions. Stop if an Operation cannot pin package digest, immutable host-adapter implementation digest, adapter version, MCP configuration, input/output tool schemas, and credential scope. Stop if stdio startup can reach host/network/secrets before its sandbox profile is proven. Stop if marketplace work starts defining a private registry protocol without a concrete interoperable consumer.

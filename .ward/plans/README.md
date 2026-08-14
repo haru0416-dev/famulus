@@ -45,7 +45,7 @@ Shared invariants, not a shared state machine:
 - every effective model-visible tool, including provider-injected/native tools, has a local effect classification; unclassified tools are unavailable
 - network egress, user notification, and arbitrary command execution are effects even when sandboxed or first-party
 - provider-executed external-I/O tools are unavailable in governed runs, including read/search tools, because local policy cannot journal before their I/O; no-I/O protocol features such as structured response formatting remain allowed
-- before plan 007, only existing host-owned tools classified by generation-pinned CoreToolPolicy and invocation journal may perform effects; adding a new effect path is forbidden
+- before plan 007, only existing host-owned tools bound to generation-pinned CoreToolPolicy and exact CoreToolImplementation references plus the invocation journal may perform effects; adding a new effect path or substituting a newer implementation during resume is forbidden
 
 ## AI SDK boundary
 
