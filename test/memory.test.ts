@@ -284,6 +284,19 @@ test("system 由来の記録はシステム記録と表示する", async () => {
   })
 })
 
+test("未検証のシステム記録は recall でも区別する", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ source: "system", taint: true, content: "外部コードの出力" })
+        return renderRecall(yield* mem.recall("外部コード"))
+      }),
+    )
+    assert.match(out, /システム記録\(未検証\)/)
+  })
+})
+
 test("belief は必ず belief イベントを根拠に持つ(resolved_from の FK)", async () => {
   await withHarness(async (h) => {
     const out = await h.run(

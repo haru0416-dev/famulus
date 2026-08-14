@@ -112,7 +112,9 @@ export function renderRecall(rows: readonly EventRow[], perRow = 180): string {
             ? // 由来が要約であることを隠さない。ユーザーが直接そう言った1行と混ぜて読ませない。
               "取り込み"
             : r.source === "system"
-              ? "システム記録"
+              ? r.taint === 1
+                ? "システム記録(未検証)"
+                : "システム記録"
               : r.source
       const body = (r.text && r.text.length > 0 ? r.text : safeText(r.content)).replace(/\s+/g, " ").trim()
       const shown = body.length > perRow ? `${body.slice(0, perRow)}…` : body

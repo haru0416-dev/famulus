@@ -96,6 +96,9 @@ export interface UntrustedBlock {
   readonly content: string
 }
 
+const fenceAttr = (s: string): string => JSON.stringify(s.replace(/<<</g, "\\u003c\\u003c\\u003c"))
+const fenceContent = (s: string): string => s.replace(/<<</g, "\\u003c\\u003c\\u003c")
+
 /**
  * 不信データを境界マーカーで分離する。フレーズ検知にしない —
  * 文字列フィルタは書き換えられた言い回しで破られる。
@@ -106,7 +109,7 @@ export function buildFencedPrompt(ownerInstruction: string, blocks: readonly Unt
   const fenced = blocks
     .map(
       (b) =>
-        `<<<EXTERNAL source=${b.source} label=${b.label}>>>\n${b.content}\n<<<END EXTERNAL source=${b.source}>>>`,
+        `<<<EXTERNAL source=${fenceAttr(b.source)} label=${fenceAttr(b.label)}>>>\n${fenceContent(b.content)}\n<<<END EXTERNAL>>>`,
     )
     .join("\n\n")
   return `${FENCE_DIRECTIVE}\n\n${fenced}\n\n---\n【あなたへの指示(信頼できる owner から)】\n${ownerInstruction}`
