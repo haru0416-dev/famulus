@@ -393,28 +393,21 @@ function buildTools(state: TurnState) {
     // ── 記録。エージェントが DB へ保存し、後のターンで検索する。
     remember: tool({
       description:
-        "覚えておくべきことを DB に1件追記する。追記のみで、後から書き換えも削除もできない(訂正は新しい追記で行う)。",
+        "調査結果や判断過程をシステム記録として DB に1件追記する。追記のみで、後から書き換えも削除もできない" +
+        "(訂正は新しい追記で行う)。ユーザーについての確定値を作る道具ではない。",
       inputSchema: vs(
         v.object({
           content: v.pipe(v.string(), v.description("覚える内容。一文で。")),
-          slot: v.optional(
-            v.pipe(
-              v.string(),
-              v.description("確定した事実として名前を付ける場合のキー(例: 'dentist.next_appt')。"),
-            ),
-          ),
         }),
       ),
-      execute: async ({ content, slot }) =>
+      execute: async ({ content }) =>
         run(
           Effect.gen(function* () {
             const mem = yield* Memory
             // この道具の書き手はモデル自身なので source は system。
             // owner は Discord / Intake から取り込んだユーザー発言に限る。
-            const id = slot
-              ? yield* mem.believe(slot, content)
-              : yield* mem.remember({ kind: "observe", source: "system", content })
-            return slot ? `確定事実 '${slot}' を保存した(event ${id})` : `記録した(event ${id})`
+            const id = yield* mem.remember({ kind: "observe", source: "system", content })
+            return `記録した(event ${id})`
           }),
         ),
     }),

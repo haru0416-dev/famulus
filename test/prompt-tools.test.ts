@@ -83,3 +83,9 @@ test("免除表に道具の名前を入れて検査を素通しさせていな�
     assert.ok(!tools.has(word), `${word} は実在する道具なので免除表に要らない`)
   }
 })
+
+test("親 Agent の remember は確定値を直接書かない", () => {
+  const src = read("src/agent/assistant.ts")
+  const remember = src.slice(src.indexOf("remember: tool({"), src.indexOf("recall: recallTool(state)"))
+  assert.doesNotMatch(remember, /mem\.believe|\bslot\b/, "確定値は引用照合を通す keeper だけが書く")
+})
