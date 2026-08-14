@@ -15,9 +15,12 @@
 import { createInterface } from "node:readline/promises"
 import * as Effect from "effect/Effect"
 import { createAssistant } from "./agent/assistant.ts"
+import { KEEP_MS, keep } from "./agent/keeper.ts"
 import { loadEnv } from "./core/env.ts"
+import { causeReason } from "./core/errors.ts"
 import { run, runtime } from "./runtime.ts"
 import { Attention } from "./services/Attention.ts"
+import { Memory } from "./services/Memory.ts"
 
 loadEnv()
 
@@ -67,6 +70,20 @@ try {
 
     if (turn.text) console.log(`\n${turn.text}\n`)
     if (turn.cutOff) console.log(`(止まった: ${turn.cutOff})\n`)
+
+    // 対話の入口でも締めの keeper を通す。tick だけに置くと、REPL で明言された値が
+    // 確定記憶へ上がらない。返信は先に表示し、補完処理の待ち時間を利用者へ負わせない。
+    if (!turn.cutOff) {
+      const kept = await run(
+        keep({ material: `owner: ${line}`, signal: AbortSignal.timeout(KEEP_MS) }),
+      ).catch((e: unknown) => `keeper: 落ちた(${causeReason(e)})`)
+      await run(
+        Effect.gen(function* () {
+          const mem = yield* Memory
+          yield* mem.remember({ source: "system", content: { keeper: kept }, text: "" })
+        }),
+      ).catch(() => {})
+    }
 
     // 既読位置はターンごとに進める。進めないと、いま自分で答えた入力が
     // 次の tick で「まだ見ていない入力」として上がり、同じ話にもう一度起きる。

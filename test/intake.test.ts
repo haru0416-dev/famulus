@@ -423,7 +423,7 @@ test("取り込みは1セッション1イベント — system が書いた impor
   )
 })
 
-test("引用の無い好み・訂正は DB に入らない — 印象と本人の言葉を混ぜない", async () => {
+test("owner から引けない好み・訂正は DB に入らない — 印象と本人の言葉を混ぜない", async () => {
   await withHarness(
     async (h) => {
       const out = await h.run(
@@ -435,9 +435,8 @@ test("引用の無い好み・訂正は DB に入らない — 印象と本人�
           return { r, row: yield* db.get("SELECT text FROM events_fts WHERE event_id = ?", r?.id ?? "") }
         }),
       )
-      // スキーマの required は空文字を止めない。弾くのはこちら側。
-      assert.equal(out.r?.digest.preferences.length, 1, "引用のあるものだけ残る")
-      assert.equal(out.r?.digest.corrections.length, 0, "引用の無い訂正は落ちる")
+      assert.equal(out.r?.digest.preferences.length, 1, "原文から引けるものだけ残る")
+      assert.equal(out.r?.digest.corrections.length, 0, "原文から引けない訂正は落ちる")
       const text = String(out.row?.text)
       assert.ok(text.includes("好み: 確認メールは送らない(「確認メールは要らないって言ったよね」)"), text)
       assert.doesNotMatch(text, /丁寧な言い回しを好む/, "引用の無い項目は索引にも残らない")
@@ -450,10 +449,10 @@ test("引用の無い好み・訂正は DB に入らない — 印象と本人�
           decisions: [],
           preferences: [
             { what: "確認メールは送らない", said: "確認メールは要らないって言ったよね" },
-            // モデルが素材から読み取った「印象」。引ける言葉が無いので残さない。
-            { what: "丁寧な言い回しを好む", said: "  " },
+            // モデルが素材から読み取った「印象」。原文に無い文を引用欄へ置いても残さない。
+            { what: "丁寧な言い回しを好む", said: "丁寧な言い回しを好むと話した" },
           ],
-          corrections: [{ what: "急かされるのを嫌う", said: "" }],
+          corrections: [{ what: "急かされるのを嫌う", said: "急かされるのを嫌うと話した" }],
         },
       },
     ],

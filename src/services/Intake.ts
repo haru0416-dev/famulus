@@ -405,10 +405,10 @@ function compress(turns: readonly Turn[]): string {
 const QUOTED = (what: string, said: string) =>
   v.object({
     what: v.pipe(v.string(), v.description(what)),
-    said: v.pipe(v.string(), v.description(said)),
+    said: v.pipe(v.string(), v.minLength(4), v.maxLength(60), v.description(said)),
   })
 
-const SAID = "根拠になった owner: 行からの**そのままの引用**(20〜60文字)。引けないなら項目ごと落とす"
+const SAID = "根拠になった owner: 行からの**そのままの引用**(4〜60文字)。引けないなら項目ごと落とす"
 
 /**
  * 抽出させる形。散文で返させると DB に入れる段で結局こちらが読み解くことになる。
@@ -430,7 +430,7 @@ const DIGEST_SCHEMA = rs(
         v.object({
           what: v.pipe(v.string(), v.description("ユーザーが何を決めたか")),
           why: v.pipe(v.string(), v.description("なぜそう決めたか。ログから読み取れなければ「不明」")),
-          said: v.pipe(v.string(), v.description(SAID)),
+          said: v.pipe(v.string(), v.minLength(4), v.maxLength(60), v.description(SAID)),
         }),
       ),
       v.description("ユーザーが選んだ・却下した・方針を定めたこと。相手側の成果報告は入れない。"),
@@ -466,7 +466,9 @@ interface Digest {
  * 素材全体ではなく owner の発話だけに照合する。agent がユーザーの言葉を推測して書いていても根拠にはならない。
  */
 const quoted = <T extends { said?: unknown }>(xs: readonly T[] | undefined, ownerText: string): T[] =>
-  (xs ?? []).filter((x) => typeof x.said === "string" && x.said !== "" && ownerText.includes(x.said))
+  (xs ?? []).filter(
+    (x) => typeof x.said === "string" && x.said.trim() === x.said && ownerText.includes(x.said),
+  )
 
 /**
  * 日本語の割合。0 に近いものは、日本語で探しても当たらない。
