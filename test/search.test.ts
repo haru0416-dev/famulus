@@ -9,8 +9,9 @@
  * 項の外側にある欄も含む)。TZ は import より先に差す(`time.ts` が読み込み時に確定する)。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
+import fc from "fast-check"
+import { test } from "vitest"
 
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
 // `OPEN_ZERO_TZ` は `new Date()` には届かない。帯の付いていない日付
@@ -31,6 +32,23 @@ const parse = (source: string, body: unknown) => {
   assert.ok(hits, `${source} という先が無い`)
   return hits
 }
+
+test("検索エンジン構文を落とす処理は何度通しても結果が変わらない", () => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom("site", "inurl", "intitle", "filetype", "ext"),
+      fc.stringMatching(/^[a-z0-9.-]{1,30}$/),
+      fc.stringMatching(/^[a-z0-9]{1,30}$/),
+      fc.stringMatching(/^[a-z0-9]{1,30}$/),
+      (qualifier, value, before, after) => {
+        const once = plainQuery(`${before} ${qualifier}:${value} ${after}`)
+        assert.equal(once, `${before} ${after}`)
+        assert.equal(plainQuery(once), once)
+      },
+    ),
+    { numRuns: 1_000 },
+  )
+})
 
 test("zenn — path から URL を組み、いいねを目印にする", () => {
   const hits = parse("zenn", {

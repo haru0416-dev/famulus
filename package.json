@@ -8,9 +8,10 @@
     "bun": ">=1.3"
   },
   "scripts": {
-    "gate": "tsc --noEmit && biome check . && bun test test/",
+    "gate": "tsc --noEmit && biome check . && bun run test",
     "typecheck": "tsc --noEmit",
-    "test": "bun test test/",
+    "test": "bunx --bun vitest run",
+    "test:watch": "bunx --bun vitest",
     "lint": "biome check .",
     "fmt": "biome check --write .",
     "agent": "bun src/chat.ts",
@@ -29,6 +30,8 @@
     "@biomejs/biome": "^2.5.2",
     "@types/bun": "^1.3.14",
     "@types/node": "^24.0.0",
-    "typescript": "^7.0.2"
+    "fast-check": "^4.9.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }

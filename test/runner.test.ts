@@ -3,9 +3,9 @@
  * Stub は precheck・枠の計上・会計の骨格を本番と共有しているので、ここで通る配線は本番でも同じ。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
+import { test } from "vitest"
 import { callClaude } from "../src/model/claude-cli.ts"
 import { parseCodexAuth, quotaFromHeaders } from "../src/model/codex-responses.ts"
 import { needsResubmit } from "../src/model/language-model.ts"

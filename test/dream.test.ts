@@ -6,9 +6,9 @@
  * 同じ材料を毎晩読み直さないこと。混ざると確定値が汚れ、読み直すと履歴が寿命1日の行で埋まる。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
+import { test } from "vitest"
 
 // 回す時刻の判定はユーザーの時計で切る。TZ はモジュール読み込み時に確定するので、import より先に差す。
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"

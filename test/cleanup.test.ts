@@ -5,12 +5,12 @@
  * 見るのは「残すべきものが残るか」で、消えるほうは1件ずつ数える。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import * as Effect from "effect/Effect"
+import { test } from "vitest"
 
 // 回す時刻の判定はユーザーの時計で切る。TZ はモジュール読み込み時に確定するので、import より先に差す。
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"

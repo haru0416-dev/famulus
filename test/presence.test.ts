@@ -7,11 +7,11 @@
  */
 
 import { Database } from "bun:sqlite"
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { test } from "vitest"
 import { presence, stateLine } from "../src/presence.ts"
 
 /** 表示に要る列だけの DB を1つ作る。本物の migrations は通さない — 読む側の形しか要らない。 */

@@ -6,9 +6,9 @@
  * 「何を呼んだか」「何行増えたか」が出ること、そしてその2つが食い違ったときに食い違って見えること。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
+import { test } from "vitest"
 import { logPost, readJournal, renderJournal, runs, tally } from "../src/journal.ts"
 import { Db } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"

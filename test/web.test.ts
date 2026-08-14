@@ -6,8 +6,9 @@
  * 名前解決を伴う判定は外に依存するので、ここでは解決を要らない形の判定だけを対象にする。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
+import fc from "fast-check"
+import { test } from "vitest"
 import {
   decodeBody,
   deniedByName,
@@ -55,6 +56,17 @@ test("内側を指す名前は解決する前に落とす", () => {
   assert.ok(deniedByName("gitlab.internal"))
   assert.ok(deniedByName("127.0.0.1"))
   assert.equal(deniedByName("example.com"), undefined)
+})
+
+test("内側を指す名前の拒否は大文字小文字に依存しない", () => {
+  fc.assert(
+    fc.property(fc.stringMatching(/^[a-z0-9]{1,20}$/), fc.boolean(), (label, upper) => {
+      const host = `${label}.local`
+      const varied = upper ? host.toUpperCase() : host
+      assert.equal(deniedByName(varied), `内側の名前: ${host}`)
+    }),
+    { numRuns: 500 },
+  )
 })
 
 test("http と非 http は取らない", async () => {
@@ -515,6 +527,19 @@ test("大きいページは固定長の範囲を順に読まず、語で検索�
 
   // 大文字小文字は区別しない。件数は当たった数をそのまま返す。
   assert.equal(findIn("Effect EFFECT effect", "effect").count, 3)
+})
+
+test("全文検索は大文字小文字を問わず、重ならない一致を同じ件数で数える", () => {
+  fc.assert(
+    fc.property(fc.array(fc.constantFrom("ab", "AB", "aB", "Ab"), { maxLength: 199 }), (matches) => {
+      const full = matches.length === 0 ? "xyz" : matches.join("!")
+      const hit = findIn(full, "ab")
+      assert.equal(hit.count, matches.length)
+      assert.equal(hit.text === "", matches.length === 0)
+      assert.ok(hit.text.length <= 12_000)
+    }),
+    { numRuns: 500 },
+  )
 })
 
 test("find は取りに行かず、覚えた全文の中を探す", async () => {

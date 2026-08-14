@@ -7,11 +7,11 @@
  * valibot のスキーマは JSON Schema を作るためだけに使われていた(docs/adr/0025)。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import type { LanguageModelV4, LanguageModelV4StreamPart } from "@ai-sdk/provider"
 import { Experimental_Agent as Agent, stepCountIs, tool } from "ai"
 import * as v from "valibot"
+import { test } from "vitest"
 import { vs } from "../src/model/schema.ts"
 
 /** 1回目に `input` をそのまま返し、2回目で終わる偽モデル。 */

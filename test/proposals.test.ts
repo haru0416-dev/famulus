@@ -3,9 +3,9 @@
  * 実行の仕組みはまだ無いので、ここで守るのは「実行の前提条件が揃っているか」だけ。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
+import { test } from "vitest"
 import { Db } from "../src/services/Db.ts"
 import { type CreateInput, Proposals, payloadHash } from "../src/services/Proposals.ts"
 import { withHarness } from "./helpers.ts"

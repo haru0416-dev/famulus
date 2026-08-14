@@ -7,12 +7,12 @@
  * 素材の段階で直接確かめる。要約の中身ではなく素材の境界が検査対象。
  */
 
-import { afterAll, beforeAll, test } from "bun:test"
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import * as Effect from "effect/Effect"
+import { afterAll, beforeAll, test } from "vitest"
 import { Db } from "../src/services/Db.ts"
 import { Intake } from "../src/services/Intake.ts"
 import { Memory, renderRecall } from "../src/services/Memory.ts"

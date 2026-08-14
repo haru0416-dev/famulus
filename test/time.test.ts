@@ -3,8 +3,9 @@
  * TZ はモジュール読み込み時に確定するので、import より先に環境変数を差す。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
+import fc from "fast-check"
+import { test } from "vitest"
 
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
 const { TZ, dayRange, localStamp, monthRange } = await import("../src/core/time.ts")
@@ -49,4 +50,27 @@ test("範囲は半開区間で、隣の日と重ならない", () => {
   const b = dayRange("2026-08-09T02:00:00Z")
   assert.equal(a.endIso, b.startIso)
   assert.notEqual(a.key, b.key)
+})
+
+test("任意の instant は、そのローカル日・月の半開区間に一度だけ収まる", () => {
+  fc.assert(
+    fc.property(
+      fc.date({
+        min: new Date("2000-01-01T00:00:00Z"),
+        max: new Date("2035-12-31T23:59:59Z"),
+        noInvalidDate: true,
+      }),
+      (at) => {
+        const atIso = at.toISOString()
+        for (const range of [dayRange(atIso), monthRange(atIso)]) {
+          assert.ok(Date.parse(range.startIso) <= at.getTime())
+          assert.ok(at.getTime() < Date.parse(range.endIso))
+          assert.ok(Date.parse(range.startIso) < Date.parse(range.endIso))
+        }
+        assert.equal(dayRange(atIso).key, localStamp(atIso, false))
+        assert.ok(localStamp(atIso).startsWith(`${monthRange(atIso).key}-`))
+      },
+    ),
+    { numRuns: 1_000 },
+  )
 })

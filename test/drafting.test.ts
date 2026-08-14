@@ -6,8 +6,8 @@
  * 実際に1本目の下書きに何が混ざったかを標本にしてある。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
+import { test } from "vitest"
 import {
   findFigures,
   findLeaks,

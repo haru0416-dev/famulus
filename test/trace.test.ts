@@ -6,8 +6,8 @@
  * 実際に tick を1回走らせたとき、`task` を2つ投げた記録が読めなかった。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
+import { test } from "vitest"
 import { traceOf } from "../src/model/trace.ts"
 
 test("発話が長くても道具呼び出しが残る", () => {

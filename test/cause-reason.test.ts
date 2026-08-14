@@ -6,8 +6,8 @@
  * 記録を読んでも何を直せばいいか分からなかった(docs/adr/0011)。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
+import { test } from "vitest"
 import { causeReason } from "../src/core/errors.ts"
 
 /** Flue ランタイムが投げていた形。理由は外側に出ず、内側の `meta.reason` にだけあった。 */

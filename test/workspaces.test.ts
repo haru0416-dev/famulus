@@ -5,12 +5,12 @@
  * 掃除はファイルを消しても登録は消さないことがある。在るのは実体のほうに倒す。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import * as Effect from "effect/Effect"
+import { test } from "vitest"
 import {
   keepWorkspace,
   listWorkspaces,

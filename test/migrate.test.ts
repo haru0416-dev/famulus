@@ -6,12 +6,12 @@
  * 気付くのはユーザーが古い事実を喋られたときになる。だから旧スキーマを明示的に作ってから適用する。
  */
 
-import { afterAll, beforeAll, test } from "bun:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import * as Effect from "effect/Effect"
+import { afterAll, beforeAll, test } from "vitest"
 import { migrate } from "../src/db/migrate.ts"
 import { openDb } from "../src/db/sqlite.ts"
 import { RunnerStub } from "../src/model/Runner.ts"

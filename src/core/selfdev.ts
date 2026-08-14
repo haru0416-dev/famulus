@@ -107,15 +107,13 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
 
     // 依存はコンテナ内で取得する。ホストとコンテナでは libc が異なり、
     // Biome や Bun などプラットフォーム別実体を含む node_modules を共有できない。
-    if (!existsSync(join(clone, "node_modules"))) {
-      const r = yield* Effect.promise(() =>
-        runInSandbox(`cd ${CLONE} && ${INSTALL}`, { workDir: ws, net: true, timeoutMs: INSTALL_MS }),
-      )
-      lines.push(`依存の取得: 終了コード ${r.exitCode}(${Math.round(r.elapsedMs / 1000)}秒)`)
-      if (r.exitCode !== 0) return [...lines, "", r.output].join("\n")
-    } else {
-      lines.push("node_modules は在るので依存の取得は飛ばした")
-    }
+    // reset で package.json / bun.lock が変わり得る。node_modules の有無だけでは新しい依存を検知できない。
+    // bun の install は lockfile と既存 tree が一致していれば差分だけを見るので、毎回同期する。
+    const install = yield* Effect.promise(() =>
+      runInSandbox(`cd ${CLONE} && ${INSTALL}`, { workDir: ws, net: true, timeoutMs: INSTALL_MS }),
+    )
+    lines.push(`依存の取得: 終了コード ${install.exitCode}(${Math.round(install.elapsedMs / 1000)}秒)`)
+    if (install.exitCode !== 0) return [...lines, "", install.output].join("\n")
 
     if (opts?.skipGate === true) return lines.join("\n")
 

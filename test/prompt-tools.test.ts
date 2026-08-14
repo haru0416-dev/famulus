@@ -11,10 +11,10 @@
  * いまは `buildTools()` が返す表と、子に渡す表がすべてなので、両方を同じ正規表現で拾う。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
+import { test } from "vitest"
 
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8")

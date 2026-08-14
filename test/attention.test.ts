@@ -6,9 +6,9 @@
  * 気づくのは「一晩で枠を使い切っていた」ときになる。だからここで固定する。
  */
 
-import { test } from "bun:test"
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
+import { test } from "vitest"
 import {
   ACTIVE_COOLDOWN_HOURS,
   Attention,
