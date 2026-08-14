@@ -1,10 +1,10 @@
 /**
- * 自分のソースを、自分が動かせる場所に置く。
+ * open-zero のソースを、隔離環境から実行できる workspace に置く。
  *
  * コンテナに見えるのは workspace だけで、`/home/haru` は映らない(src/services/Sandbox.ts)。
- * この境界のせいで、自走している側は自分のソースを読むことも直すこともできなかった。
+ * この境界のため、自律実行側は open-zero のソースを読むことも修正することもできなかった。
  * 実測した tick が到達したのは「拾ってきた他人のリポジトリを動かす」ところまでで、
- * 自分の欠陥を見つけても書き換える手が無い。境界は緩めない — 代わりに複製をこちら側から置く。
+ * open-zero の不具合を見つけても修正対象へアクセスできない。境界は緩めず、代わりに clone を workspace に置く。
  *
  * 置くのは clone。作業ツリーのコピーではなく履歴ごと渡すのは、直した結果を `git diff` で
  * 取り出せるようにするため。本体への反映はここではやらない — 反映は取り消せない操作で、
@@ -51,7 +51,7 @@ const BUN = `npx -y bun@${Bun.version}`
 export const GATE = `cd ${CLONE} && ${BUN} run gate`
 
 export const SELFDEV_PURPOSE =
-  `open-zero 自身のソース(${repoRoot()} の clone)。自分の欠陥はここで直す。` +
+  `open-zero のソース(${repoRoot()} の clone)。open-zero の不具合はここで修正する。` +
   `ゲートは \`${GATE}\`。**net を true にする** — 検査のうち数件が名前解決を要る。` +
   `直したものは \`git -C ${CLONE} diff\` で取り出してユーザーに渡す — ` +
   `**ここでの変更は動いている本体には入らない。**`

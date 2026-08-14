@@ -66,7 +66,7 @@ export type Lane = "interactive" | "autonomous"
 /** 自走 run の記録 role。日次の自走上限はこの role の行を数える。 */
 export const AUTONOMOUS_ROLE = "autonomous"
 
-/** 使用率がこれ以上なら枯渇の手前として扱い、窓が明けるまで避ける(残りは朝会のために取っておく)。 */
+/** 使用率がこれ以上なら再実行を抑止する。期限はシグナルのリセット時刻、取得できなければ1時間後。 */
 export const QUOTA_WARN_PERCENT = 97
 
 const FENCE_DIRECTIVE =

@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { test } from "vitest"
 import { replyStepText, untrustedToolOutput } from "../src/agent/assistant.ts"
+import { readSoul } from "../src/agent/soul.ts"
 
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8")
@@ -76,6 +77,15 @@ test("プロンプトが名指す道具は全部登録されている", () => {
     [],
     `プロンプトに無い道具の名前がある。登録するか、道具でないなら NOT_TOOLS に理由付きで足す:\n${missing.join("\n")}`,
   )
+})
+
+test("SOUL は確定日や改訂日をモデルへ渡さない", () => {
+  const historyDate = /20\d{2}(?:[-/]\d{1,2}){1,2}|20\d{2}年\d{1,2}月(?:\d{1,2}日)?|\d{1,2}月\d{1,2}日/
+  const historyLabel = /改訂|改定|旧:|(?:確定|変更|更新)(?:日|時期|履歴)/
+  for (const text of [read("SOUL.md"), readSoul()]) {
+    assert.doesNotMatch(text, historyDate, "SOUL.md に日付の来歴を置かない")
+    assert.doesNotMatch(text, historyLabel, "SOUL.md に改訂履歴を置かない")
+  }
 })
 
 test("免除表に道具の名前を入れて検査を素通しさせていない", () => {

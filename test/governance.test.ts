@@ -104,7 +104,7 @@ test("枠が健全なシグナルを返したら冷却状態は消える", async
   })
 })
 
-test("使用率 97% 以上は枯渇の手前として冷やす", async () => {
+test("使用率 97% 以上は再実行を抑止する", async () => {
   await withHarness(async (h) => {
     const e = await h.fail(
       Effect.gen(function* () {

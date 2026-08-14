@@ -76,7 +76,7 @@ test("書けるのは workspace と共有キャッシュだけ。コンテナは
 
 test("中の時計の帯はホストと同じ", () => {
   // 帯を渡さないとコンテナは UTC で走る。同じコマンドが違う日付を出す環境になり、
-  // 中で落ちた検査を読む側が「自分の欠陥」と「帯の差」を見分けられない。
+  // コンテナ内で失敗した検査を読む側が、コードの不具合とタイムゾーン差を見分けられない。
   const args = dockerArgs("date", { workDir: "/tmp/w", name: "oz-run-test" })
   const env = args.filter((_, i) => args[i - 1] === "-e")
   assert.ok(env.includes(`TZ=${TZ}`), `帯が渡っていない: ${env.join(" ")}`)

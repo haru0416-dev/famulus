@@ -9,7 +9,7 @@
  *                 隔離したコンテナの中で完結する `shell` はこの制限に掛からない。
  *   respond()   … 今答えている入力そのものを observe イベントとして DB に落としてから走る。
  *
- * 道具は `createAssistant()` が1ターンぶんの状態を閉じ込めて作る。前の形はフックで登録していて、
+ * 道具は `createAssistant()` が1ターンぶんの状態をクロージャで保持して作る。前の形はフックで登録していて、
  * 1回のターンに固有のもの(今の入力の event id)をモジュール変数に置くしかなかった。
  *
  * モデル id は `poolForModel` が pool を決める。`gpt-` で始まるものは Codex の Responses、
@@ -86,7 +86,7 @@ const REVIEW_MS = 90_000
  */
 const MAX_STEPS = 20
 
-/** 1ターンぶんの状態。道具はこれを閉じ込めて作られる。 */
+/** 1ターンぶんの状態。道具はこれをクロージャで保持する。 */
 interface TurnState {
   /**
    * 今のターンの入力そのものの event id。recall から外すために持つ(Memory.recall の注記)。
@@ -716,13 +716,13 @@ function buildTools(state: TurnState) {
             const gov = yield* Governance
             const halted = yield* gov.readHalt
             if (halted) return `走らせない: 停止中(halt)— ${halted.reason}`
-            // 締切の手前で自分から降りる。走行そのものは記録に残るが、この回で分かったことを
-            // まとめる文は最後に書かれるので、書く時間を残さずに切られるとそれが残らない。
+            // 締切までに結果を要約する時間を確保できない場合は実行を始めない。走行そのものは記録に残るが、
+            // この回で分かったことをまとめる文は最後に書かれるため、時間切れになるとそれが残らない。
             const left = remainingMs()
             if (left < RUN_RESERVE_MS + MIN_RUN_MS) {
               return (
                 `走らせない: この tick の残りが ${Math.max(0, Math.round(left / 1000))} 秒しかない。\n` +
-                `ここで手を止めて、いま分かっていることを書いて終える。` +
+                `この回では実行せず、いま分かっていることを書いて終える。` +
                 `続きは次の tick で、同じ workspace(${workspace})を渡せば置いたファイルから再開できる。`
               )
             }
@@ -816,12 +816,12 @@ function buildTools(state: TurnState) {
             const id = yield* discord.post({
               text: `**${title}**\n${body}`,
               to: "talk",
-              // 名指しで呼ぶのは、今日中に動かないと手遅れになるものだけ。
-              // ミュートしてある場所まで毎回貫くと、次に貫いたときに読まれない。
+              // メンションを付けるのは、今日中に対応しないと間に合わないものだけ。
+              // ミュートを上書きする通知を繰り返すと、必要な通知まで読まれにくくなる。
               ping: urgent === true,
             })
-            // 押した事実は自分の側にも残す。届いたかどうかまで残さないと、届いていない通知を
-            // 伝えたことにして次のターンが進む。
+            // Discord 投稿APIがメッセージIDを返したかを DB に残す。結果を残さないと、
+            // 投稿に失敗した通知を送信済みとして次のターンが進む。
             yield* mem.remember({
               source: "system",
               content: { told: title, body, sent: Boolean(id) },
@@ -871,7 +871,7 @@ function buildTools(state: TurnState) {
             // 1日1本はここで数える。説明文に書くだけでは通る(下の長さ検査と同じ理由)。
             // `daily:draft` は起こす側(Attention)が読むフラグでもあるが、それは起きるかを決めるだけで、
             // 別の理由で起きた回に書き足すのは止められない。実際に同じ題が23分で4本出た。
-            // 上限が抑えるのは文の質ではなく声を掛ける回数なので、出した後は同じ日に開けない。
+            // 上限が制限するのは文の質ではなく通知回数なので、投稿後は同じ日に再投稿できない。
             if ((yield* db.meta("daily:draft")) === dayRange(nowIso()).key) {
               return (
                 "出していない。**今日ぶんは出してある。**1日1本まで。\n" +

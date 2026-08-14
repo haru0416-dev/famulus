@@ -13,7 +13,7 @@
  * 点を引くのではなく候補から外している(構造で外す。点数で下げると、材料が少ない日に通る)。
  *
  * 進んだところは `dream:through` に置く。次の回はそこから先だけを見る —
- * 同じ材料を毎晩読み直すと、同じ値を毎晩上げ直して、履歴が寿命1日の行で埋まる。
+ * 同じ材料を毎晩読み直すと、同じ値が毎晩再保存され、有効期間が1日だけの履歴行が増え続ける。
  */
 import * as Effect from "effect/Effect"
 import { dayRange, localHour, nowIso } from "../core/time.ts"
