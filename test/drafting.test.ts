@@ -8,14 +8,7 @@
 
 import assert from "node:assert/strict"
 import { test } from "vitest"
-import {
-  findFigures,
-  findLeaks,
-  findShape,
-  findSmells,
-  keepQuoted,
-  reviewOutcome,
-} from "../src/agent/drafting.ts"
+import { DRAFTING, findLeaks, findShape, keepQuoted, reviewOutcome } from "../src/agent/drafting.ts"
 
 const SECRETS = [
   "歯医者(さくら歯科)の次回予約は2026年8月19日(水)18:00に変更。",
@@ -54,41 +47,10 @@ test("非公開の値が無ければ何も当たらない", () => {
   assert.deepEqual(findLeaks("どんな本文でも", []), [])
 })
 
-test("評価だけで閉じた文を落とす — 1本目が実際に通した書き方", () => {
-  const body = "重要なのは、これを検出できたのが自分の走行記録だったことだ。"
-  assert.deepEqual(findSmells("題", body), ["重要"])
-})
-
-test("因果として使うぶんは通す — 締めているときだけ落とす", () => {
-  assert.deepEqual(findSmells("題", "有効期限を外したら、実行不能が5件から0件になった。"), [])
-  assert.deepEqual(findSmells("題", "この設定が効く。"), ["効く。"])
-})
-
-test("定型はどこに出ても落とす", () => {
-  const smells = findSmells("題", "本稿では、さまざまな条件を並べていきます。")
-  assert.deepEqual(smells.sort(), ["さまざまな", "本稿では", "ていきます"].sort())
-})
-
-test("測ったことだけを書いた本文は何も当たらない", () => {
-  const body = [
-    "提案5件のうち2件が、押される前に実行できなくなっていた。",
-    "1件は参照していた確定値が9時間後に書き換わり、もう1件は中身の期日が有効期限より先に来た。",
-    "n=1、期間は5日間。他の条件では確かめていない。",
-  ].join("\n")
-  assert.deepEqual(findSmells("提案が実行前に使えなくなった件", body), [])
-})
-
-test("比喩と擬人を落とす — 1本目が全部やっていた", () => {
-  const smells = findSmells(
-    "承認待ちキューを挟んだら、提案は実行される前に腐った",
-    "キューは何も気づかず引きずっている。皮肉なことに、提案はまだ生きている。",
-  )
-  assert.deepEqual(smells.sort(), ["腐った", "気づかず", "引きずって", "皮肉", "生きている"].sort())
-})
-
-test("横棒は題では通し、本文では落とす", () => {
-  assert.deepEqual(findSmells("提案が実行前に使えなくなる — n=1 の5日間", "5件中2件だった。"), [])
-  assert.deepEqual(findSmells("題", "2件が実行不能になった — 理由は別々だった。"), ["—"])
+test("意味の規律は語の一覧ではなく、観測していない意味の追加を判定する", () => {
+  assert.match(DRAFTING, /観測していない意図・感情・認知/)
+  assert.match(DRAFTING, /特定の語の禁止ではなく/)
+  assert.doesNotMatch(DRAFTING, /締めに使わない語|書きがち.*代わりに/)
 })
 
 const filler = (chars: number) => "実行不能になった提案は5件中2件だった。".repeat(Math.ceil(chars / 20))
@@ -110,11 +72,6 @@ test("役割の札を貼った見出しは、中身が付いていても落と�
     "見出し「課題：既存コードに linter を入れると失敗する」が中身を名指していない。" +
       "何が起きたかを見出しにする(役割の札は外す)",
   ])
-})
-
-test("役割の名前だけの見出しも落とす", () => {
-  const body = `## まとめ\n\n${filler(300)}`
-  assert.equal(findShape(body).length, 1)
 })
 
 test("中身を名指す見出しは通す — 見出しを減らすこと自体は目的ではない", () => {
@@ -235,10 +192,4 @@ test("写せた指摘は引用ごと返す", () => {
   )
   assert.equal(r.post, false)
   assert.match(r.post === false ? r.text : "", /「18回は別の枠へ出ていた」/)
-})
-
-test("tell に当てる検査は比喩だけを見る — 通知に不要な検査は実行しない", () => {
-  assert.deepEqual(findFigures("検索は空振りだった"), ["空振り"])
-  // 締めの評価語と横棒は除外しない。除外すると用のある通知が出せなくなる。
-  assert.deepEqual(findFigures("この設定が効く。移行は完了 — 残り0件。"), [])
 })

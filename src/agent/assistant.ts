@@ -42,10 +42,8 @@ import { defaultSources, renderHits, SOURCE_MENU, searchWeb } from "../services/
 import { fetchPage } from "../services/Web.ts"
 import {
   DRAFT_MAX,
-  findFigures,
   findLeaks,
   findShape,
-  findSmells,
   REVIEW_SCHEMA,
   REVIEW_SYSTEM,
   type Review,
@@ -815,14 +813,6 @@ function buildTools(state: TurnState) {
           Effect.gen(function* () {
             const discord = yield* Discord
             const mem = yield* Memory
-            // 通知に精査役はいない。この検査を通ればそのまま Discord に出る。
-            const figures = findFigures(`${title}\n${body}`)
-            if (figures.length > 0) {
-              return (
-                `送っていない。**比喩が残っている**: ${figures.map((s) => `「${s}」`).join(" ")}\n` +
-                "その語を、実際の動作か状態に展開して書き換える(空振りした→0件だった)。直してからもう一度呼ぶ。"
-              )
-            }
             const id = yield* discord.post({
               text: `**${title}**\n${body}`,
               to: "talk",
@@ -912,23 +902,15 @@ function buildTools(state: TurnState) {
                 "書いて残りは次の日に回す。経緯・過程・網羅した限界の列挙は削除する — 読む側は求めていない。"
               )
             }
-            // 中身を持たない語も同じ扱いにする。規律に並べても、書いている途中の一文までは届かない。
-            const smells = findSmells(title, body)
-            if (smells.length > 0) {
-              return (
-                `出していない。**中身を持たない語が残っている**: ${smells.map((s) => `「${s}」`).join(" ")}\n` +
-                "その語を消したときに何も残らない文は、主張ごと削除する。残すなら「何が・どの対象で・" +
-                "どう変わったか」に書き換える。直してから、もう一度呼ぶ。"
-              )
-            }
-            // 太字と見出しの密度は語彙に現れないので、書き上がった形のほうを数える。
+            // 太字と見出しの密度は、書き上がった形を決定的に数えられる。
             const shape = findShape(body)
             if (shape.length > 0) {
               return `出していない。**並べ方が読み手を疲れさせる形になっている**:\n${shape.map((s) => `- ${s}`).join("\n")}\n直してから、もう一度呼ぶ。`
             }
-            // ここから先は機械では見えない。上の3つが見ているのは語と密度で、規律の本体
-            // (材料が自分の実測か・話が1つか・測ったことと見立てが分かれているか)には当たらない。
-            // 生成したモデル自身には読み直させない。機械の検査を先に置くのは、正規表現で除外できる本文にレビュー用クォータを使わないため。
+            // ここから先は機械では見えない。上の検査は秘密値・長さ・密度のように決定的に判定できるものだけ。
+            // 材料が自分の実測か、話が1つか、観測していない意味を足していないかは読み手が判断する。
+            // 生成したモデル自身には読み直させない。決定的な検査を先に置くのは、機械で除外できる本文に
+            // レビュー用クォータを使わないため。
             //
             // この呼び出しにも締切を渡す。渡さないと精査役だけが tick の持ち時間の外で走る。
             // 実測した回は、締切が切れた後もここで待ち続けて外から殺すまで終わらなかった。

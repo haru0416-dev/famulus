@@ -20,10 +20,9 @@
 import * as Effect from "effect/Effect"
 import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
-import { withoutFigures } from "./agent/figures.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
 import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
-import { clearDeadline, remainingMs, startDeadline } from "./core/deadline.ts"
+import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
 import { causeReason, describeRefusal } from "./core/errors.ts"
 import { dayRange, nowIso } from "./core/time.ts"
@@ -429,7 +428,7 @@ async function tick(): Promise<string> {
         // 返事が遅れる順序にしない。出せなくても DB には残るので、失っては困るものは無い。
         // 切られた回の補完文は出さない。届けてよいのは、書かれた返事だけ。
         if (spokenTo && text && !cutOff) {
-          yield* discord.post({ text: yield* withoutFigures(text, remainingMs()) })
+          yield* discord.post({ text })
         }
         yield* mem.remember({
           kind: "observe",
