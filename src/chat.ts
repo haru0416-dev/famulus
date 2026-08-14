@@ -72,7 +72,7 @@ try {
     if (turn.cutOff) console.log(`(止まった: ${turn.cutOff})\n`)
 
     // 対話の入口でも締めの keeper を通す。tick だけに置くと、REPL で明言された値が
-    // 確定記憶へ上がらない。返信は先に表示し、補完処理の待ち時間を利用者へ負わせない。
+    // 確定記憶へ上がらない。返信は先に表示し、keeper が終わってから次の入力を受ける。
     if (!turn.cutOff) {
       const kept = await run(
         keep({ material: `owner: ${line}`, signal: AbortSignal.timeout(KEEP_MS) }),

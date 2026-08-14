@@ -87,8 +87,8 @@ export interface SessionRef {
 export interface Material {
   readonly ref: SessionRef
   readonly text: string
-  /** `said` の照合元。応答側に同じ文があっても根拠にしない。 */
-  readonly ownerText: string
+  /** `said` の照合元。発話をまたぐ文字列や、応答側にだけある文は根拠にしない。 */
+  readonly ownerTurns: readonly string[]
   /** 選別の結果。生バイト → 残したバイト。 */
   readonly rawBytes: number
   readonly keptBytes: number
@@ -405,7 +405,7 @@ function compress(turns: readonly Turn[]): string {
 const QUOTED = (what: string, said: string) =>
   v.object({
     what: v.pipe(v.string(), v.description(what)),
-    said: v.pipe(v.string(), v.minLength(4), v.maxLength(60), v.description(said)),
+    said: v.pipe(v.string(), v.maxLength(60), v.description(said)),
   })
 
 const SAID = "根拠になった owner: 行からの**そのままの引用**(4〜60文字)。引けないなら項目ごと落とす"
@@ -430,7 +430,7 @@ const DIGEST_SCHEMA = rs(
         v.object({
           what: v.pipe(v.string(), v.description("ユーザーが何を決めたか")),
           why: v.pipe(v.string(), v.description("なぜそう決めたか。ログから読み取れなければ「不明」")),
-          said: v.pipe(v.string(), v.minLength(4), v.maxLength(60), v.description(SAID)),
+          said: v.pipe(v.string(), v.maxLength(60), v.description(SAID)),
         }),
       ),
       v.description("ユーザーが選んだ・却下した・方針を定めたこと。相手側の成果報告は入れない。"),
@@ -465,10 +465,15 @@ interface Digest {
  * 「引用できないものは残さない」を守るのはここ(モデルが提案し、こちら側が決定的に弾く)。
  * 素材全体ではなく owner の発話だけに照合する。agent がユーザーの言葉を推測して書いていても根拠にはならない。
  */
-const quoted = <T extends { said?: unknown }>(xs: readonly T[] | undefined, ownerText: string): T[] =>
-  (xs ?? []).filter(
-    (x) => typeof x.said === "string" && x.said.trim() === x.said && ownerText.includes(x.said),
-  )
+const quoted = <T extends { said?: unknown }>(
+  xs: readonly T[] | undefined,
+  ownerTurns: readonly string[],
+): T[] =>
+  (xs ?? []).filter((x) => {
+    if (typeof x.said !== "string") return false
+    const said = x.said
+    return said.length >= 4 && said.trim() === said && ownerTurns.some((turn) => turn.includes(said))
+  })
 
 /**
  * 日本語の割合。0 に近いものは、日本語で探しても当たらない。
@@ -679,10 +684,7 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
         const m: Material = {
           ref: found.ref,
           text,
-          ownerText: found.turns
-            .filter((t) => t.who === "owner")
-            .map((t) => t.text)
-            .join("\n"),
+          ownerTurns: found.turns.filter((t) => t.who === "owner").map((t) => t.text),
           rawBytes: found.rawBytes,
           keptBytes: Buffer.byteLength(text),
         }
@@ -713,9 +715,9 @@ export class Intake extends Effect.Service<Intake>()("Intake", {
         // owner の原文から引けない項目はここで落ちる。指示ではなくコードが弾く(quoted のコメント参照)。
         const digest: Digest = {
           topic: d.topic ?? "",
-          decisions: quoted(d.decisions, m.ownerText),
-          preferences: quoted(d.preferences, m.ownerText),
-          corrections: quoted(d.corrections, m.ownerText),
+          decisions: quoted(d.decisions, m.ownerTurns),
+          preferences: quoted(d.preferences, m.ownerTurns),
+          corrections: quoted(d.corrections, m.ownerTurns),
         }
         const text = render(digest, m.ref)
         const id = yield* mem.remember({

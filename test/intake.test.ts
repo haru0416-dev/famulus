@@ -481,7 +481,10 @@ test("owner の原文に無い引用は DB に入らない — agent の推測�
           topic: "歯医者の予約の調整",
           decisions: [],
           preferences: [{ what: "確認メールは送らない", said: "確認メールは要らないって言ったよね" }],
-          corrections: [{ what: "電話を避けたい", said: "電話では連絡しないでほしい" }],
+          corrections: [
+            { what: "電話を避けたい", said: "電話では連絡しないでほしい" },
+            { what: "確認メールは予約に不要", said: "要らない。\n確認メール" },
+          ],
         },
       },
     ],
