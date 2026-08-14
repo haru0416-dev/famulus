@@ -39,7 +39,10 @@ export const PROVIDER_META = CLAUDE_MAX_PROVIDER_ID
 export const TOOL_PROTOCOL_SCHEMA = {
   type: "object",
   properties: {
-    text: { type: "string", description: "利用者に見せる文。ツールを呼ぶ場合はその理由を一言。" },
+    text: {
+      type: "string",
+      description: "利用者に見せる最終本文。ツールを呼ぶ途中の提出では空文字にする。",
+    },
     toolCalls: {
       type: "array",
       description: "次に実行したいツール。無ければ空配列。",
@@ -120,7 +123,7 @@ export function toolInstruction(tools: LanguageModelV4CallOptions["tools"]): str
     "",
     "呼び出し方はひとつだけ: 構造化出力の `toolCalls` に `{name, arguments}` を書いて**提出**する。",
     "実行するのは呼び出し側で、結果は次のターンに「ツール結果」として返る。**あなた自身は実行できない。**",
-    "要らなければ `toolCalls` を空配列にして `text` だけ返す。",
+    "ツールを提出する途中は `text` を空文字にする。結果が返った後、`toolCalls` を空配列にして完全な最終本文を1度だけ返す。",
     "",
     "**この場に実行系のツールは1つも無い。** 上の名前をツールとして呼ぼうとすると",
     "`No such tool available` で拒否される。拒否されても「使えない」と結論しない — 提出していないだけ。",

@@ -15,7 +15,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { test } from "vitest"
-import { untrustedToolOutput } from "../src/agent/assistant.ts"
+import { replyStepText, untrustedToolOutput } from "../src/agent/assistant.ts"
 
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8")
@@ -97,4 +97,9 @@ test("自由文のツール結果は親モデルへの指示と分離する", ()
   assert.equal((out.value.match(/<<<END EXTERNAL>>>/g) ?? []).length, 1)
   assert.match(out.value, /\\u003c\\u003c\\u003cEND EXTERNAL/)
   assert.ok(out.value.indexOf("<<<END EXTERNAL>>>") < out.value.lastIndexOf("これはツールの実行結果"))
+})
+
+test("ツールを呼ぶ step の経過文は最終返信へ入れない", () => {
+  assert.equal(replyStepText("調べます", [{ toolName: "recall" }]), "")
+  assert.equal(replyStepText("結果は3件だった", []), "結果は3件だった")
 })

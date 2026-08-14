@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import { callClaude } from "../src/model/claude-cli.ts"
 import { parseCodexAuth, quotaFromHeaders } from "../src/model/codex-responses.ts"
-import { needsResubmit } from "../src/model/language-model.ts"
+import { needsResubmit, TOOL_PROTOCOL_SCHEMA } from "../src/model/language-model.ts"
 import {
   assertKnownModel,
   baseModel,
@@ -273,6 +273,11 @@ test("ネイティブツール呼び出しが拒否され、提出が0件のと�
   assert.equal(needsResubmit(true, false, 0), false)
   assert.equal(needsResubmit(true, undefined, 0), false)
   assert.equal(needsResubmit(false, true, 0), false)
+})
+
+test("ツール提出中の text は利用者向け経過を書かせない", () => {
+  const text = TOOL_PROTOCOL_SCHEMA.properties.text
+  assert.match(text.description, /途中.*空文字/)
 })
 
 /**
