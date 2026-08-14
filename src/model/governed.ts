@@ -23,8 +23,9 @@ import { nowIso } from "../core/time.ts"
 import { isRefusal, run } from "../runtime.ts"
 import { AUTONOMOUS_ROLE, Governance, type Lane } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
-import { ClaudeCliError, poolForModel, type QuotaSignal } from "./claude-cli.ts"
+import { CODEX_PROVIDER_META, codexResponsesModel } from "./codex-responses.ts"
 import { claudeCliModel, PROVIDER_META } from "./language-model.ts"
+import { assertKnownModel, isGptModel, ModelCallError, poolForModel, type QuotaSignal } from "./models.ts"
 import { traceOf } from "./trace.ts"
 
 /**
@@ -111,7 +112,7 @@ async function account(
 
 /** 失敗してもクォータシグナルが取れていれば、リセット時刻まで再実行を抑止する。 */
 async function noteFailure(e: unknown): Promise<void> {
-  if (!(e instanceof ClaudeCliError) || !e.quota) return
+  if (!(e instanceof ModelCallError) || !e.quota) return
   const quota = e.quota
   const at = nowIso()
   await run(
@@ -135,7 +136,8 @@ export function governance(): LanguageModelV4Middleware {
         await noteFailure(e)
         throw e
       }
-      const meta = result.providerMetadata?.[PROVIDER_META]
+      // 2つの経路が別の鍵で載せる。どちらも「クォータと従量課金換算額」の欄で、読む側は同じ。
+      const meta = result.providerMetadata?.[PROVIDER_META] ?? result.providerMetadata?.[CODEX_PROVIDER_META]
       const u = result.usage
       await account(
         model.modelId,
@@ -156,8 +158,17 @@ export function governance(): LanguageModelV4Middleware {
 
 /**
  * 統治つきのモデル。エージェントに差すのはこれだけ。
- * 素の `claudeCliModel` を直接使う経路を作らない — 事前検査を通らずにクォータが減る。
+ * 素の `claudeCliModel` / `codexResponsesModel` を直接使う経路を作らない —
+ * 事前検査を通らずにクォータが減る。
+ *
+ * 実装はモデル id で分かれる。Claude は `claude -p`、GPT は Codex の Responses を HTTP で直接。
+ * 統治(ゲート・クォータ・会計)はどちらも同じ middleware がこの外側で適用する。
+ *
+ * 知らない id はここで失敗させる。呼ばれるのはエージェントを生成するときなので、env の打ち間違いは
+ * 起動時に読める理由で止まる(実行を開始してから上流の 4xx で失敗しない)。
  */
 export function claudeMax(modelId: string): LanguageModelV4 {
-  return wrapLanguageModel({ model: claudeCliModel(modelId), middleware: governance() })
+  assertKnownModel(modelId)
+  const model = isGptModel(modelId) ? codexResponsesModel(modelId) : claudeCliModel(modelId)
+  return wrapLanguageModel({ model, middleware: governance() })
 }

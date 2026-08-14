@@ -13,7 +13,16 @@ import { RunnerFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { Governance, type Meter } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
-import { ClaudeCliError, callClaude, poolForModel, type QuotaSignal, RUNTIME_PROMPT } from "./claude-cli.ts"
+import { callClaude } from "./claude-cli.ts"
+import { callCodex } from "./codex-responses.ts"
+import {
+  assertKnownModel,
+  isGptModel,
+  ModelCallError,
+  poolForModel,
+  type QuotaSignal,
+  RUNTIME_PROMPT,
+} from "./models.ts"
 import { traceOf } from "./trace.ts"
 
 export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify" | "reviewer"
@@ -21,7 +30,7 @@ export type Role = "briefing" | "dialogue" | "structurer" | "scout" | "classify"
 /**
  * 役割→モデル。品質が製品そのものになる役だけ opus に置く。
  *
- * 作業系は GPT(rmod 経由)へ振り分ける。減っているのは金ではなくユーザーの Claude クォータなので、
+ * 作業系は GPT(Codex の OAuth 定額枠)へ振り分ける。減っているのは金ではなくユーザーの Claude クォータなので、
  * 量を使う役をそちらから外すと、対話用クォータが残る。ChatGPT 側も OAuth の定額クォータで、
  * `poolForModel` が別の pool に数えるため、片方を回してももう片方は止まらない。
  *
@@ -49,7 +58,7 @@ export const ROLE_MODEL: Record<Role, string> = {
   // ここを opus にすると対話と同じクォータを毎回2回消費することになる。
   structurer: "gpt-5.6-luna",
   // 下書きの精査(assistant の draft)。外に出る前の最後の検査で、書いた側とは別の系列に置く。
-  // クォータも分かれる(RMOD_POOL)ので、精査に1回使っても対話用クォータは減らない。
+  // クォータも分かれる(CODEX_POOL)ので、精査に1回使っても対話用クォータは減らない。
   reviewer: "gpt-5.6-sol",
   scout: "gpt-5.6-luna", // 取り込みの構造化。引用を写す役(Intake.ingest)
   classify: "gpt-5.6-luna", // 分類(呼び手はまだ無い)
@@ -62,11 +71,11 @@ export interface RunPlan {
 }
 
 export interface RunnerRequest {
-  /** 既知の Role、または生のモデル id(実験・単発用途はそのまま通す)。 */
+  /** 既知の Role、または `MODEL_IDS` に載っている生のモデル id(実験・単発用途)。 */
   readonly role: Role | (string & {})
   readonly prompt: string
   readonly systemPrompt?: string
-  /** 与えると構造化応答を要求する(claude-cli の StructuredOutput 経路)。 */
+  /** 与えると構造化応答を要求する(Claude は StructuredOutput、GPT は Responses の json_schema)。 */
   readonly schema?: unknown
   readonly onText?: (delta: string) => void
   readonly signal?: AbortSignal
@@ -157,25 +166,33 @@ const makeRunner = (
     return { plan, run } as RunnerApi
   })
 
-const defaultPlan = (role: string): RunPlan => ({
-  // 未知の role は生モデル id として通す。
-  model: ROLE_MODEL[role as Role] ?? role,
-  // `total_cost_usd` が返ることと、それが請求であることは別。Claude Max は定額なので限界費用は 0 で、
-  // 制限されるのは USD ではなく5時間単位の利用量。USD を条件にするとクォータが残っていても金額で止まる。
-  meter: "quota",
-  // pool は role ではなくモデルで決まる。ここを固定にしていると GPT の消費が Claude のクォータに
-  // 計上され、「作業を GPT に振り分けたのに対話が止まる」が起きる。
-  pool: poolForModel(ROLE_MODEL[role as Role] ?? role),
-})
+const defaultPlan = (role: string): RunPlan => {
+  // 既知の role でなければモデル id そのものとして読む。ただし知らない id は受け付けない —
+  // 通すと `claude` 側は「不明なモデル」、Codex 側は上流の 4xx で、どちらも実行開始後に失敗する。
+  const model = assertKnownModel(ROLE_MODEL[role as Role] ?? role)
+  return {
+    model,
+    // `total_cost_usd` が返ることと、それが請求であることは別。Claude Max は定額なので限界費用は 0 で、
+    // 制限されるのは USD ではなく5時間単位の利用量。USD を条件にするとクォータが残っていても金額で止まる。
+    meter: "quota",
+    // pool は role ではなくモデルで決まる。ここを固定にしていると GPT の消費が Claude のクォータに
+    // 計上され、「作業を GPT に振り分けたのに対話が止まる」が起きる。
+    pool: poolForModel(model),
+  }
+}
 
-/** 本番の層。`claude -p` = ユーザー本人のサブスクリプションクォータ。 */
+/**
+ * 本番の層。どちらもユーザー本人の定額クォータで、実装だけがモデルで分かれる。
+ * Claude は `claude -p`、GPT は Codex の Responses を HTTP で直接(src/model/codex-responses.ts)。
+ * 入出力の型は揃えてあるので、ここは呼び先を選ぶだけ。
+ */
 export const RunnerClaudeCli = Layer.effect(
   Runner,
   makeRunner(
     (req, p) =>
       Effect.tryPromise({
         try: (abort) =>
-          callClaude({
+          (isGptModel(p.model) ? callCodex : callClaude)({
             prompt: req.prompt,
             model: p.model,
             systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,
@@ -187,7 +204,7 @@ export const RunnerClaudeCli = Layer.effect(
           new RunnerFailed({
             pool: p.pool,
             message: e instanceof Error ? e.message : String(e),
-            ...(e instanceof ClaudeCliError && e.quota?.exhausted ? { exhausted: true } : {}),
+            ...(e instanceof ModelCallError && e.quota?.exhausted ? { exhausted: true } : {}),
           }),
       }).pipe(
         Effect.map((r) => ({

@@ -24,8 +24,8 @@ import { loadEnv } from "../core/env.ts"
 import { causeReason } from "../core/errors.ts"
 import { dayRange, localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
-import { CLAUDE_POOL, RMOD_POOL } from "../model/claude-cli.ts"
 import { claudeMax, lane } from "../model/governed.ts"
+import { CLAUDE_POOL, CODEX_POOL } from "../model/models.ts"
 import { Runner } from "../model/Runner.ts"
 import { vs } from "../model/schema.ts"
 import { run } from "../runtime.ts"
@@ -55,13 +55,13 @@ import { soulInstruction } from "./soul.ts"
 loadEnv()
 
 /**
- * 検索役のモデル。対話とは別の枠から出す(src/model/claude-cli.ts の RMOD_POOL)。
+ * 作業役のモデル。対話とは別のクォータから消費する(src/model/models.ts の CODEX_POOL)。
  * 語を変えて何度も検索するのは量を使う仕事で、opus でやると対話の枠がそこで減る。
  */
 const workModel = () => process.env.OPEN_ZERO_WORK_MODEL ?? "gpt-5.6-luna"
 
 /**
- * researcher 子に使うモデル。`-web` は rmod の hosted web_search を有効にする目印。
+ * researcher の委譲エージェントに使うモデル。`-web` は Codex 側の web_search を有効にする接尾辞。
  * researcher には別途 `search` と `fetch` も渡す。
  */
 const researchModel = () => process.env.OPEN_ZERO_RESEARCH_MODEL ?? "gpt-5.6-luna-web"
@@ -984,7 +984,7 @@ function buildTools(state: TurnState) {
             // もう片方は動くので、一括りにすると出来ることを取り違える。
             const now = Date.now()
             const states: string[] = []
-            for (const pool of [CLAUDE_POOL, RMOD_POOL]) {
+            for (const pool of [CLAUDE_POOL, CODEX_POOL]) {
               const cd = yield* gov.quotaCooldown(pool, now)
               states.push(
                 cd ? `${pool}: 閉(${cd.window}、${new Date(cd.untilMs).toISOString()} まで)` : `${pool}: 開`,

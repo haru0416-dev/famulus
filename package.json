@@ -18,6 +18,7 @@
     "tick": "bun src/tick.ts"
   },
   "dependencies": {
+    "@ai-sdk/openai": "4.0.41",
     "@ai-sdk/provider": "^4.0.7",
     "@valibot/to-json-schema": "^1.7.1",
     "ai": "^7.0.62",

@@ -6,14 +6,16 @@
 import { test } from "bun:test"
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
+import { callClaude } from "../src/model/claude-cli.ts"
+import { parseCodexAuth, quotaFromHeaders } from "../src/model/codex-responses.ts"
+import { needsResubmit } from "../src/model/language-model.ts"
 import {
+  assertKnownModel,
   baseModel,
-  binForModel,
   isWebModel,
   poolForModel,
   stripCitationMarkers,
-} from "../src/model/claude-cli.ts"
-import { needsResubmit } from "../src/model/language-model.ts"
+} from "../src/model/models.ts"
 import { ROLE_MODEL, Runner } from "../src/model/Runner.ts"
 import { Db } from "../src/services/Db.ts"
 import { Governance } from "../src/services/Governance.ts"
@@ -111,7 +113,7 @@ test("利用可能なクォータシグナルは再実行抑止を残さない",
   )
 })
 
-test("役割→モデルは静的表。未知の role は生のモデル id として通す", async () => {
+test("役割→モデルは静的表。role 名でなければモデル id そのものとして読む", async () => {
   await withHarness(async (h) => {
     const plans = await h.run(
       Effect.gen(function* () {
@@ -138,19 +140,103 @@ test("役割→モデルは静的表。未知の role は生のモデル id と�
 })
 
 /**
- * 混在 routing の要点。実行ファイルとクォータはモデルで決まる。
- * 環境変数1本で決めていた頃は、GPT に切り替えると対話まで rmod に乗った。
+ * 混在 routing の要点。経路とクォータはモデルで決まる。
+ * 環境変数1つで決めていた頃は、GPT に切り替えると対話まで別経路になった。
  */
-test("モデルごとに実行ファイルとクォータが分かれる", () => {
-  const env = { OPEN_ZERO_CLAUDE_BIN: "/x/claude", OPEN_ZERO_RMOD_BIN: "/x/rmod", PATH: "" }
-
-  assert.equal(binForModel("gpt-5.6-luna", undefined, env), "/x/rmod")
-  assert.equal(binForModel("claude-opus-5", undefined, env), "/x/claude")
+test("モデルごとに経路とクォータが分かれる", async () => {
+  // GPT は `claude -p` 側へ行かない。行くと Claude のサブスクで GPT を呼ぶことになり、上流で失敗する。
+  await assert.rejects(
+    () => callClaude({ prompt: "x", model: "gpt-5.6-luna" }),
+    /codex-responses/,
+    "GPT が Claude CLI 経路に入らないこと",
+  )
 
   assert.equal(poolForModel("gpt-5.6-luna"), "chatgpt-rmod")
   assert.equal(poolForModel("claude-opus-5"), "claude-max")
-  // 未知のモデル id は Claude 側に倒す(rmod を勝手に噛ませない)。
   assert.equal(poolForModel("claude-haiku-4-5"), "claude-max")
+})
+
+/**
+ * 知らない id は受け付けない。検査せずに通すと、実行を開始してから上流の「不明なモデル」で失敗する。
+ * 入力元は env と役割表だけで、どちらも打ち間違えられる。
+ */
+test("知らないモデル id は経路を選ぶ前に失敗させる", async () => {
+  assert.equal(assertKnownModel("gpt-5.6-luna-web"), "gpt-5.6-luna-web")
+  assert.throws(() => assertKnownModel("gpt-5.6-lunar"), /知らないモデル id/)
+  assert.throws(() => assertKnownModel("claude-opus-4"), /知らないモデル id/)
+  assert.throws(() => assertKnownModel(""), /知らないモデル id/)
+
+  // Runner の plan も同じ検査を通る(role 名として解釈できないものは id そのものとして読まれる)。
+  await withHarness(async (h) => {
+    await h.run(
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        assert.throws(() => runner.plan("gpt-5.6-lunar"), /知らないモデル id/)
+        assert.equal(runner.plan("scout").model, "gpt-5.6-luna")
+      }),
+    )
+  })
+})
+
+/**
+ * Codex の資格情報。API キーは受け付けない — 受け付けると定額クォータのつもりで従量課金になる。
+ */
+test("auth.json から ChatGPT の OAuth トークンだけを読む", () => {
+  const id = `x.${Buffer.from(JSON.stringify({ aud: "app_ABC" })).toString("base64url")}.y`
+  const auth = parseCodexAuth(
+    JSON.stringify({
+      OPENAI_API_KEY: "sk-should-be-ignored",
+      tokens: { access_token: "at", id_token: id, refresh_token: "rt", account_id: "acc" },
+    }),
+  )
+  assert.equal(auth.accessToken, "at")
+  assert.equal(auth.accountId, "acc")
+  assert.equal(auth.refreshToken, "rt")
+  // client_id は欄として保存されていない。id_token の aud にだけ含まれる。
+  assert.equal(auth.clientId, "app_ABC")
+
+  assert.throws(() => parseCodexAuth(JSON.stringify({ OPENAI_API_KEY: "sk-x" })), /codex login/)
+  assert.throws(() => parseCodexAuth("{"), /JSON/)
+})
+
+/**
+ * クォータは応答ヘッダから読む。Governance は pool ごとに1つしか持てないので、
+ * 先に上限へ達する(使用率の高い)窓を渡す。使用率の低いほうを渡すと、上限に達していても呼び続ける。
+ */
+test("Codex の応答ヘッダから使用率の高い窓を読む", () => {
+  const now = 1_000_000
+  const q = quotaFromHeaders(
+    {
+      "x-codex-primary-used-percent": "12.5",
+      "x-codex-primary-window-minutes": "10080",
+      "x-codex-primary-reset-after-seconds": "600",
+      "x-codex-secondary-used-percent": "80",
+      "x-codex-secondary-window-minutes": "300",
+      "x-codex-secondary-reset-after-seconds": "60",
+    },
+    now,
+  )
+  assert.equal(q?.pool, "chatgpt-rmod")
+  assert.equal(q?.window, "300m")
+  assert.equal(q?.usedPercent, 80)
+  assert.equal(q?.resetsAtMs, now + 60_000)
+  assert.equal(q?.exhausted, false)
+
+  // 窓の長さが 0 のものは契約で使われていない。読むと使用率 0% として選ばれてしまう。
+  const zero = quotaFromHeaders(
+    {
+      "x-codex-primary-used-percent": "40",
+      "x-codex-primary-window-minutes": "10080",
+      "x-codex-secondary-used-percent": "0",
+      "x-codex-secondary-window-minutes": "0",
+    },
+    now,
+  )
+  assert.equal(zero?.window, "10080m")
+  assert.equal(zero?.usedPercent, 40)
+
+  // ヘッダが無い応答では undefined を返す(前の状態を上書きしない)。
+  assert.equal(quotaFromHeaders({}, now), undefined)
 })
 
 /**
@@ -191,7 +277,7 @@ test("ネイティブツール呼び出しが拒否され、提出が0件のと�
 
 /**
  * 精査役は書いた側と別の系列に置く(docs/adr/0031)。同じモデルの2回目は同じ死角を持つ。
- * クォータも分かれていること(RMOD_POOL)まで見る — 同じ pool に積むと、精査1回ぶん対話用クォータが減る。
+ * クォータも分かれていること(CODEX_POOL)まで確認する — 同じ pool に記録すると、精査1回ぶん対話用クォータが減る。
  */
 test("精査役は対話と別のモデル・別の枠から出る", async () => {
   await withHarness(

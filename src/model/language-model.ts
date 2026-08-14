@@ -27,27 +27,13 @@ import type {
   LanguageModelV4StreamPart,
   LanguageModelV4ToolResultOutput,
 } from "@ai-sdk/provider"
-import { callClaude, RUNTIME_PROMPT } from "./claude-cli.ts"
+import { callClaude } from "./claude-cli.ts"
+import { RUNTIME_PROMPT } from "./models.ts"
 
 export const CLAUDE_MAX_PROVIDER_ID = "claude-max"
 
 /** `providerMetadata` の鍵。統治の middleware がここからクォータシグナルと従量課金換算額を読む。 */
 export const PROVIDER_META = CLAUDE_MAX_PROVIDER_ID
-
-/** 呼べるモデル id。`-web` が付いたものだけが外を見に行ける(claude-cli.ts の isWebModel)。 */
-export const MODEL_IDS = [
-  "claude-opus-5",
-  "claude-sonnet-5",
-  "claude-fable-5",
-  "claude-haiku-4-5",
-  // GPT 側は rmod 経由(Anthropic Messages API を話す局所プロキシ)。アダプタは1本も要らず、
-  // `binForModel` が実行ファイルを振り分けるだけで claude-cli.ts がそのまま通る。
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.6-luna-web",
-  "gpt-5.6-sol-web",
-] as const
 
 /** 道具呼び出しの提出スキーマ。`arguments` は自由形なので中身は AI SDK 側の道具スキーマが検査する。 */
 export const TOOL_PROTOCOL_SCHEMA = {

@@ -38,7 +38,7 @@ import { selfdev } from "./core/selfdev.ts"
 import { dayRange, localStamp, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces } from "./core/workspaces.ts"
 import { readJournal, renderJournal } from "./journal.ts"
-import { CLAUDE_POOL, RMOD_POOL } from "./model/claude-cli.ts"
+import { CLAUDE_POOL, CODEX_POOL } from "./model/models.ts"
 import { isRefusal, runtime } from "./runtime.ts"
 import { Attention, type NextMove } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
@@ -183,7 +183,7 @@ const program = (argv: readonly string[]) =>
         // 「開いている」と出したまま取り込みが全部落ちる、が起こる。
         const nowMs = Date.now()
         const pools: string[] = []
-        for (const pool of [CLAUDE_POOL, RMOD_POOL]) {
+        for (const pool of [CLAUDE_POOL, CODEX_POOL]) {
           const cd = yield* gov.quotaCooldown(pool, nowMs)
           pools.push(
             cd
