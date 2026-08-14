@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 /**
- * tick。話しかけられなくても動くための唯一の入口。
+ * cycle。話しかけられなくても動くための唯一の入口。
  *
  * ここまでの構造は全部「人が話しかけたら動く」形だった(`bun run agent` も `oz` も人が起動する)。
  * 自走にするというのは、起動の理由を人の発話から DB の状態に移すこと。
  * このファイルがその置き換えで、systemd のタイマーから定期的に呼ばれる。
  *
- *   1. Attention.digest() …SQL だけでモデル実行が必要かを決める。ここでモデルは呼ばない。
+ *   1. Attention.planCycle() …SQL だけでモデル実行が必要かを決める。ここでモデルは呼ばない。
  *   2. 実行条件を満たさなければ何もせず終わる(モデル利用量を消費しない)。定期実行の大半はこの経路を通る。
  *   3. 実行条件を満たすときだけエージェントを組み立て、1回実行する。
  *   4. 返ってきたものを system イベントとして DB に残し、既読位置を進める。
@@ -15,7 +15,7 @@
  * 実行条件は Attention 側に集約し、ここは判定結果に従って実行するだけにしてある。
  *
  * `OPEN_ZERO_LANE=autonomous` で自律実行として計上する。日次 run 数の内訳が対話と分かれ、
- * tick が過剰実行されても対話用の run 数は残る(Governance.BUDGET.autonomousRuns)。
+ * cycle が過剰実行されても対話用の run 数は残る(Governance.BUDGET.autonomousRuns)。
  */
 import * as Effect from "effect/Effect"
 import { DRAFTING } from "./agent/drafting.ts"
@@ -25,13 +25,13 @@ import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
 import { causeReason, describeRefusal } from "./core/errors.ts"
-import { dayRange, nowIso } from "./core/time.ts"
+import { localDayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
 import { logPost, readJournal } from "./journal.ts"
 import { poolForModel } from "./model/models.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
-import { Attention, type Digest, type ObservedEvent } from "./services/Attention.ts"
+import { Attention, type CyclePlan, type ObservedEvent } from "./services/Attention.ts"
 import { Db } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
 import { buildFencedPrompt, Governance, type UntrustedBlock } from "./services/Governance.ts"
@@ -41,18 +41,18 @@ import { Memory } from "./services/Memory.ts"
 loadEnv()
 
 /**
- * 1回の tick に許す時間。上限を付けないと無限に待つ。
+ * 1回の cycle に許す時間。上限を付けないと無限に待つ。
  *
  * 300 秒では下書きの日が入り切らない。書いて精査に出して直してもう一度出す形になり、
  * 実測した回は 270 秒の時点でまだ3稿目を書いていた。unit の `TimeoutStartSec` は 600 秒なので、
  * その内側に収まる範囲で伸ばす。個々のコンテナ走行は180秒で先に切り、締め処理の時間を残す。
  */
-const TIMEOUT_MS = Number(process.env.OPEN_ZERO_TICK_TIMEOUT_MS ?? 420_000)
+const TIMEOUT_MS = Number(process.env.OPEN_ZERO_CYCLE_TIMEOUT_MS ?? 420_000)
 
 const short = (id: string) => id.slice(0, 8)
-/** tick が使うモデル。既定は対話と同じ — 自走のほうを安くしたいときだけ差し替える。 */
-const tickModel = () => process.env.OPEN_ZERO_TICK_MODEL ?? process.env.OPEN_ZERO_MODEL ?? "claude-opus-5"
-const log = (...parts: unknown[]) => console.error("[tick]", ...parts)
+/** cycle が使うモデル。既定は対話と同じ — 自走のほうを安くしたいときだけ差し替える。 */
+const cycleModel = () => process.env.OPEN_ZERO_CYCLE_MODEL ?? process.env.OPEN_ZERO_MODEL ?? "claude-opus-5"
+const log = (...parts: unknown[]) => console.error("[cycle]", ...parts)
 
 /** イベントの content は JSON 文字列。人(とモデル)が読める1行に戻す。 */
 function renderEvent(e: ObservedEvent): string {
@@ -66,7 +66,7 @@ function renderEvent(e: ObservedEvent): string {
   return `[${e.at}] ${e.source}: ${body.slice(0, 500)}`
 }
 
-function renderWatchSection(d: Digest): string | undefined {
+function renderWatchSection(d: CyclePlan): string | undefined {
   if (d.stalled.length === 0) return undefined
   return [
     "## 対応対象の watch",
@@ -87,13 +87,13 @@ function renderWatchSection(d: Digest): string | undefined {
           "",
         ]
       : []),
-    "状態を確認するか open-zero 側の担当作業を進めたら `ran` で結果を残す。**変化が無くても残す** — 呼ばないと次の tick でも対応対象になる。",
+    "状態を確認するか open-zero 側の担当作業を進めたら `ran` で結果を残す。**変化が無くても残す** — 呼ばないと次回も対応対象になる。",
     "**以前対応した結果を記録し忘れているなら、そのときの時刻を `at` に渡して今記録する。**",
     "再提示待機時間はその時刻から数えるので後ろへずれない。件名に対応記録を書き込むのではなく、ここを使う。",
   ].join("\n")
 }
 
-function renderPendingSection(d: Digest): string | undefined {
+function renderPendingSection(d: CyclePlan): string | undefined {
   if (d.pending.length === 0) return undefined
   return [
     "## 返事待ちの提案(あなたは決められない。ユーザーが見るのを待っている)",
@@ -105,13 +105,13 @@ function renderPendingSection(d: Digest): string | undefined {
     }),
     "",
     "**今回できることが無いなら `settle` で一行残す。** 残すとこの件は次回の実行条件から外れる",
-    "(一覧には残る — 承認はまだ要る)。呼ばないと、この件を理由にtickが毎回実行され、",
+    "(一覧には残る — 承認はまだ要る)。呼ばないと、この件を理由に自動処理が毎回実行され、",
     "毎回同じ「あなた待ちです」を書き直すことになる。**前回の結論が既に載っているなら、",
     "同じことをもう一度書かない。**状況が動いたときだけ `settle` を上書きする。",
   ].join("\n")
 }
 
-function renderRefusedSection(d: Digest): string | undefined {
+function renderRefusedSection(d: CyclePlan): string | undefined {
   if (d.refused.length === 0) return undefined
   return [
     // watch に前回の結果を渡すのと同じ。断られた側を渡さないと、
@@ -125,18 +125,18 @@ function renderRefusedSection(d: Digest): string | undefined {
 }
 
 /**
- * tick のプロンプト。「何もしない」を正解として明示するのが要点。
+ * cycle のプロンプト。「何もしない」を正解として明示するのが要点。
  * 実行された以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を出す。
  * 実行条件と対象だけ渡して、処理する必要が無ければ一行で終えてよいと書く。
  */
-function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspace[]): string {
+function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Workspace[]): string {
   const sections: string[] = []
 
   sections.push(
     [
       spokenTo
         ? "**ユーザーがいま話しかけている。**下に載っている owner の入力がそれ。"
-        : "これは tick(定期起動)。ユーザーに話しかけられて動いているのではない。",
+        : "これは自動処理(定期起動)。ユーザーに話しかけられて動いているのではない。",
       spokenTo
         ? `いま ${d.at}。**この回で最後に書いた文が、そのまま Discord の返信として届く。**`
         : `いま ${d.at}。**ユーザーはこの場にいない** — 訊いても今は誰も答えない。`,
@@ -191,7 +191,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
         "## 今日ぶんの下書き",
         "1日に1本、外に出せる文を `draft` で置く。出す先は Zenn を想定した記事。",
         "",
-        "**書き始める前に `recall` で自分の走行記録を引く。** 切られた tick、通らなかった経路、",
+        "**書き始める前に `recall` で自分の走行記録を引く。** 切られた自動処理、通らなかった経路、",
         "動かなかった設定、使ったモデル利用量 — 自走するエージェントを実際に動かして失敗した記録は他の誰も持っていない。",
         "引いて何も出てこなければ `draft` を呼ばず、「書ける実測が無い」と一行書いて終える。",
         "",
@@ -204,7 +204,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
     [
       "## 今回やること",
       `**この回に使える時間は ${Math.round(TIMEOUT_MS / 1000)} 秒**。\`shell\` の返り値に残りが出る。` +
-        "尽きる前に中断して、分かったことを書く。続きは同じ workspace の名前を渡せば次の tick で継げる。",
+        "尽きる前に中断して、分かったことを書く。続きは同じ workspace の名前を渡せば次回継げる。",
       "",
       ...(spokenTo
         ? [
@@ -220,7 +220,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
             "通知回数が増えるほど、次の通知が読まれにくくなる。",
           ]),
       "",
-      "**調べ直すより、取得済みの情報で終える。** tick は数分で切られる。途中で切られると",
+      "**調べ直すより、取得済みの情報で終える。** 自動処理は数分で切られる。途中で切られると",
       "その回の働きは丸ごと消えて、ユーザーには何も残らない。だから:",
       "- `recall` は当たった時点で止める。**同じ語をもう一度引かない**。「該当なし」が2回続いたら DB に無い。",
       "- DB を読むだけなら `recall` を自分で引く。委譲エージェント(`digger` / `researcher`)を呼ぶのは",
@@ -264,7 +264,7 @@ function buildPrompt(d: Digest, spokenTo: boolean, workspaces: readonly Workspac
 /** エージェントを組み立てる前の予備判定。 */
 const blocked = Effect.gen(function* () {
   const gov = yield* Governance
-  const model = tickModel()
+  const model = cycleModel()
   return yield* gov
     .precheck({
       pool: poolForModel(model),
@@ -278,7 +278,7 @@ const blocked = Effect.gen(function* () {
     )
 })
 
-/** tick の起動回数だけ数える。行を増やさずに最終実行状態を確認するための最小記録。 */
+/** cycle の起動回数だけ数える。行を増やさずに最終実行状態を確認するための最小記録。 */
 const bumpCount = (key: string) =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -287,16 +287,16 @@ const bumpCount = (key: string) =>
     return n
   })
 
-async function tick(): Promise<string> {
+export async function runCycle(): Promise<string> {
   const d = await run(
     Effect.gen(function* () {
-      // digest より先に読む — 届いていた文がそのまま未読の入力になり、「ユーザーから
-      // 言われた」ことが実行条件になる。ここが後だと、返事は次の tick まで読まれない。
-      // poll が先に取り込んでいれば0件で通り、DB に残っているぶんが digest に出る。
+      // planCycle より先に読む — 届いていた文がそのまま未読の入力になり、「ユーザーから
+      // 言われた」ことが実行条件になる。ここが後だと、返事は次回まで読まれない。
+      // poll が先に取り込んでいれば0件で通り、DB に残っているぶんが planCycle に出る。
       const arrived = yield* drainInbox
       if (arrived > 0) log(`受信箱から ${arrived} 件`)
       const att = yield* Attention
-      return yield* att.digest()
+      return yield* att.planCycle()
     }),
   )
 
@@ -322,10 +322,10 @@ async function tick(): Promise<string> {
         const att = yield* Attention
         const db = yield* Db
         const mem = yield* Memory
-        const n = yield* bumpCount("tick:idle_count")
+        const n = yield* bumpCount("cycle:idle_count")
         // 失敗した回にも実行済み状態を付ける。付けないと、同じ失敗を 15 分ごとに1日じゅう繰り返す。
-        if (dreamed) yield* db.setMeta(DREAM_DAILY, dayRange(d.at).key)
-        if (swept) yield* db.setMeta(CLEANUP_DAILY, dayRange(d.at).key)
+        if (dreamed) yield* db.setMeta(DREAM_DAILY, localDayRange(d.at).key)
+        if (swept) yield* db.setMeta(CLEANUP_DAILY, localDayRange(d.at).key)
         const lines = [dreamed, swept].filter(Boolean) as string[]
         if (lines.length > 0) {
           yield* mem.remember({
@@ -338,7 +338,7 @@ async function tick(): Promise<string> {
         }
         // 見ていないので進めない。idle は入力が無いという判定なので、この起動と入れ違いに
         // 届いたぶんまで既読にすると、届いた側は何も返らないまま消える。
-        yield* att.commit({ upto: d.cursor })
+        yield* att.completeCycle({ upto: d.cursor })
         return n
       }),
     )
@@ -365,16 +365,16 @@ async function tick(): Promise<string> {
   const { createAssistant } = await import("./agent/assistant.ts")
 
   try {
-    const assistant = createAssistant({ model: tickModel() })
+    const assistant = createAssistant({ model: cycleModel() })
     // 道具に締切を見せる。プロンプトに書くだけでは足りない — 起動時の文は、9回目を
     // 走らせるかどうかを決める時点では過去の話になっている(src/core/deadline.ts)。
     startDeadline(TIMEOUT_MS)
-    // 切られてもここで受け止める。投げ返すと commit に辿り着かないので冷却の起点が進まず、
+    // 切られてもここで受け止める。投げ返すと completeCycle に辿り着かないので冷却の起点が進まず、
     // 次のタイマーが同じ条件で実行され、同量のクォータと時間を消費して同じ理由で失敗する。失敗した回も1回動いた回として
     // 締める — 実際にモデルは走り、道具も動いて、その跡は DB に残っている。
     const deadline = AbortSignal.timeout(TIMEOUT_MS)
     const prompt = buildPrompt(d, spokenTo, await run(listWorkspaces))
-    // 「載せた」を記録するのはここ。digest の中ではない — digest は実行条件が無い回にも
+    // 「載せた」を記録するのはここ。planCycle の中ではない — planCycle は実行条件が無い回にも
     // 走るので、そこで印を付けると誰も読んでいない一覧を載せたことにして順番だけが進む。
     // 切られた回でも記録は残す。載ったことは事実で、次は他のものに順番を渡す。
     if (d.stalled.length > 0) {
@@ -440,7 +440,7 @@ async function tick(): Promise<string> {
           // 道具の並び、`steps` は手数、`ms` は掛かった時間 — どれも呼び出し側で数えた値。
           // 切られた回は `cutOff` も残す。止まったことが `said` に書かれるとは限らない。
           content: {
-            tick: d.at,
+            cycle: d.at,
             reasons: d.reasons,
             said: text,
             tools: turn.tools,
@@ -455,16 +455,16 @@ async function tick(): Promise<string> {
           text,
           at: nowIso(),
         })
-        yield* bumpCount("tick:active_count")
+        yield* bumpCount("cycle:active_count")
         // 書けたかどうかに関わらず、その日は1回で打ち切る。`draft` を呼ばなかった=材料が無かった
         // ということで、同じ材料のまま15分ごとに書かせ直しても出てくるものは変わらない。
         // ただし切られた回は数えない — 書かないと決めたのではなく、決める前に止められている。
-        if (d.draftDue && !cutOff) yield* db.setMeta("daily:draft", dayRange(d.at).key)
-        // active を立てるのはここだけ。次の tick はこの時刻から冷却時間を数える。
+        if (d.draftDue && !cutOff) yield* db.setMeta("daily:draft", localDayRange(d.at).key)
+        // active を立てるのはここだけ。次の cycle はこの時刻から冷却時間を数える。
         // reasonKey を渡すと、同じ組み合わせで起きるたびに次の冷却が倍になる(回し続けない)。
-        // 進めるのは digest に載った行まで。走っている間に届いたぶんは未読のまま残り、
+        // 進めるのは planCycle に載った行まで。走っている間に届いたぶんは未読のまま残り、
         // 30秒ごとの poll(poll.ts)が次の起動で拾い直す。ここを最大 rowid にすると黙って落ちる。
-        yield* att.commit({
+        yield* att.completeCycle({
           active: true,
           reasonKey: d.reasonKey,
           upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
@@ -490,10 +490,10 @@ async function tick(): Promise<string> {
 const main = async (): Promise<void> => {
   const rt = runtime()
   try {
-    console.log(await tick())
+    console.log(await runCycle())
   } catch (e) {
     // 拒否(halt / クォータ再実行抑止 / 自律実行上限)は失敗ではなく設計どおりの結果。
-    // 既読位置を進めないので、窓が開いた次の tick が同じ入力をもう一度見る。
+    // 既読位置を進めないので、窓が開いた次の cycle が同じ入力をもう一度見る。
     const cause = e instanceof Error && "cause" in e ? (e as { cause?: unknown }).cause : undefined
     const inner = isRefusal(cause) ? cause : e
     console.log(isRefusal(inner) ? `見送った: ${describeRefusal(inner)}` : `落ちた: ${String(inner)}`)

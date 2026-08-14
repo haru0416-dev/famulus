@@ -11,7 +11,7 @@
  * 返事は最後に話しかけられた場所へ返す。リアクションを押させるものはスレッドを立てる
  * — スレッド外の自由文はどの1件への返事か判定できない。
  *
- * token / owner id が無ければ何もせず undefined を返す。tick を止めない。
+ * token / owner id が無ければ何もせず undefined を返す。自動処理を止めない。
  */
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
@@ -75,7 +75,7 @@ export interface Inbound {
 export interface Batch {
   /** 届いた順に並べたもの。 */
   readonly items: readonly Inbound[]
-  /** チャンネルごとの新しい cursor。`seen` を呼ぶまで DB には入らない。 */
+  /** チャンネルごとの新しい cursor。`commitInboundBatch` を呼ぶまで DB には入らない。 */
   readonly marks: Readonly<Record<string, string>>
   /** 処理済みリアクションを除外した後の、リアクション待ち一覧。 */
   readonly taps: Readonly<Record<string, Record<string, string>>>
@@ -111,7 +111,7 @@ const MAX_PENDING = 20
 const MAX_THREADS = 3
 
 /**
- * `inbox()` が同時に出す GET の上限。
+ * `pollInbound()` が同時に出す GET の上限。
  * 読む先は talk / draft / log / DM の最大4件と、スレッド最大3件で合計7件。
  * rate-limit bucket の分離は保証ではないため、ここでは並列数だけを8に制限する。
  */
@@ -325,7 +325,7 @@ const makeDiscord = () =>
      * 返ってきたものを読む。リアクションと自由文を同じ形で返す。一覧を1回引いて両方見る
      * (リアクションは古いメッセージに後から付くので `after` では拾えない)。
      *
-     * cursor は進めない。進めるのは `seen`。
+     * cursor は進めない。進めるのは `commitInboundBatch`。
      *
      * cursor を持たないチャンネルは自由文を取り込まず cursor だけ返す。DM には過去の会話が
      * 残っていて、cursor なしで引くと去年の発言が今日の入力になる。リアクションは対象外
@@ -333,7 +333,7 @@ const makeDiscord = () =>
      *
      * 取れなければ空を返す。呼ぶ側は「届いていない」と「Discord が落ちている」を区別しない。
      */
-    const inbox = (): Effect.Effect<Batch, DbFailed> =>
+    const pollInbound = (): Effect.Effect<Batch, DbFailed> =>
       Effect.gen(function* () {
         const owner = ownerId()
         const pending = yield* meta<Pending>("discord:taps", {})
@@ -399,10 +399,10 @@ const makeDiscord = () =>
       })
 
     /**
-     * cursor を DB に書く。`inbox` の返り値を記録し終えた側が呼ぶ。
+     * cursor を DB に書く。`pollInbound` の返り値を記録し終えた側が呼ぶ。
      * 呼ばずに終えた回は次に同じものをもう一度読む。
      */
-    const seen = (b: Batch): Effect.Effect<void, DbFailed> =>
+    const commitInboundBatch = (b: Batch): Effect.Effect<void, DbFailed> =>
       Effect.gen(function* () {
         for (const [ch, id] of Object.entries(b.marks)) yield* db.setMeta(`discord:last:${ch}`, id)
         if (b.heard !== undefined) yield* db.setMeta("discord:heard_in", b.heard)
@@ -430,7 +430,7 @@ const makeDiscord = () =>
         }
       })
 
-    return { post, inbox, seen, configured, where } as const
+    return { post, pollInbound, commitInboundBatch, configured, where } as const
   })
 
 export class Discord extends Context.Service<Discord, Effect.Success<ReturnType<typeof makeDiscord>>>()(

@@ -3,7 +3,7 @@
  *
  * コンテナに見えるのは workspace だけで、`/home/haru` は映らない(src/services/Sandbox.ts)。
  * この境界のため、自律実行側は open-zero のソースを読むことも修正することもできなかった。
- * 実測した tick が到達したのは「拾ってきた他人のリポジトリを動かす」ところまでで、
+ * 実測した cycle が到達したのは「拾ってきた他人のリポジトリを動かす」ところまでで、
  * open-zero の不具合を見つけても修正対象へアクセスできない。境界は緩めず、代わりに clone を workspace に置く。
  *
  * 置くのは clone。作業ツリーのコピーではなく履歴ごと渡すのは、直した結果を `git diff` で
@@ -42,7 +42,7 @@ export const repoRoot = (): string => fileURLToPath(new URL("../..", import.meta
 const BUN = `npx -y bun@${Bun.version}`
 
 /**
- * 次の tick がこれを読んで「ここで何ができるか」を決める。通し方を本文に書く。
+ * 次の cycle がこれを読んで「ここで何ができるか」を決める。通し方を本文に書く。
  * 一覧に出るのは名前とこの一行だけなので、ここに無い手順は次の回には存在しない。
  *
  * 中身は package.json の `gate` に置いてある。定義を2か所に持たない —
@@ -59,7 +59,7 @@ export const SELFDEV_PURPOSE =
 /** 依存の取得。`--frozen-lockfile` は lockfile と package.json のずれをその場で落とす。 */
 const INSTALL = `${BUN} install --frozen-lockfile`
 
-/** 依存の取得は分単位。tick の中では走らせないので、コンテナの既定(3分)より長く取る。 */
+/** 依存の取得は分単位。cycle の中では走らせないので、コンテナの既定(3分)より長く取る。 */
 const INSTALL_MS = 10 * 60_000
 
 const sh = (cmd: string, args: readonly string[], cwd?: string): string =>

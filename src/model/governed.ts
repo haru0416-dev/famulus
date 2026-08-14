@@ -30,11 +30,11 @@ import { traceOf } from "./trace.ts"
 
 /**
  * この経路がどちらのクォータを消費するか。プロセス単位で決まる。
- * tick(src/tick.ts)は systemd から別プロセスで起きるので、環境変数で仕切る
+ * cycle(src/cycle.ts)は systemd から別プロセスで起きるので、環境変数で仕切る
  * (1プロセスの中で対話と自走が混ざることがない、という事実をそのまま配置で表している)。
  *
  * 読み込み時ではなく呼び出し時に見る。const にすると import の順序が意味を持ってしまい、
- * 「tick.ts が env を設定する前に評価されていたので対話用クォータを消費していた」が起きる。
+ * 「cycle.ts が env を設定する前に評価されていたので対話用クォータを消費していた」が起きる。
  */
 export const lane = (): Lane => (process.env.OPEN_ZERO_LANE === "autonomous" ? "autonomous" : "interactive")
 

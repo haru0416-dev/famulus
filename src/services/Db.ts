@@ -45,7 +45,7 @@ export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed
             if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true })
             const d = openDb(path)
             // busy_timeout が先。これより前の文はロック待ちをせず、その場で locked になる。
-            // poll と tick が同じ瞬間に開くと journal_mode が WAL の復旧ロックに当たって落ちていた。
+            // poll と cycle が同じ瞬間に開くと journal_mode が WAL の復旧ロックに当たって落ちていた。
             d.exec("PRAGMA busy_timeout = 5000;")
             d.exec("PRAGMA foreign_keys = ON;")
             const objects = d
@@ -76,6 +76,22 @@ export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed
               }
             } else {
               assertSchemaV4(d, path)
+            }
+            // 現行 schema を受理した DB だけ、旧実行状態を一度だけ新しい名前へ移す。
+            d.exec("BEGIN IMMEDIATE")
+            try {
+              d.exec(`INSERT INTO schema_meta (key, value)
+                SELECT 'cycle:' || substr(key, 6), value FROM schema_meta
+                 WHERE key LIKE 'tick:%'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM schema_meta current
+                      WHERE current.key = 'cycle:' || substr(schema_meta.key, 6)
+                   );
+                DELETE FROM schema_meta WHERE key LIKE 'tick:%';`)
+              d.exec("COMMIT")
+            } catch (e) {
+              d.exec("ROLLBACK")
+              throw e
             }
             // 版を受理してから永続設定を変える。拒否したDBは接続モードも変更しない。
             if (path !== ":memory:") d.exec("PRAGMA journal_mode = WAL;")

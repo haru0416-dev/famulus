@@ -75,7 +75,7 @@ export interface ProposalRow {
   readonly status: ProposalStatus
   readonly expires_at: string
   readonly deny_reason: string | null
-  /** tick が「今回できることは無い」と結論を置いた時刻。null = まだ何も言っていない。 */
+  /** 自動処理が「今回できることは無い」と結論を置いた時刻。null = まだ何も言っていない。 */
   readonly settled_at: string | null
   readonly settled_note: string | null
 }
@@ -253,17 +253,17 @@ const makeProposals = () =>
       })
 
     /**
-     * 承認待ちについて、tick 側の結論を置く。提案の状態は動かさない。
+     * 承認待ちについて、自動処理側の結論を置く。提案の状態は動かさない。
      *
-     * 承認を出せるのはユーザーだけなので、tick に決着はつけられない。つけられるのは
-     * 「今回できることは無い」まで — それを書く場所が無いと、この件を理由にtickが毎回実行され、
+     * 承認を出せるのはユーザーだけなので、自動処理には決着をつけられない。つけられるのは
+     * 「今回できることは無い」まで — それを書く場所が無いと、この件を理由に毎回実行され、
      * 毎回同じ結論を書き直す(実測で4回、いずれも道具呼び出し4回以下)。
      *
-     * 書いた後は `digest` が実行条件に数えない。一覧からは消さない — 承認はまだ要る。
-     * `ranWatch` と同じく、実行したことと対象を一覧に残すことを別に記録する。
+     * 書いた後は `planCycle` が実行条件に数えない。一覧からは消さない — 承認はまだ要る。
+     * `recordWatchRun` と同じく、実行したことと対象を一覧に残すことを別に記録する。
      * 上書きしてよい: 状況が動けば結論も変わる。
      */
-    const settle = (idOrPrefix: string, note: string, opts?: { at?: string }) =>
+    const recordPendingConclusion = (idOrPrefix: string, note: string, opts?: { at?: string }) =>
       Effect.gen(function* () {
         const p = yield* get(idOrPrefix)
         const at = opts?.at ?? nowIso()
@@ -271,7 +271,7 @@ const makeProposals = () =>
         return { ...p, settled_at: at, settled_note: note } satisfies ProposalRow
       })
 
-    return { create, get, list, approve, deny, settle } as const
+    return { create, get, list, approve, deny, recordPendingConclusion } as const
   })
 
 export class Proposals extends Context.Service<Proposals, Effect.Success<ReturnType<typeof makeProposals>>>()(

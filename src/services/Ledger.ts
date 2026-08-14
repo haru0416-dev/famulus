@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { dayRange, nowIso } from "../core/time.ts"
+import { localDayRange, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 /**
@@ -66,7 +66,7 @@ const makeLedger = () =>
     const today = (at: string = nowIso()) =>
       Effect.gen(function* () {
         // 見出しも集計もユーザーの1日で切る(core/time.ts)。
-        const day = dayRange(at)
+        const day = localDayRange(at)
         const r = yield* db.get(
           // 入力は3列の和で出す。in_tok だけを「入力」として出すと、桁の違う数字が表に出る。
           `SELECT COUNT(*)runs, COALESCE(SUM(in_tok + cache_read + cache_write),0)in_tok,

@@ -638,7 +638,7 @@ const makeIntake = () =>
           if (!statSync(dir).isDirectory()) continue
           for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) out.push(join(dir, f))
         } catch {
-          // 消えた・読めないディレクトリは黙って飛ばす。入口が壊れても tick は止めない。
+          // 消えた・読めないディレクトリは黙って飛ばす。入口が壊れても cycle は止めない。
         }
       }
       return out

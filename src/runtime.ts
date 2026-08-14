@@ -9,7 +9,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as ManagedRuntime from "effect/ManagedRuntime"
 import { type DbFailed, describeRefusal, type Refusal } from "./core/errors.ts"
-import { type Runner, RunnerClaudeCli } from "./model/Runner.ts"
+import { type Runner, RunnerLive } from "./model/Runner.ts"
 import { Attention } from "./services/Attention.ts"
 import { type Db, DbLive } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
@@ -37,10 +37,10 @@ const services = Layer.mergeAll(
 export type DbLayer = Layer.Layer<Db, DbFailed>
 export type RunnerLayer = Layer.Layer<Runner, never, Governance | Ledger>
 
-export const makeAppLayer = (db: DbLayer = DbLive(), runner: RunnerLayer = RunnerClaudeCli) =>
+export const makeAppLayer = (db: DbLayer = DbLive(), runner: RunnerLayer = RunnerLive) =>
   Layer.provideMerge(runner, Layer.provideMerge(services, db))
 
-export const makeRuntime = (db: DbLayer = DbLive(), runner: RunnerLayer = RunnerClaudeCli) =>
+export const makeRuntime = (db: DbLayer = DbLive(), runner: RunnerLayer = RunnerLive) =>
   ManagedRuntime.make(makeAppLayer(db, runner))
 
 export type AppRuntime = ReturnType<typeof makeRuntime>

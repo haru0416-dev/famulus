@@ -67,7 +67,7 @@ test("上げたものは確定値になり、既存の slot は区間が継が�
         Effect.gen(function* () {
           const mem = yield* Memory
           const db = yield* Db
-          yield* mem.believe("dentist.next_appt", "8/5(水)18:00", { validFrom: "2026-07-01T00:00:00Z" })
+          yield* mem.recordBelief("dentist.next_appt", "8/5(水)18:00", { validFrom: "2026-07-01T00:00:00Z" })
           const evidence = yield* mem.remember({ source: "owner", content: MATERIAL })
           const line = yield* keep({ material: MATERIAL, evidence: [{ id: evidence, text: MATERIAL }] })
           const grounded = yield* db.get(
@@ -75,7 +75,7 @@ test("上げたものは確定値になり、既存の slot は区間が継が�
           )
           return {
             line,
-            cur: yield* mem.belief("dentist.next_appt"),
+            cur: yield* mem.currentBelief("dentist.next_appt"),
             hist: yield* mem.beliefHistory("dentist.next_appt"),
             grounded,
             evidence,
@@ -126,11 +126,11 @@ test("この回で本体が確定させた slot は、keeper が書き直さな�
         Effect.gen(function* () {
           const mem = yield* Memory
           const since = "2026-08-08T09:00:00Z"
-          yield* mem.believe("dentist.next_appt", "さくら歯科の次回予約は8/12(水)18:00。担当は鈴木さん")
+          yield* mem.recordBelief("dentist.next_appt", "さくら歯科の次回予約は8/12(水)18:00。担当は鈴木さん")
           const line = yield* keep({ material: MATERIAL, since })
           return {
             line,
-            cur: yield* mem.belief("dentist.next_appt"),
+            cur: yield* mem.currentBelief("dentist.next_appt"),
             hist: yield* mem.beliefHistory("dentist.next_appt"),
           }
         }),
@@ -173,7 +173,7 @@ test("引用に対応するowner eventが無ければbeliefを保存しない", 
             material: MATERIAL,
             evidence: [{ id: evidence, text: "owner: 別の発言" }],
           })
-          return { line, belief: yield* mem.belief("dentist.next_appt") }
+          return { line, belief: yield* mem.currentBelief("dentist.next_appt") }
         }),
       )
       assert.equal(out.belief, undefined)

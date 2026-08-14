@@ -4,7 +4,7 @@
  *
  * ボットが「オンライン」と出るかどうかは、Gateway の WebSocket セッションを持っているか
  * だけで決まる。REST でメッセージを出しても表示は動かない — だから `src/poll.ts` が
- * 30秒ごとに `inbox()` を呼んでいる間も、ユーザーの画面ではずっとオフラインだった。
+ * 30秒ごとに `pollInbound()` を呼んでいる間も、ユーザーの画面ではずっとオフラインだった。
  *
  * メッセージの経路はここに移さない。受け取りは今まで通り poll(REST)が持つ。
  * 分ける理由は障害時の影響が違うこと — この接続が切れても届いたものは30秒後に読まれるが、
@@ -50,7 +50,7 @@ const STALE = new Set([4007, 4009])
 const log = (m: string): void => console.log(`${nowIso()} ${m}`)
 
 /**
- * 表示に出す文。読み取り専用で開く — 常駐が書き込みの錠を持つと、tick が待たされる。
+ * 表示に出す文。読み取り専用で開く — 常駐が書き込みの錠を持つと、cycle が待たされる。
  * 読めなければ `undefined`(掃除の最中や、まだ DB が無い状態は普通にある)。
  */
 export function stateLine(path: string = DEFAULT_DB_PATH): string | undefined {
@@ -61,7 +61,7 @@ export function stateLine(path: string = DEFAULT_DB_PATH): string | undefined {
       db.exec("PRAGMA busy_timeout = 2000;")
       if (schemaVersion(db) !== SCHEMA_VERSION) return undefined
       const cursor = Number(
-        (db.query("SELECT value v FROM schema_meta WHERE key='tick:cursor'").get() as { v?: string } | null)
+        (db.query("SELECT value v FROM schema_meta WHERE key='cycle:cursor'").get() as { v?: string } | null)
           ?.v ?? 0,
       )
       const unread = Number(

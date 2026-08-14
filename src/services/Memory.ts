@@ -81,7 +81,7 @@ export interface EventRow {
 /**
  * この belief イベントが、その slot の今の値か。
  *
- * `believe()` は追記なので、同じ slot を2回確定すると belief イベントが2本残る。
+ * `recordBelief()` は追記なので、同じ slot を2回確定すると belief イベントが2本残る。
  * 両方を「確定」として並べると、読む側は古い値と新しい値を区別できないまま受け取る。
  * どちらが今なのかは projection(`belief_slots`)だけが知っている。
  *
@@ -273,7 +273,7 @@ const makeMemory = () =>
      * 「6月に終わっていたと8月に知った」なら validFrom は6月、updated_at は8月。
      * 分からなければ記録時刻に落ちる — 推測で埋めるより「遅くともこの時点」のほうが正しい。
      */
-    const believe = (
+    const recordBelief = (
       slot: string,
       value: unknown,
       opts?: {
@@ -346,7 +346,7 @@ const makeMemory = () =>
       "value, exposure, resolved_from, updated_at, valid_from, valid_until, invalidated_reason"
 
     /** 今の値。閉じていない区間は slot ごとに高々1本(部分 UNIQUE が保証している)。 */
-    const belief = (slot: string) =>
+    const currentBelief = (slot: string) =>
       db
         .get(`SELECT ${SLOT_COLS} FROM belief_slots WHERE slot = ?AND valid_until IS NULL`, slot)
         .pipe(Effect.map((r) => view(slot, r)))
@@ -411,7 +411,7 @@ const makeMemory = () =>
      * その帯だけ LIKE の素朴な走査に落とす(events は個人の DB 規模で、走査しても実用上問題ない)。
      *
      * 並びは bm25 の関連度。`at DESC` にすると「一致した中の新着順」でしかなくなり、
-     * tick が毎回書く長い自己言及が"新しい"というだけで上位を占めて、探している事実を押し下げる。
+     * cycle が毎回書く長い自己言及が"新しい"というだけで上位を占めて、探している事実を押し下げる。
      *
      * 併せて層で重みを付ける。同じ語を含むだけの独り言より、確定した1行のほうが常に役に立つ。
      */
@@ -446,7 +446,7 @@ const makeMemory = () =>
 
         const rows =
           indexed.length === 0
-            ? // 内部結合にする: 索引を持たない行(tick が自分に出したプロンプトなど)は
+            ? // 内部結合にする: 索引を持たない行(cycle が自分に出したプロンプトなど)は
               // DB には残すが検索には出さない。`text: ""` の意味を両経路で揃える。
               yield* db.all(
                 `SELECT e.*, f.text AS text, ${IS_CURRENT} AS is_current FROM events e
@@ -513,8 +513,8 @@ const makeMemory = () =>
 
     return {
       remember,
-      believe,
-      belief,
+      recordBelief,
+      currentBelief,
       beliefAsOf,
       beliefHistory,
       staleBeliefs,

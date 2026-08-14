@@ -64,7 +64,7 @@ export function sanitizedEnv(source: NodeJS.ProcessEnv = process.env): Record<st
 /**
  * `claude` の置き場所。PATH には頼らない。
  * systemd --user から起動すると子に渡る PATH は systemd の既定で `~/.local/bin` を含まないので、
- * PATH 解決にすると tick からの呼び出しだけが `Executable not found` で落ちる。
+ * PATH 解決にすると cycle からの呼び出しだけが `Executable not found` で落ちる。
  * フォールバックがあるとその失敗は表に出ず、片方の枠だけで走り続ける。
  */
 const BIN_CANDIDATES = [".local/bin/claude", ".claude/local/claude", ".bun/bin/claude"]

@@ -3,14 +3,14 @@
  * ユーザー向け管理 CLI。提案の承認・却下、停止、状態確認、記憶や watch の操作をまとめる。
  * 提案の承認を記録する入口はこの CLI だけで、承認後の実行コネクタはまだ無い。
  *
- *   oz status              … 停止/クォータ/今日の使用量/承認待ち件数/tick の最終実行状態
+ *   oz status              … 停止/クォータ/今日の使用量/承認待ち件数/自動処理の最終実行状態
  *   oz halt <理由>         … 全停止。自動では明けない
  *   oz resume              … 停止解除
- *   oz attention           …tick の処理対象(watch・問い・次回の実行条件)
- *   oz journal [n]         …tick が実際に何をしたか(呼んだ道具・残った行・モデル使用量)
+ *   oz attention           …自動処理の対象(watch・問い・次回の実行条件)
+ *   oz journal [n]         …自動処理が実際に何をしたか(呼んだ道具・残った行・モデル使用量)
  *   oz answer <id> <答え>  … 問いに答えて閉じる
  *   oz drop <id> <理由>    … 追跡を終了する問いを、答えずに取り下げる
- *   oz watch <やること>    …watch に置く(既定は famulus = tick の実行条件になる)
+ *   oz watch <やること>    …watch に置く(既定は famulus = 自動処理の実行条件になる)
  *   oz unwatch <id>        … 決着した watch を閉じる
  *   oz list [status]       … 提案一覧(既定は承認待ち)
  *   oz show <id>           … 承認カード全文(id は前方一致でよい)
@@ -35,7 +35,7 @@ import { CLEANUP_DAYS, cleanup } from "./core/cleanup.ts"
 import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
 import { selfdev } from "./core/selfdev.ts"
-import { dayRange, localStamp, nowIso } from "./core/time.ts"
+import { localDayRange, localStamp, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces } from "./core/workspaces.ts"
 import { readJournal, renderJournal } from "./journal.ts"
 import { CLAUDE_POOL, CODEX_POOL } from "./model/models.ts"
@@ -61,11 +61,11 @@ const place = (ch: string | undefined, dm: string | undefined) =>
 
 const USAGE = `oz — open-zero の承認 CLI
 
-  oz status                今の停止状態・クォータ・今日の使用量・承認待ち件数・tick の最終実行状態
+  oz status                今の停止状態・クォータ・今日の使用量・承認待ち件数・自動処理の最終実行状態
   oz halt <理由>           全停止(自動解除しない)
   oz resume                停止解除
-  oz attention             tick の処理対象(watch・未解決の問い・次回の実行条件)
-  oz journal [n]           tick の実働(既定 10 回)。呼んだ道具・残った行数を、
+  oz attention             自動処理の対象(watch・未解決の問い・次回の実行条件)
+  oz journal [n]           自動処理の実働(既定 10 回)。呼んだ道具・残った行数を、
                            自分で書いた報告文と分けて出す
   oz answer <id> <答え>    問いに答えて閉じる(ユーザーの答えは確認済みとして入る)
   oz drop <id> <理由>      問いを答えないまま取り下げる。理由は必須
@@ -149,9 +149,9 @@ const card = (p: ProposalRow) =>
     `id        : ${p.id}`,
     `状態      : ${STATUS_LABEL[p.status] ?? p.status}${p.deny_reason ? ` — ${p.deny_reason}` : ""}`,
     `作成      : ${p.created_at}   期限: ${p.expires_at}`,
-    // tick 側の結論。承認の代わりではない — 「自分の側では進まない」と書いただけで、
+    // 自動処理側の結論。承認の代わりではない — 「自分の側では進まない」と書いただけで、
     // 提案はまだユーザーの判断を待っている。
-    ...(p.settled_note ? [`tick の結論: ${p.settled_note}(${p.settled_at})`] : []),
+    ...(p.settled_note ? [`自動処理の結論: ${p.settled_note}(${p.settled_at})`] : []),
     "",
     `見出し    : ${p.summary}`,
     `根拠      : ${p.assessment}`,
@@ -189,7 +189,7 @@ const program = (argv: readonly string[]) =>
         }
         const t = yield* ledger.today()
         const pending = yield* proposals.list("proposed", 100)
-        const day = dayRange(nowIso())
+        const day = localDayRange(nowIso())
         // 自走が今日どれだけ使ったか。全体の内訳として出す(区分が分かれているか人が見る唯一の場所)。
         const a = yield* db.get(
           "SELECT COUNT(*)n FROM ledger WHERE role = ?AND at >= ?AND at < ?",
@@ -199,8 +199,8 @@ const program = (argv: readonly string[]) =>
         )
         const discord = yield* Discord
         const dc = yield* discord.where()
-        const last = yield* db.meta("tick:last")
-        const lastActive = yield* db.meta("tick:last_active")
+        const last = yield* db.meta("cycle:last")
+        const lastActive = yield* db.meta("cycle:last_active")
         // 記録が溜まっているか。仕組みがあることと中身があることは別で、
         // ここを出さないと「静かなのは用が無いからか、何も知らないからか」がユーザーに分からない。
         const mem = yield* db.get(
@@ -213,11 +213,11 @@ const program = (argv: readonly string[]) =>
           ...pools,
           `${t.day}: run ${t.runs} 回(うち自走 ${Number(a?.n ?? 0)}/${BUDGET.autonomousRuns})` +
             ` / 入力 ${fmtTok(t.inTok)} 出力 ${fmtTok(t.outTok)}`,
-          // tick は通知なしに停止しうる。最後に呼ばれた時刻を出しておかないと、
+          // 自動処理は通知なしに停止しうる。最後に呼ばれた時刻を出しておかないと、
           // 「静かなのは用が無いからか、止まっているからか」がユーザーに区別できない。
           last
-            ? `tick: 最終 ${last}(最後に実際に動いたのは ${lastActive ?? "まだ無い"})`
-            : "tick: まだ一度も回っていない — systemctl --user status open-zero-tick.timer",
+            ? `自動処理: 最終 ${last}(最後に実際に動いたのは ${lastActive ?? "まだ無い"})`
+            : "自動処理: まだ一度も回っていない — systemctl --user status open-zero-cycle.timer",
           `DB: ${Number(mem?.n ?? 0)} 件(うち取り込み ${Number(mem?.imported ?? 0)} セッション)`,
           `承認待ち: ${pending.length} 件`,
           // 宛先が無いことは実行時に何も起こさない(黙って何もしない)ので、ここで出さないと
@@ -236,7 +236,7 @@ const program = (argv: readonly string[]) =>
       case "attention": {
         const att = yield* Attention
         const memory = yield* Memory
-        const d = yield* att.digest()
+        const d = yield* att.planCycle()
         const watches = yield* att.openWatches()
         const staleBefore = new Date(Date.parse(d.at) - STALE_BELIEF_DAYS * 86_400_000)
           .toISOString()
@@ -245,8 +245,8 @@ const program = (argv: readonly string[]) =>
         return [
           `いま ${d.at}`,
           d.idle
-            ? `次の tick は動かない(冷却 ${d.cooldownHours} 時間 / 前回の実働から ${Number.isFinite(d.sinceLastActiveHours) ? `${d.sinceLastActiveHours.toFixed(1)} 時間` : "まだ無い"})`
-            : `次の tick は動く: ${d.reasons.join(" / ")}`,
+            ? `次回は動かない(冷却 ${d.cooldownHours} 時間 / 前回の実働から ${Number.isFinite(d.sinceLastActiveHours) ? `${d.sinceLastActiveHours.toFixed(1)} 時間` : "まだ無い"})`
+            : `次回は動く: ${d.reasons.join(" / ")}`,
           "",
           `watch(${watches.length} 件)`,
           ...(watches.length === 0
@@ -281,11 +281,11 @@ const program = (argv: readonly string[]) =>
       }
 
       /**
-       * tick が見ているものを、ユーザーの側から置く/やめる4本。
+       * cycle が見ているものを、ユーザーの側から置く/やめる4本。
        *
        * 問いも watch も、増やす経路はエージェントの道具にしかなく、減らす経路は答えるときしか無かった。
        * 片方向しかない置き場は必ず溜まる。溜まった側は `openQuestions` の上限を埋めて、
-       * 新しく立った問いを tick の一覧から外す(実測: open 38 件のうち tick が見ていたのは 20 件)。
+       * 新しく立った問いを cycle の一覧から外す(実測: open 38 件のうち cycle が見ていたのは 20 件)。
        */
       case "answer": {
         const a = idAndText(rest)
@@ -390,13 +390,13 @@ const program = (argv: readonly string[]) =>
           if (fromAt >= 0 && !validFrom) {
             return yield* Effect.fail(new Error("--from には時刻が要る(例: --from 2026-09-01T00:00:00Z)"))
           }
-          yield* mem.believe(slot, value, {
+          yield* mem.recordBelief(slot, value, {
             ...(validFrom ? { validFrom } : {}),
             reason: "ユーザーが oz belief で更新した",
           })
         }
 
-        const now = yield* mem.belief(slot)
+        const now = yield* mem.currentBelief(slot)
         if (!now) return `${slot}: まだ確定していない`
         const hist = yield* mem.beliefHistory(slot)
         return [
@@ -436,7 +436,7 @@ const program = (argv: readonly string[]) =>
 
       case "selfdev": {
         // 中でゲートが通るところまでやる。clone を置いただけの状態を「できた」と出すと、
-        // 次の tick が依存の取得で持ち時間を全部使って、そこで切られる。
+        // 次の cycle が依存の取得で持ち時間を全部使って、そこで切られる。
         return yield* selfdev(rest.includes("--fresh") ? { fresh: true } : {})
       }
 

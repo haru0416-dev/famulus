@@ -1,5 +1,5 @@
 /**
- * 受信箱を DB に移す。tick と poll の両方から呼ばれる。
+ * 受信箱を DB に移す。cycle と poll の両方から呼ばれる。
  *
  * 読む先は Discord だけ。ntfy を併用していたときは、片方の cursor が
  * ずれても気付けなかった。
@@ -17,7 +17,7 @@ import { Memory } from "./services/Memory.ts"
 export const drainInbox: Effect.Effect<number, DbFailed, Discord | Memory> = Effect.gen(function* () {
   const discord = yield* Discord
   const mem = yield* Memory
-  const batch = yield* discord.inbox()
+  const batch = yield* discord.pollInbound()
   for (const m of batch.items) {
     yield* mem.remember({
       source: "owner",
@@ -28,6 +28,6 @@ export const drainInbox: Effect.Effect<number, DbFailed, Discord | Memory> = Eff
   }
   // 記録してから cursor を進める。逆順だと `remember` が失敗した回の項目が cursor より前に
   // 残って二度と読まれない。この順なら最悪でも二重に記録するだけ。
-  yield* discord.seen(batch)
+  yield* discord.commitInboundBatch(batch)
   return batch.items.length
 })

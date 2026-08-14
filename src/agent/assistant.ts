@@ -23,7 +23,7 @@ import * as v from "valibot"
 import { remainingLabel, remainingMs } from "../core/deadline.ts"
 import { loadEnv } from "../core/env.ts"
 import { causeReason } from "../core/errors.ts"
-import { dayRange, localStamp, nowIso } from "../core/time.ts"
+import { localDayRange, localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
 import { claudeMax, lane } from "../model/governed.ts"
 import { CLAUDE_POOL, CODEX_POOL } from "../model/models.ts"
@@ -38,7 +38,7 @@ import { Ledger } from "../services/Ledger.ts"
 import { Memory, renderRecall } from "../services/Memory.ts"
 import { Proposals } from "../services/Proposals.ts"
 import { runDir, runInSandbox } from "../services/Sandbox.ts"
-import { defaultSources, renderHits, SOURCE_MENU, searchWeb } from "../services/Search.ts"
+import { defaultSources, renderHits, SOURCE_MENU, searchSources } from "../services/Search.ts"
 import { fetchPage } from "../services/Web.ts"
 import {
   DRAFT_MAX,
@@ -187,7 +187,7 @@ ${SOURCE_MENU.map((s) => `  - \`${s.name}\` — ${s.what}`).join("\n")}
   ),
   execute: async ({ query, where, perSource }) => {
     try {
-      const results = await searchWeb(query, {
+      const results = await searchSources(query, {
         ...(where ? { where } : {}),
         ...(perSource !== undefined ? { perSource } : {}),
       })
@@ -438,7 +438,7 @@ function buildTools(state: TurnState) {
         run(
           Effect.gen(function* () {
             const mem = yield* Memory
-            const now = asOf ? yield* mem.beliefAsOf(slot, asOf) : yield* mem.belief(slot)
+            const now = asOf ? yield* mem.beliefAsOf(slot, asOf) : yield* mem.currentBelief(slot)
             if (!now) return `'${slot}' は確定していない`
             const hist = yield* mem.beliefHistory(slot)
             // 期間もユーザーの時計で見せる。recall と同じ帯にしないと、同じ出来事が別の日に見える。
@@ -503,14 +503,14 @@ function buildTools(state: TurnState) {
         run(
           Effect.gen(function* () {
             const proposals = yield* Proposals
-            const p = yield* proposals.settle(id, note)
+            const p = yield* proposals.recordPendingConclusion(id, note)
             return `提案 ${p.id.slice(0, 8)}「${p.summary}」に結論を残した: ${note}。これでこの件は次回の実行条件から外れる(承認待ちのままで、一覧には残る)。`
           }),
         ),
     }),
 
     // ── 次回の自律実行で確認する項目を登録する道具。
-    // これが無いと、tick が実行されても参照対象が無く、毎回ゼロから考え直すことになる。
+    // これが無いと、cycle が実行されても参照対象が無く、毎回ゼロから考え直すことになる。
     watch: tool({
       description:
         "決着していない件を継続確認項目(watch)として登録する。famulus(open-zero) が次に対応する未処理項目は次回の自律実行時、human(ユーザー) が次に対応する項目は一定期間更新が無いときに提示される。`ran` で対応結果を記録した後は、設定時間が経過すると再び提示される。**同じ件を登録し直さない** — 状態を確認するか open-zero 側の担当作業を進めたら ran を使う。",
@@ -550,7 +550,7 @@ function buildTools(state: TurnState) {
 
     ran: tool({
       description:
-        "継続確認項目(watch)の状態確認、または open-zero 側の担当作業の結果を記録する。**対応したら必ず呼ぶ** — 呼ばないと同じ項目が次の tick でもプロンプトに載る。変化が無くても呼ぶ(変化なしも次回の判断材料になる)。result は次回対応の基準になるので、実施内容と結果を具体的に書く。**以前の対応結果を記録し忘れていたなら、そのときの時刻を `at` で渡して今から記録してよい** — 再提示待機時間は渡した時刻から数えるので、後ろへずれない。",
+        "継続確認項目(watch)の状態確認、または open-zero 側の担当作業の結果を記録する。**対応したら必ず呼ぶ** — 呼ばないと同じ項目が次回もプロンプトに載る。変化が無くても呼ぶ(変化なしも次回の判断材料になる)。result は次回対応の基準になるので、実施内容と結果を具体的に書く。**以前の対応結果を記録し忘れていたなら、そのときの時刻を `at` で渡して今から記録してよい** — 再提示待機時間は渡した時刻から数えるので、後ろへずれない。",
       inputSchema: vs(
         v.object({
           id: v.pipe(v.string(), v.description("watch の id(先頭8文字でよい)。")),
@@ -574,7 +574,7 @@ function buildTools(state: TurnState) {
         run(
           Effect.gen(function* () {
             const att = yield* Attention
-            const w = yield* att.ranWatch(id, result, at)
+            const w = yield* att.recordWatchRun(id, result, at)
             return `watch ${w.id.slice(0, 8)}「${w.subject}」の対応結果を記録した(通算 ${w.run_count} 回、対応時刻 ${w.last_run_at})。次に対応対象になるのは、そこから ${w.cooldown_hours} 時間後。`
           }),
         ),
@@ -643,7 +643,7 @@ function buildTools(state: TurnState) {
 
     drop: tool({
       description:
-        "答えの出ないまま意味を失った未確認事項を取り下げる。**追わないと決めたものは取消済みにする** — 未処理のままだと tick のプロンプトを占有し続け、新しい未確認事項が載らなくなる。",
+        "答えの出ないまま意味を失った未確認事項を取り下げる。**追わないと決めたものは取消済みにする** — 未処理のままだと自動処理のプロンプトを占有し続け、新しい未確認事項が載らなくなる。",
       inputSchema: vs(
         v.object({
           id: v.pipe(v.string(), v.description("問いの id(先頭8文字でよい)。")),
@@ -680,7 +680,7 @@ function buildTools(state: TurnState) {
         "取得したパッケージのキャッシュ(npm / pip / uv)は workspace 間で共有されるので、二度目は取得し直さない。" +
         "上限は3分 / メモリ 2GB。返るのは出力の末尾 12,000字。" +
         "**短い単位に割る** — 返り値に載る残り時間を見て、尽きる前に切り上げる。" +
-        "同じ workspace 名を渡せば置いたファイルは残るので、続きは次の tick でやればよい。" +
+        "同じ workspace 名を渡せば置いたファイルは残るので、続きは次回やればよい。" +
         "**利用可能な workspace は `workspaces` で確認できる。新しく作る前に確認する。**",
       inputSchema: vs(
         v.object({
@@ -696,7 +696,7 @@ function buildTools(state: TurnState) {
               v.string(),
               v.description(
                 "その workspace は何のための場所か、一行。**新しく作るときは必ず書く。** " +
-                  "一覧に出て、次の tick が「どれを使えばいいか」をここから読む。既にあるものは省いてよい。",
+                  "一覧に出て、次回の自動処理が「どれを使えばいいか」をここから読む。既にあるものは省いてよい。",
               ),
             ),
           ),
@@ -721,9 +721,9 @@ function buildTools(state: TurnState) {
             const left = remainingMs()
             if (left < RUN_RESERVE_MS + MIN_RUN_MS) {
               return (
-                `走らせない: この tick の残りが ${Math.max(0, Math.round(left / 1000))} 秒しかない。\n` +
+                `走らせない: この回の残りが ${Math.max(0, Math.round(left / 1000))} 秒しかない。\n` +
                 `この回では実行せず、いま分かっていることを書いて終える。` +
-                `続きは次の tick で、同じ workspace(${workspace})を渡せば置いたファイルから再開できる。`
+                `続きは次回、同じ workspace(${workspace})を渡せば置いたファイルから再開できる。`
               )
             }
             const mem = yield* Memory
@@ -738,7 +738,7 @@ function buildTools(state: TurnState) {
                 workDir: dir,
                 ...(net ? { net } : {}),
                 // コンテナの上限より締切のほうが近いなら、締切に合わせる。コンテナの中で時間切れになれば
-                // 出力は返るが、tick ごと切られると走った跡が1行も残らない。
+                // 出力は返るが、cycle ごと切られると走った跡が1行も残らない。
                 ...(Number.isFinite(left) ? { timeoutMs: left - RUN_RESERVE_MS } : {}),
               }),
             )
@@ -755,7 +755,7 @@ function buildTools(state: TurnState) {
             })
             // 説明の無い workspace は、次の回から名前しか読めない。作成したターンで用途を記録する。
             const nudge = unnamed
-              ? `\n(この workspace には説明が無い。何のための場所か purpose に一行渡すと、次の tick が一覧から選べる)`
+              ? `\n(この workspace には説明が無い。何のための場所か purpose に一行渡すと、次回一覧から選べる)`
               : ""
             return `${head} / ${remainingLabel()}\nworkspace: ${dir}${nudge}\n\n${r.output || "(出力なし)"}`
           }),
@@ -872,7 +872,7 @@ function buildTools(state: TurnState) {
             // `daily:draft` は起こす側(Attention)が読むフラグでもあるが、それは起きるかを決めるだけで、
             // 別の理由で起きた回に書き足すのは止められない。実際に同じ題が23分で4本出た。
             // 上限が制限するのは文の質ではなく通知回数なので、投稿後は同じ日に再投稿できない。
-            if ((yield* db.meta("daily:draft")) === dayRange(nowIso()).key) {
+            if ((yield* db.meta("daily:draft")) === localDayRange(nowIso()).key) {
               return (
                 "出していない。**今日ぶんは出してある。**1日1本まで。\n" +
                 "直せと言われたのなら、`draft` ではなく返事の本文に書き直したものをそのまま書く — " +
@@ -912,9 +912,9 @@ function buildTools(state: TurnState) {
             // 生成したモデル自身には読み直させない。決定的な検査を先に置くのは、機械で除外できる本文に
             // レビュー用クォータを使わないため。
             //
-            // この呼び出しにも締切を渡す。渡さないと精査役だけが tick の持ち時間の外で走る。
+            // この呼び出しにも締切を渡す。渡さないと精査役だけが cycle の持ち時間の外で走る。
             // 実測した回は、締切が切れた後もここで待ち続けて外から殺すまで終わらなかった。
-            // そうなると `commit` に届かず再実行抑止の起点が進まないので、次のタイマーでも同じ条件で
+            // そうなると `completeCycle` に届かず再実行抑止の起点が進まないので、次のタイマーでも同じ条件で
             // 実行され、同じ処理段階で停止する。
             const left = remainingMs()
             if (left < REVIEW_MS + RUN_RESERVE_MS) {
@@ -955,7 +955,7 @@ function buildTools(state: TurnState) {
               ].map((t) => ({ emoji: t.emoji, reply: `下書き「${title}」→ ${t.emojiReply}` })),
             })
             // 出した事実は日付で持つ。1日1本の上限はここで数える(押されたかは関係ない)。
-            if (id) yield* db.setMeta("daily:draft", dayRange(nowIso()).key)
+            if (id) yield* db.setMeta("daily:draft", localDayRange(nowIso()).key)
             yield* mem.remember({
               source: "system",
               content: { drafted: title, body, basis, sent: Boolean(id) },
@@ -998,7 +998,7 @@ function buildTools(state: TurnState) {
 }
 
 /** 1ターンの結果。途中で止まっても、そこまでに書けた文は返す。 */
-export interface Turn {
+export interface AssistantTurnResult {
   readonly text: string
   readonly steps: number
   /** このターンのowner入力を保存したevent。自走入力ではsystem event。 */
@@ -1026,7 +1026,7 @@ export const replyStepText = (text: string, toolCalls: readonly unknown[]): stri
 
 /**
  * エージェントを1つ作る。モデル id は作成時に確定する。
- * chat は同じオブジェクトで会話履歴を継ぎ、tick は起動ごとに新しく作って digest から文脈を再構成する。
+ * chat は同じオブジェクトで会話履歴を継ぎ、cycle は起動ごとに新しく作って CyclePlan から文脈を再構成する。
  */
 export function createAssistant(opts: AssistantOptions = {}) {
   const modelId = opts.model ?? process.env.OPEN_ZERO_MODEL ?? "claude-opus-5"
@@ -1044,7 +1044,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
 
   /**
    * 入力を DB に落とす。溜まらないと引けるようにならないので、条件を付けずに毎回書く。
-   * 自走のときの入力は tick が自分で組んだプロンプトであって、ユーザーの発言ではない。
+   * 自走のときの入力は cycle が自分で組んだプロンプトであって、ユーザーの発言ではない。
    * 監査のために DB には残すが、`text: ""` で検索の索引には入れない(redact と同じ扱い)。
    */
   const observe = async (text: string): Promise<string | undefined> => {
@@ -1076,9 +1076,9 @@ export function createAssistant(opts: AssistantOptions = {}) {
     },
     /**
      * 1ターン答える。落ちても投げ返さず、途中まで書けた文と止まった理由を返す。
-     * 投げ返すと、呼ぶ側(tick)が締めの書き込みに辿り着けない。
+     * 投げ返すと、呼ぶ側(cycle)が締めの書き込みに辿り着けない。
      */
-    async respond(input: string, o: { signal?: AbortSignal | undefined } = {}): Promise<Turn> {
+    async respond(input: string, o: { signal?: AbortSignal | undefined } = {}): Promise<AssistantTurnResult> {
       const inputEventId = await observe(input)
       state.lastInputEventId = inputEventId
       const sent: ModelMessage[] = [...history, { role: "user", content: input }]

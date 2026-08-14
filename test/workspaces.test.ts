@@ -148,7 +148,7 @@ test("scanTree は hard link を1回だけ数える", () => {
   }
 })
 
-/** 輪があっても落ちない。投げると一覧そのものが出なくなる — tick のプロンプトも作れない。 */
+/** 輪があっても落ちない。投げると一覧そのものが出なくなる — cycle のプロンプトも作れない。 */
 test("scanTree は symlink の輪で落ちない", () => {
   const dir = mkdtempSync(join(tmpdir(), "oz-scan-loop-"))
   try {

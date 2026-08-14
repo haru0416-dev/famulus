@@ -739,7 +739,10 @@ export interface SearchOptions {
  * 相手ごとに `Promise.all` で同時に出す(別ホストなので `pace` の1秒は互いに掛からない)。
  * 語が空なら空配列。知らない先を名指しされたら、それも1つの `failed` として返す。
  */
-export async function searchWeb(query: string, opts: SearchOptions = {}): Promise<readonly SourceResult[]> {
+export async function searchSources(
+  query: string,
+  opts: SearchOptions = {},
+): Promise<readonly SourceResult[]> {
   const q = query.trim()
   if (!q) return []
   const perSource = Math.min(Math.max(opts.perSource ?? 8, 1), 20)

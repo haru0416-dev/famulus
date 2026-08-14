@@ -40,15 +40,15 @@ const BASE_IMAGE = "node:24-bookworm"
 /**
  * 1回の走行の上限。依存の取得は分単位で掛かるので、web の 20 秒とは桁が違う。
  *
- * 上限は tick の持ち時間(`OPEN_ZERO_TICK_TIMEOUT_MS`、既定 420 秒)より短く取ってある。
- * 走行が tick の制限時間を使い切ると、その回は終了して走行記録が1行も残らない —
+ * 上限は cycle の持ち時間(`OPEN_ZERO_CYCLE_TIMEOUT_MS`、既定 420 秒)より短く取ってある。
+ * 走行が cycle の制限時間を使い切ると、その回は終了して走行記録が1行も残らない —
  * コンテナの中で起きたことはコンテナを捨てた時点で消えるので、書き残せなかった走行は無かったのと同じになる。
- * 長い作業は1回で終わらせず、同じ workspace に置いて次の tick で続ける。
+ * 長い作業は1回で終わらせず、同じ workspace に置いて次の cycle で続ける。
  */
 const DEFAULT_TIMEOUT_MS = 3 * 60_000
 /** モデルに渡す上限。ビルドログは平気で数MB出るが、読ませたいのは詰まった箇所だけ。 */
 const MAX_OUTPUT_CHARS = 12_000
-/** コンテナに許す上限。このホストは 11GB / 6コアで、tick 自身もここで動く。走行が全資源を使うと tick が停止する。 */
+/** コンテナに許す上限。このホストは 11GB / 6コアで、cycle 自身もここで動く。走行が全資源を使うと cycle が停止する。 */
 const MEMORY = "2g"
 const CPUS = "2"
 const PIDS = "512"
@@ -123,7 +123,7 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     CPUS,
     "--pids-limit",
     PIDS,
-    // ユーザーの uid で走らせる。既定の root で作ったファイルは、後で tick(haru)が読めも消せもしない。
+    // ユーザーの uid で走らせる。既定の root で作ったファイルは、後で cycle(haru)が読めも消せもしない。
     "--user",
     `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
     // uid を指定するとコンテナの中に home が無くなる。npm も pip も HOME を要求するので workspace を充てる。
@@ -191,7 +191,7 @@ let imagePromise: Promise<string> | undefined
  * 走行用のイメージを、無ければ組む。返すのは実際に使えるイメージ名。
  *
  * 組むのは初回だけで、このホストでは 15.6 秒 / 素のイメージ +110MB だった。
- * 走行の持ち時間から引かれるので、`ensureImage` は tick の締切より前に呼ぶ側で吸収する
+ * 走行の持ち時間から引かれるので、`ensureImage` は cycle の締切より前に呼ぶ側で吸収する
  * — いまは `runInSandbox` の中で待つ。1回きりなので、二度目からは 0 秒。
  *
  * ビルドできなければ素のイメージへフォールバックする。ここで例外を投げると、Dockerfile の誤り1つで
@@ -213,7 +213,7 @@ export function ensureImage(): Promise<string> {
 /**
  * 対応するホストプロセスが存在しないコンテナを消す。名前に起動元の pid が入っていることだけを頼りにする
  * (`oz-run-<時刻36進>-<pid>`)。時間切れの片付けは `docker rm -f` を投げた時点で終わりだが、
- * tick 自身やホストが停止した回は削除処理が実行されず、`--rm` の付いたコンテナが残る。
+ * cycle 自身やホストが停止した回は削除処理が実行されず、`--rm` の付いたコンテナが残る。
  *
  * 存在する pid のものは触らない。pid は使い回されるので、対応プロセスの同一性までは判定できず、
  * 別のプロセスが同じ番号を使っていれば削除対象から漏れる。誤削除しない側に倒す。

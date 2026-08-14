@@ -22,21 +22,21 @@ const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8")
 
 /** モデルに渡る文が入っている場所。ここに文を足す先が増えたら、この表にも足す。 */
-const PROMPTS = ["SOUL.md", "src/agent/soul.ts", "src/agent/assistant.ts", "src/tick.ts"]
+const PROMPTS = ["SOUL.md", "src/agent/soul.ts", "src/agent/assistant.ts", "src/cycle.ts"]
 
 /** 道具ではないと分かっている語。足すときは「なぜ道具ではないか」を書く。 */
 const NOT_TOOLS = new Set([
   "oz", // CLI の名前(ユーザーが端末で叩くもの)
   "owner", // DB の列の値
   "source", // DB の列名(誰が書いたか)。keeper と dream が材料を絞るのに使う
-  "commit", // Attention の関数(cooldownの起点を進める側)。モデルからは呼べない
+  "completeCycle", // Attention の関数(cooldownの起点を進める側)。モデルからは呼べない
   "at", // 道具の引数名(`ran` に渡す、実際に回した時刻)
   "since", // keeper の引数名(この回の起点)。モデルには見えない
   "purpose", // 道具の引数名(`shell` に渡す、その workspace は何のための場所か)
   "signal", // respond() の引数名(呼ぶ側が締切で切るための AbortSignal)。モデルには見えない
-  // ここから下は tick が DB に残す記録の欄名(src/journal.ts が読む側)。モデルからは触れない —
+  // ここから下は cycle が DB に残す記録の欄名(src/journal.ts が読む側)。モデルからは触れない —
   // 呼び出し側が数えて書く値で、道具として呼べるものは1つも無い。
-  "text", // Turn の欄。モデルが書いた締めの文
+  "text", // AssistantTurnResult の欄。モデルが書いた締めの文
   "said", // 記録の欄。`text` をそのまま置いたもの(自己申告)
   "tools", // 記録の欄。実際に呼ばれた道具の名前の並び
   "steps", // 記録の欄。手数
@@ -98,12 +98,12 @@ test("免除表に道具の名前を入れて検査を素通しさせていな�
 test("親 Agent の remember は確定値を直接書かない", () => {
   const src = read("src/agent/assistant.ts")
   const remember = src.slice(src.indexOf("remember: tool({"), src.indexOf("recall: recallTool(state)"))
-  assert.doesNotMatch(remember, /mem\.believe|\bslot\b/, "確定値は引用照合を通す keeper だけが書く")
+  assert.doesNotMatch(remember, /mem\.recordBelief|\bslot\b/, "確定値は引用照合を通す keeper だけが書く")
 })
 
 test("ユーザーが話す入口はどちらも keeper を通す", () => {
   assert.match(read("src/chat.ts"), /run\(\s*keep\(\{/)
-  assert.match(read("src/tick.ts"), /run\(\s*keep\(\{/)
+  assert.match(read("src/cycle.ts"), /run\(\s*keep\(\{/)
 })
 
 test("自由文のツール結果は親モデルへの指示と分離する", () => {

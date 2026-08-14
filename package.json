@@ -17,7 +17,7 @@
     "fmt": "biome check --write .",
     "agent": "bun src/chat.ts",
     "oz": "bun src/cli.ts",
-    "tick": "bun src/tick.ts"
+    "cycle": "bun src/cycle.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.41",

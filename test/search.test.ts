@@ -21,7 +21,7 @@ process.env.TZ = "Asia/Tokyo"
 // 同じホストへの間隔は既定 1 秒。ここは fetch を差し替えてあるので誰も接続していない —
 // 待つぶんがそのままゲートの所要になるので 0 にする(src/services/Web.ts の hostIntervalMs)。
 process.env.OPEN_ZERO_HOST_INTERVAL_MS = "0"
-const { defaultSources, parseFrom, plainQuery, renderHits, searchWeb } = await import(
+const { defaultSources, parseFrom, plainQuery, renderHits, searchSources } = await import(
   "../src/services/Search.ts"
 )
 const { resetAtMs } = await import("../src/services/Web.ts")
@@ -286,9 +286,9 @@ test("SearXNG の読めない日付は捨てる", () => {
 })
 
 test("空の問いと知らない先は、外へ出る前に返る", async () => {
-  assert.deepEqual(await searchWeb("   "), [])
+  assert.deepEqual(await searchSources("   "), [])
   // 名指しした先が全部知らない名前なら、接続先がいないので通信は起きない。
-  const r = await searchWeb("test", { where: ["google", "bing"] })
+  const r = await searchSources("test", { where: ["google", "bing"] })
   assert.equal(r.length, 1)
   assert.equal(r[0]?.hits.length, 0)
   assert.match(r[0]?.failed ?? "", /そういう先は無い/)
@@ -337,7 +337,7 @@ async function qiitaCalls(term: string, body: (url: string) => string): Promise<
     return new Response(body(url), { status: 200, headers: { "content-type": "application/json" } })
   }) as unknown as typeof fetch
   try {
-    await searchWeb(term, { where: ["qiita"] })
+    await searchSources(term, { where: ["qiita"] })
     return called
   } finally {
     globalThis.fetch = original
@@ -355,7 +355,7 @@ test("zenn — 長すぎる語は 100 文字で切る(101 文字だと 400 が�
     // 実測で落ちたのはこの形 — モデルが語を並べて 100 文字を越えた。
     const long =
       "vite plugin environment api migration hotupdate handlehotupdate breaking change guide ".repeat(3)
-    await searchWeb(long, { where: ["zenn"] })
+    await searchSources(long, { where: ["zenn"] })
     const sent = decodeURIComponent(new URL(called[0] ?? "https://x/").searchParams.get("q") ?? "")
     assert.ok([...sent].length <= 100, `100 文字を越えている: ${[...sent].length}`)
     // 語の途中では切らない。半端な語尾(`environm`)を投げても当たらないので、
@@ -365,7 +365,7 @@ test("zenn — 長すぎる語は 100 文字で切る(101 文字だと 400 が�
 
     // 全角でも数えるのは文字。300 バイトあっても 100 文字なら切らない。
     called.length = 0
-    await searchWeb("あ".repeat(100), { where: ["zenn"] })
+    await searchSources("あ".repeat(100), { where: ["zenn"] })
     const ja = decodeURIComponent(new URL(called[0] ?? "https://x/").searchParams.get("q") ?? "")
     assert.equal([...ja].length, 100, "全角100文字は通る(実測で 200)")
   } finally {
@@ -408,13 +408,13 @@ test("回数制限に当たった先は、解けるまで叩かない", async ()
     })
   }) as unknown as typeof fetch
   try {
-    const first = await searchWeb("Effect", { where: ["qiita"] })
+    const first = await searchSources("Effect", { where: ["qiita"] })
     assert.equal(calls, 1)
     assert.match(first[0]?.failed ?? "", /回数制限に当たった/)
     // 解除時刻はユーザーの時計で見せる。
     assert.match(first[0]?.failed ?? "", /\d{4}-\d{2}-\d{2} \d{2}:\d{2} まで/)
 
-    const second = await searchWeb("別の語", { where: ["qiita"] })
+    const second = await searchSources("別の語", { where: ["qiita"] })
     assert.equal(calls, 1, "休んでいる間は外へ出ない")
     assert.match(second[0]?.failed ?? "", /回数制限中/)
   } finally {
@@ -454,7 +454,7 @@ async function urlsFor(source: string, term: string, body: string): Promise<read
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } })
   }) as unknown as typeof fetch
   try {
-    await searchWeb(term, { where: [source] })
+    await searchSources(term, { where: [source] })
     return called
   } finally {
     globalThis.fetch = original
@@ -555,7 +555,7 @@ test("回した先は x として返る(どこから来たかを読む側に見�
       { status: 200, headers: { "content-type": "application/json" } },
     )) as unknown as typeof fetch
   try {
-    const r = await searchWeb("site:x.com Vite", { where: ["web"] })
+    const r = await searchSources("site:x.com Vite", { where: ["web"] })
     assert.equal(r[0]?.source, "x", "web のまま返している")
     // 回した値打ちはここ — 頼んだのが site:x.com なら vite.dev はどのみち間違い。
     assert.deepEqual(
@@ -711,7 +711,7 @@ test("回した先は showhn として返る(どこから来たかを読む側�
       { status: 200, headers: { "content-type": "application/json" } },
     )) as unknown as typeof fetch
   try {
-    const r = await searchWeb("Show HN terminal", { where: ["hn"] })
+    const r = await searchSources("Show HN terminal", { where: ["hn"] })
     assert.equal(r[0]?.source, "showhn", "hn のまま返している")
   } finally {
     globalThis.fetch = original
@@ -726,7 +726,7 @@ test("仕事を探す語なら、web と並べて job も出す(置き換えな�
     return new Response('{"results":[]}', { status: 200, headers: { "content-type": "application/json" } })
   }) as unknown as typeof fetch
   try {
-    const r = await searchWeb("React 副業 週2", { where: ["web"] })
+    const r = await searchSources("React 副業 週2", { where: ["web"] })
     assert.deepEqual(
       r.map((x) => x.source),
       ["web", "job"],
@@ -750,7 +750,7 @@ test("仕事と関係ない語では job を足さない", async () => {
       headers: { "content-type": "application/json" },
     })) as unknown as typeof fetch
   try {
-    const r = await searchWeb("React Server Components", { where: ["web"] })
+    const r = await searchSources("React Server Components", { where: ["web"] })
     assert.deepEqual(
       r.map((x) => x.source),
       ["web"],
@@ -841,7 +841,7 @@ test("媒体を調べているだけの語では job を出さない", async () 
       headers: { "content-type": "application/json" },
     })) as unknown as typeof fetch
   try {
-    const r = await searchWeb("Offers 手数料 審査 スカウト 応募 公式 副業", { where: ["web"] })
+    const r = await searchSources("Offers 手数料 審査 スカウト 応募 公式 副業", { where: ["web"] })
     assert.deepEqual(
       r.map((x) => x.source),
       ["web"],

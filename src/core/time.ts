@@ -83,7 +83,7 @@ export interface Range {
 const pad = (n: number) => String(n).padStart(2, "0")
 
 /** この instant を含むローカルの1日。 */
-export function dayRange(atIso: string): Range {
+export function localDayRange(atIso: string): Range {
   const ms = Date.parse(atIso)
   const p = localParts(ms)
   const start = startOfLocalDate(p.year, p.month, p.day)
@@ -111,7 +111,7 @@ export function localStamp(atIso: string, withTime = true): string {
 }
 
 /** この instant を含むローカルの1か月。 */
-export function monthRange(atIso: string): Range {
+export function localMonthRange(atIso: string): Range {
   const ms = Date.parse(atIso)
   const p = localParts(ms)
   const start = startOfLocalDate(p.year, p.month, 1)

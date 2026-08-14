@@ -8,7 +8,7 @@
  * - `.data/runs/<名前>` はコンテナの workspace。中身は依存の取得物とビルドの残骸で、
  *   測定した workspace では 9.8MB のうち 8.7MB が npm のキャッシュだった。結果は DB に書く規律なので、
  *   ここに残っているものは次回再開用の作業データでしかない。ただし
- *   「長い作業は同じ workspace に置いて次の tick で続ける」(src/services/Sandbox.ts)ので、
+ *   「長い作業は同じ workspace に置いて次回続ける」(src/services/Sandbox.ts)ので、
  *   触られたばかりのものは消せない。最後に触った時刻で切る。
  *   ただし時刻では決まらないものが1つある — 自分のソースのように、何日か触らなくても
  *   在り続けなければならない場所。そこは `keep` で外す(src/core/workspaces.ts)。
@@ -17,7 +17,7 @@
  *   消えても次の走行が取得し直すだけなので、部分的に選ばずまるごと削除する。
  *
  * 増えるものはもう1つあって、こちらは `.data/` の外にいる。対応するホストプロセスが存在しないコンテナ
- * (`oz-run-*`)は tick 自身が停止した回に残る。`sweepOrphans` が pid で判定して削除する。
+ * (`oz-run-*`)は cycle 自身が停止した回に残る。`sweepOrphans` が pid で判定して削除する。
  *
  * 3つ目だった `flue-tick.db` の掃除は廃止した。tick の会話を日ごとに溜めていたのは
  * Flue ランタイム側で、道具ループを AI SDK に載せ替えたときに書き手がいなくなった。
@@ -33,7 +33,7 @@ import { join } from "node:path"
 import * as Effect from "effect/Effect"
 import { Db } from "../services/Db.ts"
 import { cacheRoot, runsRoot, sweepOrphans } from "../services/Sandbox.ts"
-import { dayRange, localHour, nowIso } from "./time.ts"
+import { localDayRange, localHour, nowIso } from "./time.ts"
 import { forgetWorkspaces, keptNames, mb, scanTree } from "./workspaces.ts"
 
 /**
@@ -58,12 +58,12 @@ export const CLEANUP_HOUR = Number(process.env.OPEN_ZERO_CLEANUP_HOUR ?? 4)
  */
 export const CACHE_MAX_MB = Number(process.env.OPEN_ZERO_CACHE_MAX_MB ?? 2048)
 
-/** この tick で回すかどうか。1日1回。印を付けるのは呼び出し側(src/tick.ts)。 */
+/** この cycle で回すかどうか。1日1回。印を付けるのは呼び出し側(src/cycle.ts)。 */
 export const cleanupDue = (atIso: string) =>
   Effect.gen(function* () {
     if (localHour(atIso) < CLEANUP_HOUR) return false
     const db = yield* Db
-    return (yield* db.meta(CLEANUP_DAILY)) !== dayRange(atIso).key
+    return (yield* db.meta(CLEANUP_DAILY)) !== localDayRange(atIso).key
   })
 
 /**

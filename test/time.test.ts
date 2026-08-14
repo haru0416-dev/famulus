@@ -8,7 +8,7 @@ import fc from "fast-check"
 import { test } from "vitest"
 
 process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
-const { TZ, dayRange, localStamp, monthRange } = await import("../src/core/time.ts")
+const { TZ, localDayRange, localMonthRange, localStamp } = await import("../src/core/time.ts")
 
 test("TZ は OPEN_ZERO_TZ で差せる", () => {
   assert.equal(TZ, "Asia/Tokyo")
@@ -16,19 +16,19 @@ test("TZ は OPEN_ZERO_TZ で差せる", () => {
 
 test("UTC の日ではなくローカルの日で切る", () => {
   // 2026-08-07T16:55Z は JST では 08-08 の 01:55。UTC 切りだと 08-07 になる。
-  const r = dayRange("2026-08-07T16:55:00Z")
+  const r = localDayRange("2026-08-07T16:55:00Z")
   assert.equal(r.key, "2026-08-08")
   assert.equal(r.startIso, "2026-08-07T15:00:00Z")
   assert.equal(r.endIso, "2026-08-08T15:00:00Z")
 })
 
 test("日跨ぎの直前・直後が別の日に落ちる", () => {
-  assert.equal(dayRange("2026-08-07T14:59:59Z").key, "2026-08-07")
-  assert.equal(dayRange("2026-08-07T15:00:00Z").key, "2026-08-08")
+  assert.equal(localDayRange("2026-08-07T14:59:59Z").key, "2026-08-07")
+  assert.equal(localDayRange("2026-08-07T15:00:00Z").key, "2026-08-08")
 })
 
 test("月末の繰り上がり", () => {
-  const r = monthRange("2026-12-31T16:00:00Z")
+  const r = localMonthRange("2026-12-31T16:00:00Z")
   assert.equal(r.key, "2027-01")
   assert.equal(r.startIso, "2026-12-31T15:00:00Z")
   assert.equal(r.endIso, "2027-01-31T15:00:00Z")
@@ -46,8 +46,8 @@ test("記録の時刻はユーザーの時計で見せる(夜中の記録を前�
 })
 
 test("範囲は半開区間で、隣の日と重ならない", () => {
-  const a = dayRange("2026-08-08T02:00:00Z")
-  const b = dayRange("2026-08-09T02:00:00Z")
+  const a = localDayRange("2026-08-08T02:00:00Z")
+  const b = localDayRange("2026-08-09T02:00:00Z")
   assert.equal(a.endIso, b.startIso)
   assert.notEqual(a.key, b.key)
 })
@@ -62,13 +62,13 @@ test("任意の instant は、そのローカル日・月の半開区間に一�
       }),
       (at) => {
         const atIso = at.toISOString()
-        for (const range of [dayRange(atIso), monthRange(atIso)]) {
+        for (const range of [localDayRange(atIso), localMonthRange(atIso)]) {
           assert.ok(Date.parse(range.startIso) <= at.getTime())
           assert.ok(at.getTime() < Date.parse(range.endIso))
           assert.ok(Date.parse(range.startIso) < Date.parse(range.endIso))
         }
-        assert.equal(dayRange(atIso).key, localStamp(atIso, false))
-        assert.ok(localStamp(atIso).startsWith(`${monthRange(atIso).key}-`))
+        assert.equal(localDayRange(atIso).key, localStamp(atIso, false))
+        assert.ok(localStamp(atIso).startsWith(`${localMonthRange(atIso).key}-`))
       },
     ),
     { numRuns: 1_000 },

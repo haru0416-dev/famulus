@@ -11,7 +11,7 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { DailyRunLimit, Halt, QuotaCooldown } from "../core/errors.ts"
-import { dayRange } from "../core/time.ts"
+import { localDayRange } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 export interface QuotaSignal {
@@ -33,9 +33,9 @@ export interface QuotaState {
 export interface BudgetConfig {
   readonly dailyRuns: number
   /**
-   * そのうち自走(tick)に使ってよい上限。対話用の run 数を残すための区分。
+   * そのうち自走(cycle)に使ってよい上限。対話用の run 数を残すための区分。
    * 自走を入れると走行回数を決めるのが人間ではなくタイマーになるので、
-   * 全体上限だけだと、tick が run 数を使い切り、次の対話が上限で止まることがある。
+   * 全体上限だけだと、cycle が run 数を使い切り、次の対話が上限で止まることがある。
    */
   readonly autonomousRuns: number
 }
@@ -56,7 +56,7 @@ const envInt = (key: string, fallback: number): number => {
  */
 export const BUDGET: BudgetConfig = {
   dailyRuns: envInt("OPEN_ZERO_DAILY_RUNS", 2000),
-  // 探索を観点別に分割して委譲する tick は1回で 20 run 使う(子の1ターンも1行として数えるため)。
+  // 探索を観点別に分割して委譲する cycle は1回で 20 run 使う(子の1ターンも1行として数えるため)。
   autonomousRuns: envInt("OPEN_ZERO_AUTONOMOUS_RUNS", 500),
 }
 
@@ -103,7 +103,7 @@ export interface PrecheckOptions {
   readonly pool: string
   readonly at: string
   readonly nowMs: number
-  /** 既定は対話。自走(tick)は別枠を追加で見る。 */
+  /** 既定は対話。自走(cycle)は別枠を追加で見る。 */
   readonly lane?: Lane
 }
 
@@ -191,7 +191,7 @@ const makeGovernance = () =>
         // 想定外の従量課金を示すが、定額利用ではそうではない。
         // ここで halt を立てると、翌日には自動で戻るはずの上限が、人が `oz resume` を打つまで
         // 対話まで含めた全停止として残る(3b の自律実行上限で halt を設定しないのと同じ判断)。
-        const day = dayRange(opts.at)
+        const day = localDayRange(opts.at)
         const row = yield* db.get(
           "SELECT COUNT(*)n FROM ledger WHERE role IS NOT NULL AND at >= ?AND at < ?",
           day.startIso,
@@ -202,7 +202,7 @@ const makeGovernance = () =>
           return yield* Effect.fail(new DailyRunLimit({ count: runs, limit: config.dailyRuns }))
         }
 
-        // 3b. 自律実行上限 — tick が対話用の実行回数まで消費しないよう分離する。
+        // 3b. 自律実行上限 — cycle が対話用の実行回数まで消費しないよう分離する。
         // ここでは halt を設定しない。自律実行が日次上限に達しただけで人との対話まで止めるのは行き過ぎで、
         // 翌日には自動で戻るべきもの(halt は人が解除するまで解除されない)。
         if (opts.lane === "autonomous") {

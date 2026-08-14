@@ -68,7 +68,7 @@ test("belief eventは根拠event・引用・失効理由を正本に持つ", asy
         const mem = yield* Memory
         const db = yield* Db
         const evidence = yield* mem.remember({ source: "owner", content: "今は東京に住んでいる" })
-        const id = yield* mem.believe("home.city", "東京", {
+        const id = yield* mem.recordBelief("home.city", "東京", {
           reason: "本人が現住所を訂正した",
           evidenceEventId: evidence,
           evidenceQuote: "今は東京に住んでいる",
@@ -110,14 +110,14 @@ test("belief追記が失敗したtransactionは巻き戻される", async () => 
     const failed = await h.fail(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("profile.city", "東京", { exposure: "invalid" as never })
+        yield* mem.recordBelief("profile.city", "東京", { exposure: "invalid" as never })
       }),
     )
     assert.equal((failed as { _tag: string })._tag, "DbFailed")
     const count = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("profile.city", "東京")
+        yield* mem.recordBelief("profile.city", "東京")
         return yield* mem.count
       }),
     )
@@ -193,11 +193,11 @@ test("最新beliefを抹消しても古い値を現在値として復活させ�
     const out = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
-        const latest = yield* mem.believe("home.city", "東京", { validFrom: "2026-06-01T00:00:00Z" })
+        yield* mem.recordBelief("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
+        const latest = yield* mem.recordBelief("home.city", "東京", { validFrom: "2026-06-01T00:00:00Z" })
         yield* mem.redact(latest, "誤った確定")
         return {
-          current: yield* mem.belief("home.city"),
+          current: yield* mem.currentBelief("home.city"),
           old: yield* mem.beliefAsOf("home.city", "2026-03-01T00:00:00Z"),
         }
       }),
@@ -310,7 +310,7 @@ test("抹消したイベントは recall に出てこない", async () => {
 // ── 置き方(何が上位に来るか)の検査。
 //
 // 検索が「一致するか」だけを見ていた頃は、並びが `at DESC` = 一致した中の新着順だった。
-// tick は起きるたびに長い自己言及を書くので、新しさだけでシステム記録が上位を占め、
+// cycle は起きるたびに長い自己言及を書くので、新しさだけでシステム記録が上位を占め、
 // 探している事実を押し下げていた(`recall 予約` の上位10件のうち5件がシステム記録)。
 // 引けるかどうかと同じくらい、何が先に見えるかが記憶の質を決める。
 
@@ -319,10 +319,10 @@ test("recall は関連度と層で並ぶ — 新しいだけのシステム記�
     const rows = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("dentist.next_appt", "歯医者の次回予約は8月12日18:00")
+        yield* mem.recordBelief("dentist.next_appt", "歯医者の次回予約は8月12日18:00")
         yield* mem.remember({
           source: "system",
-          content: { tick: "起動した。次回予約の件は動かない。次回予約について今は判断しない。" },
+          content: { cycle: "起動した。次回予約の件は動かない。次回予約について今は判断しない。" },
         })
         return yield* mem.recall("次回予約")
       }),
@@ -355,8 +355,8 @@ test("上書きした belief の旧版は『確定』として前に出ない", 
     const rows = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("dentist.next_appt", "歯医者の次回予約は8月12日")
-        yield* mem.believe("dentist.next_appt", "歯医者の次回予約は8月13日")
+        yield* mem.recordBelief("dentist.next_appt", "歯医者の次回予約は8月12日")
+        yield* mem.recordBelief("dentist.next_appt", "歯医者の次回予約は8月13日")
         return yield* mem.recall("次回予約")
       }),
     )
@@ -430,8 +430,8 @@ test("belief は必ず belief イベントを根拠に持つ(resolved_from の F
       Effect.gen(function* () {
         const mem = yield* Memory
         const db = yield* Db
-        const eventId = yield* mem.believe("dentist.next_appt", "2026-08-12T18:00:00Z")
-        const slot = yield* mem.belief("dentist.next_appt")
+        const eventId = yield* mem.recordBelief("dentist.next_appt", "2026-08-12T18:00:00Z")
+        const slot = yield* mem.currentBelief("dentist.next_appt")
         const ev = yield* db.get("SELECT kind FROM events WHERE id = ?", eventId)
         return { eventId, slot, kind: ev?.kind }
       }),
@@ -458,9 +458,9 @@ test("belief は上書きされるが、履歴は events に残る", async () =>
     const out = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("home.city", "札幌")
-        yield* mem.believe("home.city", "東京")
-        const slot = yield* mem.belief("home.city")
+        yield* mem.recordBelief("home.city", "札幌")
+        yield* mem.recordBelief("home.city", "東京")
+        const slot = yield* mem.currentBelief("home.city")
         const rows = yield* mem.recent(10)
         return { slot, beliefs: rows.filter((r) => r.kind === "belief").length }
       }),
@@ -482,15 +482,15 @@ test("値が変わっても古い区間は残る — 今の値と、あの時点
     const out = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("work.job_search", "転職活動中。複数社と面談している", {
+        yield* mem.recordBelief("work.job_search", "転職活動中。複数社と面談している", {
           validFrom: "2026-03-01T00:00:00Z",
         })
-        yield* mem.believe("work.job_search", "終わった。今の会社に残る", {
+        yield* mem.recordBelief("work.job_search", "終わった。今の会社に残る", {
           validFrom: "2026-09-01T00:00:00Z",
           reason: "ユーザーが転職の終了を明言した",
         })
         return {
-          now: yield* mem.belief("work.job_search"),
+          now: yield* mem.currentBelief("work.job_search"),
           past: yield* mem.beliefAsOf("work.job_search", "2026-05-01T00:00:00Z"),
           history: yield* mem.beliefHistory("work.job_search"),
         }
@@ -514,8 +514,8 @@ test("区間は半開 — 境界の瞬間はどちらか一方だけが主張す
     const out = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
-        yield* mem.believe("home.city", "東京", { validFrom: "2026-06-01T00:00:00Z" })
+        yield* mem.recordBelief("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
+        yield* mem.recordBelief("home.city", "東京", { validFrom: "2026-06-01T00:00:00Z" })
         return {
           before: yield* mem.beliefAsOf("home.city", "2026-05-31T23:59:59Z"),
           at: yield* mem.beliefAsOf("home.city", "2026-06-01T00:00:00Z"),
@@ -534,9 +534,9 @@ test("過去へ遡る訂正は現在区間の開始より前へ戻さない", as
     const current = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("home.city", "札幌", { validFrom: "2026-06-01T00:00:00Z" })
-        yield* mem.believe("home.city", "東京", { validFrom: "2026-01-01T00:00:00Z" })
-        return yield* mem.belief("home.city")
+        yield* mem.recordBelief("home.city", "札幌", { validFrom: "2026-06-01T00:00:00Z" })
+        yield* mem.recordBelief("home.city", "東京", { validFrom: "2026-01-01T00:00:00Z" })
+        return yield* mem.currentBelief("home.city")
       }),
     )
     assert.equal(current?.value, "東京")
@@ -565,9 +565,9 @@ test("空のrecall表示と一覧APIの既定値を扱う", async () => {
     const out = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("profile.optional", null)
+        yield* mem.recordBelief("profile.optional", null)
         return {
-          belief: yield* mem.belief("profile.optional"),
+          belief: yield* mem.currentBelief("profile.optional"),
           current: yield* mem.currentBeliefs(),
           recent: yield* mem.recent(),
         }
@@ -584,10 +584,10 @@ test("閉じた区間の belief は検索で『確定』として前に出ない
     const rows = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("work.job_search", "転職活動中である", {
+        yield* mem.recordBelief("work.job_search", "転職活動中である", {
           validFrom: "2026-03-01T00:00:00Z",
         })
-        yield* mem.believe("work.job_search", "転職はもう終わった", {
+        yield* mem.recordBelief("work.job_search", "転職はもう終わった", {
           validFrom: "2026-09-01T00:00:00Z",
         })
         return yield* mem.recall("転職")
@@ -607,7 +607,7 @@ test("同じ slot に閉じていない区間は2本並ばない(部分 UNIQUE �
       Effect.gen(function* () {
         const mem = yield* Memory
         const db = yield* Db
-        const id = yield* mem.believe("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
+        const id = yield* mem.recordBelief("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
         // 区間を閉じずに次を入れようとする = 現在値が2つある状態。ここで落ちなければならない。
         yield* db.run(
           `INSERT INTO belief_slots (slot, value, exposure, resolved_from, updated_at, valid_from)
@@ -625,11 +625,11 @@ test("確かめてから時間が経った事実だけを拾える(陳腐化の�
     const out = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.believe("work.job_search", "転職活動中", { validFrom: "2026-01-01T00:00:00Z" })
-        yield* mem.believe("home.city", "東京", { validFrom: "2026-08-01T00:00:00Z" })
+        yield* mem.recordBelief("work.job_search", "転職活動中", { validFrom: "2026-01-01T00:00:00Z" })
+        yield* mem.recordBelief("home.city", "東京", { validFrom: "2026-08-01T00:00:00Z" })
         // 閉じた区間は「古い」ではなく「終わった」。聞き直す対象ではない。
-        yield* mem.believe("phone.model", "旧機種", { validFrom: "2026-01-01T00:00:00Z" })
-        yield* mem.believe("phone.model", "新機種", { validFrom: "2026-08-05T00:00:00Z" })
+        yield* mem.recordBelief("phone.model", "旧機種", { validFrom: "2026-01-01T00:00:00Z" })
+        yield* mem.recordBelief("phone.model", "新機種", { validFrom: "2026-08-05T00:00:00Z" })
         return yield* mem.staleBeliefs("2026-06-01T00:00:00Z")
       }),
     )
@@ -668,7 +668,7 @@ test("空白で区切った複数語は AND で絞る(フレーズ一致にし�
       Effect.gen(function* () {
         const mem = yield* Memory
         yield* mem.remember({ content: "エージェントの記憶をどう置くか。メモリの設計を考え直した。" })
-        yield* mem.remember({ content: "エージェントの自走。tick を systemd timer で回す。" })
+        yield* mem.remember({ content: "エージェントの自走。cycle を systemd timer で回す。" })
         return {
           both: yield* mem.recall("エージェント メモリ"),
           one: yield* mem.recall("エージェント"),

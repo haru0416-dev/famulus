@@ -1,7 +1,7 @@
 /**
  * 進み具合の検査。見るのは「報告と記録が分かれているか」。
  *
- * tick の締めの文は自分で書いた報告なので、そこに「watch を実行した」と書いてあっても
+ * cycle の締めの文は自分で書いた報告なので、そこに「watch を実行した」と書いてあっても
  * 実行したことの証拠にはならない。ここが押さえるのは、報告文を1文字も読まずに
  * 「何を呼んだか」「何行増えたか」が出ること、そしてその2つが食い違ったときに食い違って見えること。
  */
@@ -14,8 +14,8 @@ import { Db } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
 import { withHarness } from "./helpers.ts"
 
-/** tick が書く形そのまま。欄名を変えたらここが落ちる(読む側と書く側が離れているので)。 */
-const tickRow = (c: Record<string, unknown>, wroteAt: string) =>
+/** cycle が書く形そのまま。欄名を変えたらここが落ちる(読む側と書く側が離れているので)。 */
+const cycleRow = (c: Record<string, unknown>, wroteAt: string) =>
   Effect.gen(function* () {
     const mem = yield* Memory
     yield* mem.remember({
@@ -30,9 +30,9 @@ const tickRow = (c: Record<string, unknown>, wroteAt: string) =>
 test("呼んだ道具の並びは、締めの文と別に残る", async () => {
   await withHarness(async (h) => {
     await h.run(
-      tickRow(
+      cycleRow(
         {
-          tick: "2026-08-13T04:54:43Z",
+          cycle: "2026-08-13T04:54:43Z",
           reasons: ["対応対象の watch が 1 件"],
           said: "この回でやったこと。ハーネス追跡の watch を1本回した。",
           tools: ["shell", "shell", "ran", "workspaces"],
@@ -58,9 +58,9 @@ test("呼んだ道具の並びは、締めの文と別に残る", async () => {
 test("道具を呼んでも何も残らなかった回は、残った行が全部 0 で出る", async () => {
   await withHarness(async (h) => {
     await h.run(
-      tickRow(
+      cycleRow(
         {
-          tick: "2026-08-13T06:00:00Z",
+          cycle: "2026-08-13T06:00:00Z",
           reasons: ["期限が近い承認待ち"],
           // 報告は「提案を出した」と言っているのに、提案は1件も増えていない。
           said: "承認待ちの件について新しい提案を1件出した。",
@@ -114,8 +114,8 @@ test("窓の中に増えた行だけ数える — 前後の回のぶんは混ざ
       }),
     )
     await h.run(
-      tickRow(
-        { tick: "2026-08-13T06:00:00Z", reasons: ["下書きの日"], said: "書いた", tools: ["shell", "tell"] },
+      cycleRow(
+        { cycle: "2026-08-13T06:00:00Z", reasons: ["下書きの日"], said: "書いた", tools: ["shell", "tell"] },
         "2026-08-13T06:00:30Z",
       ),
     )
@@ -143,7 +143,7 @@ test("run 数と出力tokenは窓の中の ledger だけを足す", async () => 
       }),
     )
     await h.run(
-      tickRow({ tick: "2026-08-13T06:00:00Z", reasons: ["入力"], said: "返した" }, "2026-08-13T06:00:30Z"),
+      cycleRow({ cycle: "2026-08-13T06:00:00Z", reasons: ["入力"], said: "返した" }, "2026-08-13T06:00:30Z"),
     )
     const [e] = await h.run(readJournal(5))
     assert.ok(e)
@@ -164,7 +164,7 @@ test("金額欄を持たず、出したトークンを出す", async () => {
       }),
     )
     await h.run(
-      tickRow({ tick: "2026-08-13T08:00:00Z", reasons: ["watch"], said: "見た" }, "2026-08-13T08:00:20Z"),
+      cycleRow({ cycle: "2026-08-13T08:00:00Z", reasons: ["watch"], said: "見た" }, "2026-08-13T08:00:20Z"),
     )
     const [e] = await h.run(readJournal(5))
     assert.ok(e)
@@ -178,7 +178,7 @@ test("金額欄を持たず、出したトークンを出す", async () => {
 test("道具の記録を持たない古い回は「—」で出る(0手とは書かない)", async () => {
   await withHarness(async (h) => {
     await h.run(
-      tickRow(
+      cycleRow(
         { tick: "2026-08-12T01:00:00Z", reasons: ["入力"], said: "前の形で書かれた回" },
         "2026-08-12T01:02:00Z",
       ),
@@ -198,9 +198,9 @@ test("道具の記録を持たない古い回は「—」で出る(0手とは書
 test("止まった回は、そのことが記録に残る — 締めの文に書かれるとは限らない", async () => {
   await withHarness(async (h) => {
     await h.run(
-      tickRow(
+      cycleRow(
         {
-          tick: "2026-08-13T07:00:00Z",
+          cycle: "2026-08-13T07:00:00Z",
           reasons: ["watch"],
           said: "調べ物を進めている。",
           tools: ["shell", "shell"],
@@ -223,10 +223,10 @@ test("止まった回は、そのことが記録に残る — 締めの文に書
 test("新しい回が上に来る", async () => {
   await withHarness(async (h) => {
     await h.run(
-      tickRow({ tick: "2026-08-13T01:00:00Z", reasons: ["古い"], said: "" }, "2026-08-13T01:01:00Z"),
+      cycleRow({ cycle: "2026-08-13T01:00:00Z", reasons: ["古い"], said: "" }, "2026-08-13T01:01:00Z"),
     )
     await h.run(
-      tickRow({ tick: "2026-08-13T02:00:00Z", reasons: ["新しい"], said: "" }, "2026-08-13T02:01:00Z"),
+      cycleRow({ cycle: "2026-08-13T02:00:00Z", reasons: ["新しい"], said: "" }, "2026-08-13T02:01:00Z"),
     )
     const list = await h.run(readJournal(5))
     assert.deepEqual(
@@ -236,8 +236,8 @@ test("新しい回が上に来る", async () => {
   })
 })
 
-/** tick の記録ではない system イベント(shell の跡や下書き)を1回ぶんとして数えない。 */
-test("tick 以外の system イベントは回として並ばない", async () => {
+/** cycle の記録ではない system イベント(shell の跡や下書き)を1回ぶんとして数えない。 */
+test("cycle 以外の system イベントは回として並ばない", async () => {
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {

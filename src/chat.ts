@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * 対話の入口。人が打って動かす側(自走は src/tick.ts)。
+ * 対話の入口。人が打って動かす側(自走は src/cycle.ts)。
  *
  * 前はフレームワークが持っていた REPL を使っていた。それが無くなったので、要るものだけを置く:
  * 1行読んで1ターン答え、既読位置を進める。それだけ。
@@ -71,7 +71,7 @@ try {
     if (turn.text) console.log(`\n${turn.text}\n`)
     if (turn.cutOff) console.log(`(止まった: ${turn.cutOff})\n`)
 
-    // 対話の入口でも締めの keeper を通す。tick だけに置くと、REPL で明言された値が
+    // 対話の入口でも締めの keeper を通す。cycle だけに置くと、REPL で明言された値が
     // 確定記憶へ上がらない。返信は先に表示し、keeper が終わってから次の入力を受ける。
     if (!turn.cutOff) {
       const kept = await run(
@@ -90,11 +90,11 @@ try {
     }
 
     // 既読位置はターンごとに進める。進めないと、いま自分で答えた入力が
-    // 次の tick で「まだ見ていない入力」として上がり、同じ話にもう一度起きる。
+    // 次の cycle で「まだ見ていない入力」として上がり、同じ話にもう一度起きる。
     await run(
       Effect.gen(function* () {
         const att = yield* Attention
-        yield* att.commit()
+        yield* att.completeCycle()
       }),
     ).catch(() => {})
   }

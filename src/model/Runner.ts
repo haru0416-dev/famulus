@@ -37,7 +37,7 @@ export type Role = "structurer" | "scout" | "reviewer"
  *
  * 現在 ROLE_MODEL を参照して呼ばれるのは `scout` / `reviewer` / `structurer`。
  * `briefing` / `dialogue` / `classify` の ROLE_MODEL エントリには呼び手がない。
- * 対話と tick 本体のモデルは createAssistant() に渡す model id で決まる。
+ * 対話と cycle 本体のモデルは createAssistant() に渡す model id で決まる。
  * ここを取り違えると「structurer を守った」つもりで、引用を写す仕事のほうを動かすことになる。
  *
  * `reviewer` は書いた側と別のモデルに置く。前は opus が書いて opus が読んでいたが、
@@ -191,7 +191,7 @@ const defaultPlan = (role: string): RunPlan => {
  * Claude は `claude -p`、GPT は Codex の Responses を HTTP で直接(src/model/codex-responses.ts)。
  * 入出力の型は揃えてあるので、ここは呼び先を選ぶだけ。
  */
-export const RunnerClaudeCli = Layer.effect(
+export const RunnerLive = Layer.effect(
   Runner,
   makeRunner(
     (req, p) =>

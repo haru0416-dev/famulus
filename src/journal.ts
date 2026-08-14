@@ -1,7 +1,7 @@
 /**
  * 1回ごとの進み具合を、外から確かめられる形にする。
  *
- * tick は自分で起きて自分で終わる。人が見ているのは締めの1文だけで、その文は自分で書いた報告
+ * cycle は自分で起きて自分で終わる。人が見ているのは締めの1文だけで、その文は自分で書いた報告
  * なので、やったと書いてあることとやったことがずれても外からは分からない。
  * ここが読むのは3つの別々の記録で、どれも報告文とは独立に残っている:
  *
@@ -9,7 +9,7 @@
  *   2. その回の窓に残ったもの…提案・下書き・通知・コンテナ実行・確定した事実の行数
  *   3. モデル使用量(`ledger`)…run 数、出力トークン数
  *
- * 窓は `[content.tick, event.at]`。前者は digest を取った時刻、後者は記録を書いた時刻で、
+ * 窓は `[content.cycle, event.at]`。前者は planCycle を取った時刻、後者は記録を書いた時刻で、
  * その間がこの回の実働。窓の外で起きたことは数えない — 数えると、15分前の poll が入れた
  * ユーザー発言まで「この回の成果」として並ぶ。
  *
@@ -60,7 +60,7 @@ const num = (v: unknown): number | undefined => (typeof v === "number" && Number
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined)
 
 /**
- * 直近 n 回。実際に動いた回だけ返す(idle の回は tick の記録を書かない)。
+ * 直近 n 回。実際に動いた回だけ返す(idle の回は cycle の記録を書かない)。
  *
  * 窓ごとに数える問い合わせを投げるので、n を大きくすると SQL の本数がそのぶん増える。
  * 読むのは人なので、既定は画面に収まる程度にしてある。
@@ -71,7 +71,8 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
     const rows = yield* db.all(
       `SELECT at, content FROM events
         WHERE kind = 'observe' AND source = 'system'
-          AND content IS NOT NULL AND json_extract(content, '$.tick')IS NOT NULL
+          AND content IS NOT NULL
+          AND COALESCE(json_extract(content, '$.cycle'), json_extract(content, '$.tick'))IS NOT NULL
         ORDER BY at DESC LIMIT ?`,
       n,
     )
@@ -85,7 +86,8 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
       } catch {
         continue
       }
-      const at = str(c.tick) ?? wroteAt
+      // 旧イベントの tick は履歴データとして読む。新しい記録は cycle だけを書く。
+      const at = str(c.cycle) ?? str(c.tick) ?? wroteAt
       // 窓の終わりは記録を書いた時刻。書く前に出したものまで入れる。
       // 起点だけで切って「以降ぜんぶ」にすると、次の回のぶんが混ざる。
       const left = yield* countLeft(at, wroteAt)
@@ -116,7 +118,7 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
   })
 
 /**
- * 窓の中に増えた行を数える。tick の報告は読まない。
+ * 窓の中に増えた行を数える。cycle の報告は読まない。
  *
  * watch実行はwatch_runsへ追記されるため、後の実行で古い回から消えない。
  */
@@ -268,7 +270,7 @@ export const logPost = (e: Entry): string =>
  * 上に置くと、そこだけ読んで「やった」と受け取れてしまう。数えた欄より先には来させない。
  */
 export const renderJournal = (entries: readonly Entry[]): string => {
-  if (entries.length === 0) return "実働の記録がまだ無い(tick が一度も動いていないか、記録より前)"
+  if (entries.length === 0) return "実働の記録がまだ無い(自動処理が一度も動いていないか、記録より前)"
   const body = entries.map((e) =>
     [
       `── ${localStamp(e.at)} ${"─".repeat(20)}`,

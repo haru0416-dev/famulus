@@ -1,7 +1,7 @@
 /**
  * 何日ぶんかをまとめて見直す回。1回のやり取りの中では見えないものを拾う。
  *
- * keeper は owner 入力への tick 応答が完了したとき、その回の発言だけを判定する。
+ * keeper は owner 入力への cycle 応答が完了したとき、その回の発言だけを判定する。
  * 「3日にわたって同じことを言っている」「先週の値が今週の発言で変わった」の類は、
  * 1回ぶんの材料の中に現れないので保存対象にならない。ここは対象期間を複数日に広げて同じ判定を通す。
  * 判定は keeper と同じものを使う — 引用の照合(keepGrounded)も1回の上限も共通で、
@@ -16,7 +16,7 @@
  * 同じ材料を毎晩読み直すと、同じ値が毎晩再保存され、有効期間が1日だけの履歴行が増え続ける。
  */
 import * as Effect from "effect/Effect"
-import { dayRange, localHour, nowIso } from "../core/time.ts"
+import { localDayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "../services/Db.ts"
 import { KEEP_MS, keep } from "./keeper.ts"
 
@@ -29,7 +29,7 @@ export const DREAM_MAX = 60
 /** ここまで見た、を置く場所。 */
 export const DREAM_CURSOR = "dream:through"
 
-/** その日ぶんを済ませたかどうかを置く場所。値は `dayRange().key`。 */
+/** その日ぶんを済ませたかどうかを置く場所。値は `localDayRange().key`。 */
 export const DREAM_DAILY = "daily:dream"
 
 /**
@@ -41,16 +41,16 @@ export const DREAM_DAILY = "daily:dream"
 export const DREAM_HOUR = Number(process.env.OPEN_ZERO_DREAM_HOUR ?? 4)
 
 /**
- * この tick で回すかどうか。1日1回。
+ * この cycle で回すかどうか。1日1回。
  *
- * 判定だけで、済んだ印は付けない — 付けるのは実際に回した側(src/tick.ts)。
+ * 判定だけで、済んだ印は付けない — 付けるのは実際に回した側(src/cycle.ts)。
  * ここで付けると、呼んだが回さなかった回にも印が立つ。
  */
 export const dreamDue = (atIso: string) =>
   Effect.gen(function* () {
     if (localHour(atIso) < DREAM_HOUR) return false
     const db = yield* Db
-    return (yield* db.meta(DREAM_DAILY)) !== dayRange(atIso).key
+    return (yield* db.meta(DREAM_DAILY)) !== localDayRange(atIso).key
   })
 
 /**

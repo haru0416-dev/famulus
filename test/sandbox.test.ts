@@ -70,7 +70,7 @@ test("書けるのは workspace と共有キャッシュだけ。コンテナは
     "workspace とキャッシュ以外が繋がっている",
   )
   assert.ok(args.includes("--rm"), "コンテナが残ると走行のたびに溜まる")
-  // ユーザーの uid で走らせる。root のままだと、コンテナが作ったファイルを tick が消せない。
+  // ユーザーの uid で走らせる。root のままだと、コンテナが作ったファイルを cycle が消せない。
   assert.equal(args[args.indexOf("--user") + 1], `${process.getuid?.()}:${process.getgid?.()}`)
 })
 

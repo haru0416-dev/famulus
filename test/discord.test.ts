@@ -2,7 +2,7 @@
  * Discord の検査。押されたことをどう見分けるかを主に見る。
  *
  * リアクションは自分で先に付けるので、絵文字の数は最初から 1 ある。そこを引かずに数えると、
- * 誰も押していない通知が全部「押された」になり、tick が勝手に進む。
+ * 誰も押していない通知が全部「押された」になり、cycle が勝手に進む。
  * 既読位置の扱いも見る — 初回に全部拾うと、DM に残っている過去の一言が今日の指示になる。
  */
 
@@ -109,16 +109,16 @@ const post = (p: Post) =>
     return yield* d.post(p)
   })
 
-const inbox = Effect.gen(function* () {
+const pollInbound = Effect.gen(function* () {
   const d = yield* Discord
-  const batch = yield* d.inbox()
-  yield* d.seen(batch)
+  const batch = yield* d.pollInbound()
+  yield* d.commitInboundBatch(batch)
   return batch.items
 })
 
 const peek = Effect.gen(function* () {
   const d = yield* Discord
-  return yield* d.inbox()
+  return yield* d.pollInbound()
 })
 
 const configured = Effect.gen(function* () {
@@ -154,7 +154,7 @@ test("トークンが無ければ何もしない — 叩かないし落ちない
     await withHarness(async (h) => {
       assert.equal(await h.run(configured), false)
       assert.equal(await h.run(post({ text: "本文" })), undefined)
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [])
       assert.equal(dc.hits.length, 0)
     })
   } finally {
@@ -215,14 +215,14 @@ test("押されるまでは空。押されたら割り当てた文が返る", as
     await withHarness(async (h) => {
       const id = await h.run(post({ text: "出していいか", taps: [{ emoji: "🛑", reply: "やめて" }] }))
       // 自分で付けたぶんだけ。ここで拾うと、誰も押していない通知が承認になる。
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [])
 
       const m = dc.msgs.find((x) => x.id === id)
       const r = m?.reactions?.[0]
       if (r) r.count = 2
-      assert.deepEqual(await h.run(inbox), [{ id: `${id}:🛑`, text: "やめて" }])
-      // 二度は返らない。返ると同じ指示が tick のたびに効き続ける。
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [{ id: `${id}:🛑`, text: "やめて" }])
+      // 二度は返らない。返ると同じ指示が cycle のたびに効き続ける。
+      assert.deepEqual(await h.run(pollInbound), [])
     })
   } finally {
     wire(undefined)
@@ -238,9 +238,9 @@ test("初回は自由文を取り込まない — DM に残っている過去の
   wire(dc.url)
   try {
     await withHarness(async (h) => {
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [])
       dc.msgs.unshift({ id: "52", content: "今日はこれをやって", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [{ id: "52", text: "今日はこれをやって" }])
+      assert.deepEqual(await h.run(pollInbound), [{ id: "52", text: "今日はこれをやって" }])
     })
   } finally {
     wire(undefined)
@@ -253,14 +253,14 @@ test("記録完了前に終了した回の項目は、次の回にもう一度�
   wire(dc.url)
   try {
     await withHarness(async (h) => {
-      await h.run(inbox)
+      await h.run(pollInbound)
       dc.msgs.unshift({ id: "71", content: "歯医者を来週にずらして", author: { id: OWNER } })
       // 読んだが `seen` を呼ばずに終えた回。位置は進んでいない。
       const first = await h.run(peek)
       assert.deepEqual([...first.items], [{ id: "71", text: "歯医者を来週にずらして" }])
       // 二重記録は修復できるが、cursor 以前に取り残された項目は再取得できない。
-      assert.deepEqual(await h.run(inbox), [{ id: "71", text: "歯医者を来週にずらして" }])
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [{ id: "71", text: "歯医者を来週にずらして" }])
+      assert.deepEqual(await h.run(pollInbound), [])
     })
   } finally {
     wire(undefined)
@@ -280,8 +280,8 @@ test("押されたリアクションも、記録し終えるまでは消えな�
       const first = await h.run(peek)
       assert.deepEqual([...first.items], [{ id: `${id}:✅`, text: "出していい" }])
       // 待ちリストから落ちるのも `seen` のとき。落ちる前に切られたら、次の回にもう一度返る。
-      assert.deepEqual(await h.run(inbox), [{ id: `${id}:✅`, text: "出していい" }])
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [{ id: `${id}:✅`, text: "出していい" }])
+      assert.deepEqual(await h.run(pollInbound), [])
     })
   } finally {
     wire(undefined)
@@ -289,14 +289,14 @@ test("押されたリアクションも、記録し終えるまでは消えな�
   }
 })
 
-test("自分の発言は拾わない — 出した文が次の tick の入力に化けない", async () => {
+test("自分の発言は拾わない — 出した文が次の cycle の入力に化けない", async () => {
   const dc = await fakeDiscord([{ id: "60", content: "位置合わせ", author: { id: OWNER } }])
   wire(dc.url)
   try {
     await withHarness(async (h) => {
-      await h.run(inbox)
+      await h.run(pollInbound)
       await h.run(post({ text: "こちらから出した文" }))
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [])
     })
   } finally {
     wire(undefined)
@@ -304,12 +304,12 @@ test("自分の発言は拾わない — 出した文が次の tick の入力に
   }
 })
 
-test("Discord が落ちていても空を返す — tick は返事が読めないだけで止まらない", async () => {
+test("Discord が落ちていても空を返す — cycle は返事が読めないだけで止まらない", async () => {
   // 1 番は特権ポートで、この環境では誰も listen していない(接続は即座に拒否される)。
   wire("http://127.0.0.1:1")
   try {
     await withHarness(async (h) => {
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [])
       assert.equal(await h.run(post({ text: "本文" })), undefined)
     })
   } finally {
@@ -361,7 +361,7 @@ test("リアクションは出した場所に付く — 会話の場所に出し
       )
       const r = dc.at(DRAFT).find((x) => x.id === id)?.reactions?.[0]
       if (r) r.count = 2
-      assert.deepEqual(await h.run(inbox), [{ id: `${id}:✅`, text: "出す" }])
+      assert.deepEqual(await h.run(pollInbound), [{ id: `${id}:✅`, text: "出す" }])
     })
   } finally {
     wire(undefined)
@@ -377,15 +377,15 @@ test("返事は最後に話しかけられた場所に返る — DM に書かれ
     await withHarness(async (h) => {
       dc.at(TALK).unshift({ id: "200", content: "位置合わせ", author: { id: OWNER } })
       dc.msgs.unshift({ id: "201", content: "位置合わせ", author: { id: OWNER } })
-      await h.run(inbox)
+      await h.run(pollInbound)
 
       dc.msgs.unshift({ id: "300", content: "DM から訊く", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [{ id: "300", text: "DM から訊く" }])
+      assert.deepEqual(await h.run(pollInbound), [{ id: "300", text: "DM から訊く" }])
       await h.run(post({ text: "DM への返事" }))
       assert.equal(dc.msgs[0]?.content, "DM への返事")
 
       dc.at(TALK).unshift({ id: "301", content: "やっぱりこっち", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [{ id: "301", text: "やっぱりこっち" }])
+      assert.deepEqual(await h.run(pollInbound), [{ id: "301", text: "やっぱりこっち" }])
       await h.run(post({ text: "チャンネルへの返事" }))
       assert.equal(dc.at(TALK)[0]?.content, "チャンネルへの返事")
     })
@@ -406,11 +406,11 @@ test("返事は、複数のチャンネルに未読があっても新しいほ�
     await withHarness(async (h) => {
       dc.at(TALK).unshift({ id: "200", content: "位置合わせ", author: { id: OWNER } })
       dc.msgs.unshift({ id: "201", content: "位置合わせ", author: { id: OWNER } })
-      await h.run(inbox)
+      await h.run(pollInbound)
 
       dc.msgs.unshift({ id: "300", content: "先に DM", author: { id: OWNER } })
       dc.at(TALK).unshift({ id: "301", content: "後から talk", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [
+      assert.deepEqual(await h.run(pollInbound), [
         { id: "300", text: "先に DM" },
         { id: "301", text: "後から talk" },
       ])
@@ -419,7 +419,7 @@ test("返事は、複数のチャンネルに未読があっても新しいほ�
 
       dc.at(TALK).unshift({ id: "400", content: "先に talk", author: { id: OWNER } })
       dc.msgs.unshift({ id: "401", content: "後から DM", author: { id: OWNER } })
-      await h.run(inbox)
+      await h.run(pollInbound)
       await h.run(post({ text: "DM へ" }))
       assert.equal(dc.msgs[0]?.content, "DM へ")
     })
@@ -435,10 +435,10 @@ test("既読位置は場所ごとに持つ — 片方に書いても、もう片
   try {
     await withHarness(async (h) => {
       dc.at(TALK).unshift({ id: "51", content: "チャンネルの去年の話", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [])
       dc.at(TALK).unshift({ id: "52", content: "今日の指示", author: { id: OWNER } })
       // DM 側は位置が動いていないが、そこに残っている過去の一言は出てこない。
-      assert.deepEqual(await h.run(inbox), [{ id: "52", text: "今日の指示" }])
+      assert.deepEqual(await h.run(pollInbound), [{ id: "52", text: "今日の指示" }])
     })
   } finally {
     wire(undefined)
@@ -460,9 +460,9 @@ test("旧い全体 cursor は読まず、DM の位置をチャンネル単位で
           yield* db.setMeta("discord:last", "61")
         }),
       )
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [])
       dc.msgs.unshift({ id: "62", content: "今日の指示", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [{ id: "62", text: "今日の指示" }])
+      assert.deepEqual(await h.run(pollInbound), [{ id: "62", text: "今日の指示" }])
     })
   } finally {
     wire(undefined)
@@ -514,7 +514,7 @@ test("スレッドに書かれた1通目から拾う — 立てた時点で位�
     await withHarness(async (h) => {
       const id = await h.run(post({ text: "下書き本文", to: "draft", thread: "題名" }))
       dc.at(String(id)).unshift({ id: "900", content: "ここの数字を直して", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [{ id: "900", text: "ここの数字を直して" }])
+      assert.deepEqual(await h.run(pollInbound), [{ id: "900", text: "ここの数字を直して" }])
       // 返事はスレッドの中に返る。スレッド外に返すと、どれへの返事か読む側が探すことになる。
       await h.run(post({ text: "直した" }))
       assert.equal(dc.at(String(id))[0]?.content, "直した")
@@ -543,7 +543,7 @@ test("聞き続けるスレッドには上限がある — 古いものから落
       assert.deepEqual(JSON.parse(open ?? "[]"), ids.slice(1))
       // 落ちたスレッドに書いても拾わない(接続していない)。
       dc.at(String(ids[0])).unshift({ id: "910", content: "古いスレッドへの返事", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [])
     })
   } finally {
     wire(undefined)
@@ -599,9 +599,9 @@ test("進み具合の場所に書かれたものも拾う", async () => {
   try {
     await withHarness(async (h) => {
       dc.at(LOG).unshift({ id: "400", content: "位置合わせ", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [])
+      assert.deepEqual(await h.run(pollInbound), [])
       dc.at(LOG).unshift({ id: "401", content: "この回のこれ何やってるの", author: { id: OWNER } })
-      assert.deepEqual(await h.run(inbox), [{ id: "401", text: "この回のこれ何やってるの" }])
+      assert.deepEqual(await h.run(pollInbound), [{ id: "401", text: "この回のこれ何やってるの" }])
     })
   } finally {
     wire(undefined)

@@ -136,7 +136,7 @@ test("保存候補は keeper と同じ照合を通る(写せない引用は除�
           yield* seed
           const line = yield* dream({ at: AT })
           const mem = yield* Memory
-          return { line, cur: yield* mem.belief("week.topic") }
+          return { line, cur: yield* mem.currentBelief("week.topic") }
         }),
       )
       assert.match(out.line, /1 件を確定値として保存/)

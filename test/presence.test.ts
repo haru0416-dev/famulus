@@ -41,7 +41,7 @@ test("未読が無ければ watch の数だけ出す", () => {
   })
 })
 
-/** 未読は `tick:cursor` より後ろの owner 行。cursor を持たない状態は 0 として読む。 */
+/** 未読は `cycle:cursor` より後ろの owner 行。cursor を持たない状態は 0 として読む。 */
 test("未読があれば件数を前に出す", () => {
   withDb((path, db) => {
     db.run(`INSERT INTO events
@@ -53,7 +53,7 @@ test("未読があれば件数を前に出す", () => {
       (id,subject,opened_at,last_activity_at,next_move_owner,status,cooldown_hours)
       VALUES ('a','a','2026-08-14T00:00:00Z','2026-08-14T00:00:00Z','human','open',24)`)
     assert.equal(stateLine(path), "未読 2 / watch 1")
-    db.run("INSERT INTO schema_meta VALUES ('tick:cursor','2')")
+    db.run("INSERT INTO schema_meta VALUES ('cycle:cursor','2')")
     assert.equal(stateLine(path), "未読 1 / watch 1")
   })
 })

@@ -96,3 +96,30 @@ test("空DBを2接続が同時に開いても同じschemaを受理する", async
     await Promise.all(runtimes.map((rt) => rt.dispose()))
   }
 })
+
+test("現行schema受理後に旧tick状態をcycleへ一度だけ移す", async () => {
+  const path = join(root, "tick-meta.db")
+  const db = openDb(path)
+  db.exec(SCHEMA_SQL)
+  db.exec(`INSERT INTO schema_meta VALUES
+    ('version','4'),
+    ('tick:cursor','12'),
+    ('tick:last','old'),
+    ('cycle:last','current')`)
+  db.close()
+
+  const rt = makeRuntime(DbLive(path), RunnerStub([{ text: "ok" }]).layer)
+  const state = await rt.runPromise(
+    Effect.gen(function* () {
+      const live = yield* Db
+      return {
+        cursor: yield* live.meta("cycle:cursor"),
+        last: yield* live.meta("cycle:last"),
+        old: yield* live.all("SELECT key FROM schema_meta WHERE key LIKE 'tick:%'"),
+      }
+    }),
+  )
+  await rt.dispose()
+
+  assert.deepEqual(state, { cursor: "12", last: "current", old: [] })
+})

@@ -4,13 +4,13 @@
  *
  *   1. 受信箱を1回読む。モデルは呼ばない。
  *   2. 何も来ていなければ終わる。大半の起動はここで終わる。
- *   3. 来ていたら DB に移して tick の systemd unit を起動する。
+ *   3. 来ていたら DB に移して cycle の systemd unit を起動する。
  *
- * 受け取りを tick(15分間隔)から分けてあるのは、返事の待ち時間を間隔から外すため。
+ * 受け取りを cycle(15分間隔)から分けてあるのは、返事の待ち時間を間隔から外すため。
  * websocket にしないのは再接続とセッション再開を自前で持たずに済ませるため。
  * オンライン表示だけは gateway が要るので別プロセス(src/presence.ts)。
  *
- * 続けて打たれた行は次のポーリングでまとめて読まれ、tick の起動は1回だけ行う。
+ * 続けて打たれた行は次のポーリングでまとめて読まれ、cycle の起動は1回だけ行う。
  */
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -26,21 +26,21 @@ loadEnv()
 const exec = promisify(execFile)
 
 /** 起動する unit。検査のときだけ空にして、実際に systemd を呼ばない。 */
-const tickUnit = (): string => process.env.OPEN_ZERO_TICK_UNIT ?? "open-zero-tick.service"
+const cycleUnit = (): string => process.env.OPEN_ZERO_CYCLE_UNIT ?? "open-zero-cycle.service"
 
 /**
- * 再起動を試すまでの最小間隔。クォータ枯渇や停止で tick が即時終了したとき、未読は残るので
+ * 再起動を試すまでの最小間隔。クォータ枯渇や停止で cycle が即時終了したとき、未読は残るので
  * 毎回起動を試すことになる。30秒ごとにそれを行うと処理されない起動要求が積み上がる。
- * tick が正常に終わった直後の未読には適用しない(下の `ran`)。
+ * cycle が正常に終わった直後の未読には適用しない(下の `ran`)。
  */
 const RETRY_MS = 180_000
 
 /**
- * tick の systemd unit を起動する。実行中の oneshot に `start` を重ねても待ち行列には積まれず、2回目は実行
+ * cycle の systemd unit を起動する。実行中の oneshot に `start` を重ねても待ち行列には積まれず、2回目は実行
  * されない。走行中に届いたぶんは DB に未読として残るので、次の起動で拾い直す。
  */
 async function wake(): Promise<{ started: boolean; note: string }> {
-  const unit = tickUnit()
+  const unit = cycleUnit()
   if (!unit) return { started: true, note: "起動しない(検査)" }
   // 実行中なら起動要求を送らない。送っても併合され、呼び出し側には成功として返る。
   // `is-active` は使えない。Type=oneshot は ExecStart の間ずっと `activating` で、
@@ -64,21 +64,21 @@ async function poll(): Promise<string> {
       const db = yield* Db
       const got = yield* drainInbox
 
-      // 届いた件数ではなく DB の未読で決める。tick 実行中に届いたぶんは追加の起動要求が併合されて
-      // 落ちるので、消えるまで見る。消すのは tick 側の commit。
-      const cursor = Number((yield* db.meta("tick:cursor")) ?? 0)
+      // 届いた件数ではなく DB の未読で決める。cycle 実行中に届いたぶんは追加の起動要求が併合されて
+      // 落ちるので、消えるまで見る。消すのは cycle 側の completeCycle。
+      const cursor = Number((yield* db.meta("cycle:cursor")) ?? 0)
       const row = yield* db.get("SELECT COUNT(*)n FROM events WHERE rowid > ?AND source = 'owner'", cursor)
       const unread = Number(row?.n ?? 0)
       if (unread === 0) return { count: got, unread, wake: false }
 
       // 新しく届いたぶんは待たせない。
-      const wokeRaw = yield* db.meta("tick:woke")
+      const wokeRaw = yield* db.meta("cycle:woke")
       const since = Date.now() - (wokeRaw ? Date.parse(wokeRaw) : 0)
 
-      // 起動した tick が最後まで実行されたのに未読が残っている = その回と入れ違いに届いた。
-      // tick は見終えた行までしか cursor を進めない。`tick:last` は commit でしか進まないので、
+      // 起動した cycle が最後まで実行されたのに未読が残っている = その回と入れ違いに届いた。
+      // cycle は見終えた行までしか cursor を進めない。`cycle:last` は completeCycle でしか進まないので、
       // クォータ枯渇や停止で処理されなかった回はここに入らず、RETRY_MS の側で間隔を空ける。
-      const lastRaw = yield* db.meta("tick:last")
+      const lastRaw = yield* db.meta("cycle:last")
       const ran = !!lastRaw && !!wokeRaw && Date.parse(lastRaw) >= Date.parse(wokeRaw)
       return { count: got, unread, wake: got > 0 || ran || since >= RETRY_MS }
     }),
@@ -95,7 +95,7 @@ async function poll(): Promise<string> {
     await run(
       Effect.gen(function* () {
         const db = yield* Db
-        yield* db.setMeta("tick:woke", nowIso())
+        yield* db.setMeta("cycle:woke", nowIso())
       }),
     )
   return `${head} — ${w.note}`

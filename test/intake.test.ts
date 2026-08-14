@@ -544,7 +544,7 @@ test("取り込んだものは検索に出る — 自分の独り言より前、
           const refs = yield* intake.scan(10)
           yield* intake.ingest(only(refs))
           // 同じ語を含む自分の独り言。新しいだけで、探しものとしては役に立たない。
-          yield* mem.remember({ source: "system", content: { tick: "確認メールの件は今は動かない。" } })
+          yield* mem.remember({ source: "system", content: { cycle: "確認メールの件は今は動かない。" } })
           return yield* mem.recall("確認メール")
         }),
       )

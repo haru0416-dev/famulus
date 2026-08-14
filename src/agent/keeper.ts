@@ -1,5 +1,5 @@
 /**
- * keeper は、owner 入力があり tick の応答が最後まで完了した回で、主処理が保存しなかった確定値を補完する後処理。
+ * keeper は、owner 入力があり cycle の応答が最後まで完了した回で、主処理が保存しなかった確定値を補完する後処理。
  * dream も同じ判定を複数日ぶんの材料に再利用する。
  *
  * DB には2つの層がある。`import`(過去の会話から起こした要約)は「その日時点でそう書かれていた」
@@ -121,7 +121,7 @@ export const keepGrounded = (values: readonly KeptValue[] | undefined, material:
 /**
  * 回の終了時に確定値補完処理(keeper)を1回実行する。失敗しても回全体は失敗させない。
  *
- * 戻り値は DB に残す1行。呼び出し側はこれを tick の記録に添えるだけで、経路の分岐には使わない
+ * 戻り値は DB に残す1行。呼び出し側はこれを cycle の記録に添えるだけで、経路の分岐には使わない
  * — keeper の処理失敗によって返信や既読位置が変わると、直す場所が分からなくなる。
  */
 export const keep = (opts: {
@@ -181,7 +181,7 @@ export const keep = (opts: {
     const dropped = (res.values?.length ?? 0) - grounded.length + (novel.length - kept.length)
     const late = grounded.length - novel.length
     for (const { value: v, evidenceEventId } of kept) {
-      yield* mem.believe(v.slot, v.value, {
+      yield* mem.recordBelief(v.slot, v.value, {
         ...(v.validFrom ? { validFrom: v.validFrom } : {}),
         ...(v.reason ? { reason: v.reason } : {}),
         evidenceEventId,

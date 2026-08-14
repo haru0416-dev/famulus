@@ -1,18 +1,18 @@
 /**
- * tick の実行時に何を見るかを DB 側に持つ。`watchlist`(未決の追跡対象)と
+ * cycle の実行時に何を見るかを DB 側に持つ。`watchlist`(未決の追跡対象)と
  * `questions`(未検証の仮説)の2枚。
  *
  * `questions` を `belief_slots` と分けてあるのは、確認していないことが事実として溜まらない
  * ようにするため。自走中は答え合わせをする相手がいない。
  *
- * `digest` はモデルを呼ばない。モデル実行が必要かを SQL だけで決める。
+ * `planCycle` はモデルを呼ばない。モデル実行が必要かを SQL だけで決める。
  */
 import { randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { Conflict, NotFound } from "../core/errors.ts"
-import { dayRange, localHour, nowIso } from "../core/time.ts"
+import { localDayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 /**
@@ -62,7 +62,7 @@ export interface PendingProposal {
   readonly created_at: string
   readonly expires_at: string
   readonly daysLeft: number
-  /** tick が前に記録した結論。あるものは次回の実行条件に数えない(承認はユーザーしか出せない)。 */
+  /** 自動処理が前に記録した結論。あるものは次回の実行条件に数えない(承認はユーザーしか出せない)。 */
   readonly settled_note: string | null
 }
 
@@ -82,13 +82,13 @@ export interface ObservedEvent {
   readonly id: string
   readonly at: string
   readonly source: string
-  /** 1 なら不信データ由来(gmail/web)。tick はこれを見て境界マーカーで囲う。 */
+  /** 1 なら不信データ由来(gmail/web)。cycle はこれを見て境界マーカーで囲う。 */
   readonly taint: number
   readonly content: string
 }
 
-/** tick 1回ぶんの入力。`idle` ならモデルを呼ばない。`reasons` は今回の実行条件。 */
-export interface Digest {
+/** cycle 1回ぶんの入力。`idle` ならモデルを呼ばない。`reasons` は今回の実行条件。 */
+export interface CyclePlan {
   readonly at: string
   readonly cursor: number
   readonly newEvents: readonly ObservedEvent[]
@@ -101,9 +101,9 @@ export interface Digest {
   readonly refused: readonly RefusedProposal[]
   readonly sinceLastActiveHours: number
   readonly reasons: readonly string[]
-  /** 理由の組み合わせ(件数を除いたもの)。前回と同じなら次のcooldownが伸びる。`commit` に渡す。 */
+  /** 理由の組み合わせ(件数を除いたもの)。前回と同じなら次のcooldownが伸びる。`completeCycle` に渡す。 */
   readonly reasonKey: string
-  /** この tick で満たすべきだったcooldown時間。指数バックオフの適用状況を外から見るため。 */
+  /** この cycle で満たすべきだったcooldown時間。指数バックオフの適用状況を外から見るため。 */
   readonly cooldownHours: number
   /** 今日ぶんの下書きがまだ出ていない。cooldownを無視して実行条件になる(1日1回しか成立しない)。 */
   readonly draftDue: boolean
@@ -116,14 +116,14 @@ export const STALLED_DAYS = 3
 /**
  * watch を実行した後、次にプロンプトに載せるまでの既定時間。
  *
- * `last_activity_at` では止まらない。`digest` は `next_move_owner = 'famulus'` の watch を
- * 無条件で滞留に入れるので、実行して `touchWatch` しても次の tick で再び処理対象になる。列が無かった
+ * `last_activity_at` では止まらない。`planCycle` は `next_move_owner = 'famulus'` の watch を
+ * 無条件で滞留に入れるので、実行して `touchWatch` しても次の cycle で再び処理対象になる。列が無かった
  * ときは、モデルが最終走行時刻を subject の文字列に書き込んで登録し直していた。
  * 判定は `last_run_at` と `run_count` で行う。
  */
 export const WATCH_COOLDOWN_HOURS = 24
 /**
- * 1回の tick で載せる watch の上限。
+ * 1回の cycle で載せる watch の上限。
  *
  * 同じ日に登録した watch は同じ時刻に再提示可能になり、対象がすべて同時に掲載候補になる。
  * 直近40回を調べると6件が同時に載る状態が続き、watch が実行条件になった9回のうち
@@ -135,11 +135,11 @@ export const WATCH_COOLDOWN_HOURS = 24
  * 検査で押さえてあるのは順番が回ることだけ。
  */
 export const STALLED_SHOW_MAX = 3
-/** 承認待ちがこの日数以内に期限切れになるなら、tick でユーザーに思い出させる材料にする。 */
+/** 承認待ちがこの日数以内に期限切れになるなら、自動処理でユーザーに思い出させる材料にする。 */
 export const EXPIRING_DAYS = 2
 /** 外部入力が無くても、この時間が経過したら定期確認を実行条件に追加する。 */
 export const IDLE_WAKE_HOURS = 24
-/** tick のプロンプトに載せる「断られたぶん」の数。実行条件には数えない。 */
+/** cycle のプロンプトに載せる「断られたぶん」の数。実行条件には数えない。 */
 export const REFUSED_LIMIT = 5
 
 /**
@@ -242,7 +242,7 @@ const makeAttention = () =>
      * `at` は実行した時刻で、記録した時刻ではない。後から記録するとき今の時刻を入れるとcooldownが
      * その分ずれるので、過去は渡せる。未来は取らない(渡せるとcooldownを好きなだけ伸ばせる)。
      */
-    const ranWatch = (idOrPrefix: string, result: string, ranAt?: string) =>
+    const recordWatchRun = (idOrPrefix: string, result: string, ranAt?: string) =>
       Effect.gen(function* () {
         yield* db.run("BEGIN IMMEDIATE")
         return yield* Effect.gen(function* () {
@@ -280,10 +280,10 @@ const makeAttention = () =>
       })
 
     /**
-     * プロンプトに載せたことを記録する。実行したことではない。`ranWatch` と同じ列にすると、
+     * プロンプトに載せたことを記録する。実行したことではない。`recordWatchRun` と同じ列にすると、
      * 実行しなかった watch が次の回もまた先頭に来て同じ数件が残り続ける。
      *
-     * 呼ぶのは digest ではなくプロンプトを組み立てる側。digest は実行条件が無い回にも走るので、
+     * 呼ぶのは planCycle ではなくプロンプトを組み立てる側。planCycle は実行条件が無い回にも走るので、
      * そこで記録すると誰も見ていない一覧を載せたことになる。
      */
     const noteShown = (ids: readonly string[], at: string = nowIso()) =>
@@ -360,7 +360,7 @@ const makeAttention = () =>
 
     /**
      * 答えないまま問いを取り下げる。`answer` しか終了方法が無いと、答える意味を失った問いも open のまま残る。
-     * `openQuestions` は古い順に上限件数だけ渡すので、それが上限を埋めると新しい問いが tick に届かない。
+     * `openQuestions` は古い順に上限件数だけ渡すので、それが上限を埋めると新しい問いが cycle に届かない。
      * 理由を残して閉じる。
      */
     const drop = (idOrPrefix: string, why: string) =>
@@ -375,17 +375,17 @@ const makeAttention = () =>
         .all("SELECT * FROM questions WHERE status = 'open' ORDER BY opened_at ASC LIMIT ?", limit)
         .pipe(Effect.map((rows) => rows as unknown as QuestionRow[]))
 
-    // ── tick の処理対象
+    // ── cycle の処理対象
 
     /**
      * 何を処理するために実行するかを SQL だけで決める。モデルは呼ばない。
-     * 見た位置(cursor)は進めない — tick が最後まで走り切ってから `commit` で進める
-     * (途中で失敗したら、次の tick が同じ入力をもう一度見る = 未処理のまま保持する)。
+     * 見た位置(cursor)は進めない — cycle が最後まで走り切ってから `completeCycle` で進める
+     * (途中で失敗したら、次の cycle が同じ入力をもう一度見る = 未処理のまま保持する)。
      */
-    const digest = (nowMs: number = Date.now()) =>
+    const planCycle = (nowMs: number = Date.now()) =>
       Effect.gen(function* () {
         const at = new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, "Z")
-        const cursorRaw = yield* db.meta("tick:cursor")
+        const cursorRaw = yield* db.meta("cycle:cursor")
         const cursor = Number(cursorRaw ?? 0)
 
         // 自分が書いたもの(source='system')は実行条件にしない。外部入力だけを対象にする。
@@ -397,7 +397,7 @@ const makeAttention = () =>
         )) as unknown as ObservedEvent[]
 
         // cooldownが終了したものだけ。`next_move_owner = 'famulus'` は無条件で候補に入るので、
-        // `dueNow` を挟まないと自分持ちの watch は確認後も毎回の tick で処理対象になり続ける。
+        // `dueNow` を挟まないと自分持ちの watch は確認後も毎回の cycle で処理対象になり続ける。
         const due = (yield* openWatches(nowMs)).filter(
           (w) => w.dueNow && (w.next_move_owner === "famulus" || w.stalledDays >= STALLED_DAYS),
         )
@@ -442,7 +442,7 @@ const makeAttention = () =>
           at: String(r.decided_at),
         }))
 
-        const lastActive = yield* db.meta("tick:last_active")
+        const lastActive = yield* db.meta("cycle:last_active")
         const sinceLastActiveHours = lastActive
           ? (nowMs - Date.parse(lastActive)) / 3_600_000
           : Number.POSITIVE_INFINITY
@@ -451,7 +451,7 @@ const makeAttention = () =>
         // 条件に数えると同じ問いで実行し続ける。実行時の材料としてだけ渡す。
         const reasons: string[] = []
         if (newEvents.length > 0) reasons.push(`まだ見ていない入力が ${newEvents.length} 件`)
-        // 結論を置いたものは数えない。承認を出せるのはユーザーだけなので、tick を実行しても
+        // 結論を置いたものは数えない。承認を出せるのはユーザーだけなので、cycle を実行しても
         // 「あなた待ちです」をもう一度書くだけになる。承認はまだ要るので一覧には残す。
         const expiring = pending.filter((p) => p.daysLeft <= EXPIRING_DAYS && p.settled_note === null)
 
@@ -465,12 +465,12 @@ const makeAttention = () =>
           .join("+")
 
         // 前回と同じ組み合わせで実行した回数だけ、次回実行までを倍にする。
-        const lastKey = yield* db.meta("tick:reason_key")
+        const lastKey = yield* db.meta("cycle:reason_key")
         const repeats =
-          reasonKey !== "" && reasonKey === lastKey ? Number((yield* db.meta("tick:repeat")) ?? 0) : 0
+          reasonKey !== "" && reasonKey === lastKey ? Number((yield* db.meta("cycle:repeat")) ?? 0) : 0
         const cooldownHours = Math.min(ACTIVE_COOLDOWN_HOURS * 2 ** repeats, MAX_COOLDOWN_HOURS)
 
-        // 新しい入力が無いなら、直前に動いたばかりの tick は実行しない(自己起動ループを止める)。
+        // 新しい入力が無いなら、直前に動いたばかりの cycle は実行しない(自己起動ループを止める)。
         const cooled = sinceLastActiveHours >= cooldownHours
         if (cooled) {
           // cooldownが終了した全部の数を書く。載せる数で書くと、6件待っている回と
@@ -483,7 +483,7 @@ const makeAttention = () =>
         // cooldownの対象外にする。1日に1回しか成立しない条件で、抑えると夕方に別の理由で動いた日は
         // 下書きが生成されない。
         const draftDue =
-          localHour(at) >= dailyDraftHour() && (yield* db.meta("daily:draft")) !== dayRange(at).key
+          localHour(at) >= dailyDraftHour() && (yield* db.meta("daily:draft")) !== localDayRange(at).key
         if (draftDue) reasons.push("今日ぶんの下書きがまだ出ていない")
 
         return {
@@ -502,43 +502,43 @@ const makeAttention = () =>
           cooldownHours,
           draftDue,
           idle: reasons.length === 0,
-        } satisfies Digest
+        } satisfies CyclePlan
       })
 
     /**
-     * tick を見終えた位置を確定する。
+     * cycle を見終えた位置を確定する。
      *
      * `upto` はその回が実際に見た最後の行。渡さないと今の最大 rowid まで進むので、
-     * 走っている最中に届いた行(digest に載っていない行)まで既読になる。tick からは必ず渡す。
+     * 走っている最中に届いた行(planCycle に載っていない行)まで既読になる。cycle からは必ず渡す。
      *
      * 渡さない経路(対話セッションの終わり)は、自分が書いた行ごと消費してよい場面に限る。
-     * tick 自身の書き込みで tick が起きることは無い(digest が `source='system'` を外している)。
+     * cycle 自身の書き込みで cycle が起きることは無い(planCycle が `source='system'` を外している)。
      */
-    const commit = (opts?: { active?: boolean; at?: string; reasonKey?: string; upto?: number }) =>
+    const completeCycle = (opts?: { active?: boolean; at?: string; reasonKey?: string; upto?: number }) =>
       Effect.gen(function* () {
         let upto = opts?.upto
         if (upto === undefined) {
           const max = yield* db.get("SELECT COALESCE(MAX(seq),0)m FROM events")
           upto = Number(max?.m ?? 0)
         }
-        yield* db.setMeta("tick:cursor", String(upto))
+        yield* db.setMeta("cycle:cursor", String(upto))
         const at = opts?.at ?? nowIso()
-        yield* db.setMeta("tick:last", at)
+        yield* db.setMeta("cycle:last", at)
         if (!opts?.active) return
-        yield* db.setMeta("tick:last_active", at)
+        yield* db.setMeta("cycle:last_active", at)
         // 理由の組み合わせが前回と同じなら後退を1段深くする。違えば数え直し。
         // 数えるのはこの組み合わせで起きた回数なので、初めて記録する回も 1 になる。
         const key = opts.reasonKey ?? ""
-        const prev = yield* db.meta("tick:reason_key")
-        const seen = key === "" ? 0 : (key === prev ? Number((yield* db.meta("tick:repeat")) ?? 0) : 0) + 1
-        yield* db.setMeta("tick:reason_key", key)
-        yield* db.setMeta("tick:repeat", String(seen))
+        const prev = yield* db.meta("cycle:reason_key")
+        const seen = key === "" ? 0 : (key === prev ? Number((yield* db.meta("cycle:repeat")) ?? 0) : 0) + 1
+        yield* db.setMeta("cycle:reason_key", key)
+        yield* db.setMeta("cycle:repeat", String(seen))
       })
 
     return {
       watch,
       touchWatch,
-      ranWatch,
+      recordWatchRun,
       closeWatch,
       openWatches,
       noteShown,
@@ -548,8 +548,8 @@ const makeAttention = () =>
       drop,
       findQuestion,
       openQuestions,
-      digest,
-      commit,
+      planCycle,
+      completeCycle,
     } as const
   })
 

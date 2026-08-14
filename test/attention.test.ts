@@ -1,7 +1,7 @@
 /**
  * 自律実行条件の検査。実行条件が必要なときだけ成立することを見る。
  *
- * tick で怖いのは動かないことではなく、止まらないことのほう。
+ * cycle で怖いのは動かないことではなく、止まらないことのほう。
  * system由来の書き込みによる自己再実行 / 解消しない理由による無限再実行、の2つは実装を見ても気づきにくく、
  * 気づくのは「一晩で枠を使い切っていた」ときになる。だからここで固定する。
  */
@@ -29,10 +29,10 @@ const hours = (n: number) => n * 3_600_000
 // — 混ざると「入力が実行条件になった」のか「20時を過ぎた」のかが assert から区別できない。
 process.env.OPEN_ZERO_DAILY_HOUR = "99"
 
-const digestAt = (ms: number) =>
+const planAt = (ms: number) =>
   Effect.gen(function* () {
     const att = yield* Attention
-    return yield* att.digest(ms)
+    return yield* att.planCycle(ms)
   })
 
 test("何も無ければidleになる — 前回の実働から24時間経つと定期確認が実行条件になる", async () => {
@@ -40,14 +40,14 @@ test("何も無ければidleになる — 前回の実働から24時間経つと
     await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
       }),
     )
 
-    const quiet = await h.run(digestAt(T0 + hours(1)))
+    const quiet = await h.run(planAt(T0 + hours(1)))
     assert.equal(quiet.idle, true, "1時間後は実行条件がない")
 
-    const later = await h.run(digestAt(T0 + hours(IDLE_WAKE_HOURS + 1)))
+    const later = await h.run(planAt(T0 + hours(IDLE_WAKE_HOURS + 1)))
     assert.equal(later.idle, false, "24時間経てば経過時間だけで実行条件になる")
     assert.match(later.reasons.join(), /前回の実働/)
   })
@@ -59,12 +59,12 @@ test("source=systemは実行条件にしない — 外部入力だけを新着�
       Effect.gen(function* () {
         const att = yield* Attention
         const mem = yield* Memory
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
-        // tick が自身の結果を残す。これが実行条件になると自己再実行ループになる。
-        yield* mem.remember({ source: "system", content: { tick: "動いた" } })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
+        // cycle が自身の結果を残す。これが実行条件になると自己再実行ループになる。
+        yield* mem.remember({ source: "system", content: { cycle: "動いた" } })
       }),
     )
-    const d = await h.run(digestAt(T0 + hours(2)))
+    const d = await h.run(planAt(T0 + hours(2)))
     assert.equal(d.idle, true)
     assert.equal(d.newEvents.length, 0)
 
@@ -74,21 +74,21 @@ test("source=systemは実行条件にしない — 外部入力だけを新着�
         yield* mem.remember({ source: "owner", content: { said: "来週の予定は？" } })
       }),
     )
-    const woken = await h.run(digestAt(T0 + hours(2)))
+    const woken = await h.run(planAt(T0 + hours(2)))
     assert.equal(woken.idle, false)
     assert.equal(woken.newEvents.length, 1)
     assert.match(woken.reasons.join(), /まだ見ていない入力/)
   })
 })
 
-test("commit は tick 自身の書き込みも消費する(同じ入力を二度実行条件にしない)", async () => {
+test("completeCycle は cycle 自身の書き込みも消費する(同じ入力を二度実行条件にしない)", async () => {
   await withHarness(async (h) => {
     const before = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
         const att = yield* Attention
         yield* mem.remember({ source: "owner", content: { said: "歯医者どうなってる？" } })
-        return yield* att.digest(T0)
+        return yield* att.planCycle(T0)
       }),
     )
     assert.equal(before.newEvents.length, 1)
@@ -97,10 +97,10 @@ test("commit は tick 自身の書き込みも消費する(同じ入力を二度
       Effect.gen(function* () {
         const mem = yield* Memory
         const att = yield* Attention
-        // tick が応答を残してから消費位置を確定する。
+        // cycle が応答を残してから消費位置を確定する。
         yield* mem.remember({ source: "system", content: { said: "見た" } })
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
-        return yield* att.digest(T0 + hours(0.1))
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
+        return yield* att.planCycle(T0 + hours(0.1))
       }),
     )
     assert.equal(after.newEvents.length, 0, "処理済みの入力を再び実行条件にしない")
@@ -114,14 +114,14 @@ test("自分が動く番の watch は実行条件になる — ただしcooldown
       Effect.gen(function* () {
         const att = yield* Attention
         yield* att.watch("A社への返信を書く", "famulus", { at: "2026-08-08T09:00:00Z" })
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
       }),
     )
 
-    const early = await h.run(digestAt(T0 + hours(ACTIVE_COOLDOWN_HOURS - 0.1)))
+    const early = await h.run(planAt(T0 + hours(ACTIVE_COOLDOWN_HOURS - 0.1)))
     assert.equal(early.idle, true, "cooldown中は同じ watch を実行条件にしない")
 
-    const cooled = await h.run(digestAt(T0 + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
+    const cooled = await h.run(planAt(T0 + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
     assert.equal(cooled.idle, false)
     assert.equal(cooled.stalled.length, 1)
     assert.equal(cooled.reasonKey, "stalled")
@@ -132,7 +132,7 @@ test("自分が動く番の watch は実行条件になる — ただしcooldown
  * 実行しても静かにならない状態を止める。
  *
  * `next_move_owner = 'famulus'` は無条件で滞留に入るので、`last_activity_at` を更新しても
- * 自分持ちの watch は次の tick で再び処理対象になる。実際にそうなり、モデルは最終走行時刻を
+ * 自分持ちの watch は次の cycle で再び処理対象になる。実際にそうなり、モデルは最終走行時刻を
  * subject の文字列に書き込んで登録し直すという回避をしていた(列が無いのでそうするしかない)。
  * 止めるのは経過日数ではなく、実行した時刻とcooldown。
  */
@@ -145,26 +145,26 @@ test("一周回した watch は、cooldownが終了するまでプロンプト�
           at: "2026-08-08T09:00:00Z",
           cooldownHours: 24,
         })
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
         return w
       }),
     )
 
-    const first = await h.run(digestAt(T0 + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
+    const first = await h.run(planAt(T0 + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
     assert.equal(first.stalled.length, 1)
     assert.equal(first.stalled[0]?.run_count, 0)
 
     await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
-        yield* att.ranWatch(id, "8/8 時点で新着に該当なし", "2026-08-08T11:00:00Z")
+        yield* att.recordWatchRun(id, "8/8 時点で新着に該当なし", "2026-08-08T11:00:00Z")
       }),
     )
 
-    const quiet = await h.run(digestAt(T0 + hours(12)))
+    const quiet = await h.run(planAt(T0 + hours(12)))
     assert.equal(quiet.stalled.length, 0, "実行直後は掲載対象にならない")
 
-    const back = await h.run(digestAt(T0 + hours(26)))
+    const back = await h.run(planAt(T0 + hours(26)))
     assert.equal(back.stalled.length, 1, "cooldownが終了すれば再び掲載対象になる")
     assert.equal(back.stalled[0]?.run_count, 1)
     // 前回の結果を渡さないと、毎回まっさらな状態で同じ一覧を読み直すことになる。
@@ -172,7 +172,7 @@ test("一周回した watch は、cooldownが終了するまでプロンプト�
   })
 })
 
-test("何も出てこなかった回も『回した』— 空振りこそ次の tick に伝える必要がある", async () => {
+test("何も出てこなかった回も『回した』— 空振りこそ次の cycle に伝える必要がある", async () => {
   await withHarness(async (h) => {
     const id = await h.run(
       Effect.gen(function* () {
@@ -181,14 +181,14 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
           at: "2026-08-08T09:00:00Z",
           cooldownHours: 168,
         })
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
         return w
       }),
     )
     await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
-        yield* att.ranWatch(id, "該当なし", "2026-08-08T09:30:00Z")
+        yield* att.recordWatchRun(id, "該当なし", "2026-08-08T09:30:00Z")
       }),
     )
 
@@ -201,7 +201,7 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
       }),
     )
 
-    const mid = await h.run(digestAt(T0 + hours(48)))
+    const mid = await h.run(planAt(T0 + hours(48)))
     assert.equal(mid.stalled.length, 0, "外部の更新があっても、cooldownは短縮しない")
     const [w] = await h.run(
       Effect.gen(function* () {
@@ -212,7 +212,7 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
     assert.equal(w?.dueNow, false)
     assert.equal(w?.dueInHours, 120.5)
 
-    const after = await h.run(digestAt(T0 + hours(169)))
+    const after = await h.run(planAt(T0 + hours(169)))
     assert.equal(after.stalled.length, 1, "設定したcooldownが終了すれば掲載対象になる")
   })
 })
@@ -229,28 +229,28 @@ test("回した時刻を渡して後から記録できる。先の時刻は取�
       Effect.gen(function* () {
         const att = yield* Attention
         const w = yield* att.watch("朝に回した watch", "famulus", { at: "2026-08-08T09:00:00Z" })
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
         return w
       }),
     )
     const rec = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
-        return yield* att.ranWatch(id, "該当なし", "2026-08-08T09:00:00Z")
+        return yield* att.recordWatchRun(id, "該当なし", "2026-08-08T09:00:00Z")
       }),
     )
     assert.equal(rec.last_run_at, "2026-08-08T09:00:00Z", "記録した時刻ではなく回した時刻")
 
-    const before = await h.run(digestAt(T0 + hours(23)))
+    const before = await h.run(planAt(T0 + hours(23)))
     assert.equal(before.stalled.length, 0)
-    const after = await h.run(digestAt(T0 + hours(25)))
+    const after = await h.run(planAt(T0 + hours(25)))
     assert.equal(after.stalled.length, 1, "cooldownは実行時刻から数える(記録の分だけ後ろへずれない)")
 
     // 未来は取らない。取ると、一度の記録で好きなだけcooldownを伸ばせる。
     const far = await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
-        return yield* att.ranWatch(id, "先の時刻を渡してみる", "2099-01-01T00:00:00Z")
+        return yield* att.recordWatchRun(id, "先の時刻を渡してみる", "2099-01-01T00:00:00Z")
       }),
     )
     assert.ok(far.last_run_at !== null && far.last_run_at < "2099-01-01T00:00:00Z")
@@ -262,7 +262,7 @@ test("存在しないwatchの実行記録に失敗してもtransactionを残さ�
     const failed = await h.fail(
       Effect.gen(function* () {
         const att = yield* Attention
-        yield* att.ranWatch("missing-watch", "該当なし")
+        yield* att.recordWatchRun("missing-watch", "該当なし")
       }),
     )
     assert.equal((failed as { _tag: string })._tag, "NotFound")
@@ -270,7 +270,7 @@ test("存在しないwatchの実行記録に失敗してもtransactionを残さ�
       Effect.gen(function* () {
         const att = yield* Attention
         const id = yield* att.watch("失敗後にも追加できるwatch", "famulus")
-        yield* att.ranWatch(id, "正常に記録できた")
+        yield* att.recordWatchRun(id, "正常に記録できた")
         return id
       }),
     )
@@ -282,7 +282,7 @@ test("存在しないwatchの実行記録に失敗してもtransactionを残さ�
  * 順番の検査。cooldownは「いつまで載せないか」しか決めない。
  *
  * 同じ日に登録した watch は同時刻に再提示可能になり、対象がすべて同時に掲載候補になる。実測では6件が
- * 毎回そろって載り、tick はその一覧を読み直すだけで1件も回さずに終えていた(34回中20回が
+ * 毎回そろって載り、cycle はその一覧を読み直すだけで1件も回さずに終えていた(34回中20回が
  * 呼び出し2回以下)。載せる数に上限を置き、載せた順に後ろへ送る。
  */
 const sixWatches = Effect.gen(function* () {
@@ -290,14 +290,14 @@ const sixWatches = Effect.gen(function* () {
   const ids: string[] = []
   for (let i = 0; i < 6; i++)
     ids.push(yield* att.watch(`件 ${i}`, "famulus", { at: `2026-08-0${i + 1}T09:00:00Z` }))
-  yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+  yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
   return ids
 })
 
 test("複数のcooldownが同時に終了しても、1回に載せるのは上限まで。残りは件数だけ渡す", async () => {
   await withHarness(async (h) => {
     const ids = await h.run(sixWatches)
-    const d = await h.run(digestAt(T0 + hours(2)))
+    const d = await h.run(planAt(T0 + hours(2)))
 
     assert.equal(d.stalled.length, STALLED_SHOW_MAX, "載せるのは上限まで")
     assert.equal(d.stalledHeld, 6 - STALLED_SHOW_MAX, "上限を超えた分は除外せず次回分として保持する")
@@ -314,15 +314,15 @@ test("複数のcooldownが同時に終了しても、1回に載せるのは上�
 test("載せたのに回さなかった watch も後ろへ回る — 進むのは noteShown を呼んだときだけ", async () => {
   await withHarness(async (h) => {
     const ids = await h.run(sixWatches)
-    const first = await h.run(digestAt(T0 + hours(2)))
+    const first = await h.run(planAt(T0 + hours(2)))
 
-    // digest だけでは進まない。digest は実行条件が無い回にも走るので、ここで記録すると
+    // planCycle だけでは進まない。planCycle は実行条件が無い回にも走るので、ここで記録すると
     // 誰も読んでいない一覧を載せたことにして順番だけが回る。
-    const again = await h.run(digestAt(T0 + hours(3)))
+    const again = await h.run(planAt(T0 + hours(3)))
     assert.deepEqual(
       again.stalled.map((w) => w.id),
       first.stalled.map((w) => w.id),
-      "digest を引き直しただけでは順番は動かない",
+      "planCycle を引き直しただけでは順番は動かない",
     )
 
     await h.run(
@@ -337,7 +337,7 @@ test("載せたのに回さなかった watch も後ろへ回る — 進むの�
 
     // `ran` は1件も呼んでいない。それでも次は別の3件が載る — 回さずに終えた watch が
     // 表示上限を占め続けるのを、ここで止めている。
-    const second = await h.run(digestAt(T0 + hours(4)))
+    const second = await h.run(planAt(T0 + hours(4)))
     assert.deepEqual(
       second.stalled.map((w) => w.id),
       ids.slice(STALLED_SHOW_MAX),
@@ -352,7 +352,7 @@ test("載せたのに回さなかった watch も後ろへ回る — 進むの�
         )
       }),
     )
-    const third = await h.run(digestAt(T0 + hours(5)))
+    const third = await h.run(planAt(T0 + hours(5)))
     assert.deepEqual(
       third.stalled.map((w) => w.id),
       ids.slice(0, STALLED_SHOW_MAX),
@@ -367,10 +367,10 @@ test("自分が動く番でない watch は、一定期間更新が無いとき�
       Effect.gen(function* () {
         const att = yield* Attention
         yield* att.watch("A社からの返信待ち", "human", { at: "2026-08-08T09:00:00Z" })
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
       }),
     )
-    const soon = await h.run(digestAt(T0 + hours(4)))
+    const soon = await h.run(planAt(T0 + hours(4)))
     assert.equal(soon.stalled.length, 0, "相手待ちは滞留するまで理由にしない")
     assert.equal(soon.idle, true)
   })
@@ -382,10 +382,10 @@ test("未解決の問いは実行条件にしない(自分では解消できず�
       Effect.gen(function* () {
         const att = yield* Attention
         yield* att.ask("美容院の『来週の月曜』は 8/10 でよいか")
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
       }),
     )
-    const d = await h.run(digestAt(T0 + hours(4)))
+    const d = await h.run(planAt(T0 + hours(4)))
     assert.equal(d.idle, true, "問いがあるだけでは実行条件にならない")
     assert.equal(d.openQuestions.length, 1, "別の実行条件が成立したときの入力には含める")
   })
@@ -409,11 +409,11 @@ test("答えないまま取り下げられる。理由は残る", async () => {
     assert.equal(dropped.status, "dropped")
     assert.deepEqual({ ...stored }, { ...dropped }, "返した行が DB に入っている行と一致する")
     assert.equal(stored.answer, "副業探し自体を中断した", "なぜ追わないかは残す")
-    assert.deepEqual(left, [], "取り下げた問いは tick の材料から外れる")
+    assert.deepEqual(left, [], "取り下げた問いは cycle の材料から外れる")
   })
 })
 
-test("不要になった未解決質問が上限を占有すると新しい問いが tick に届かない — 取り下げれば届く", async () => {
+test("不要になった未解決質問が上限を占有すると新しい問いが cycle に届かない — 取り下げれば届く", async () => {
   await withHarness(async (h) => {
     const ids = await h.run(
       Effect.gen(function* () {
@@ -458,7 +458,7 @@ test("同じ理由で実行が続くとcooldownが倍に伸びる。新しい入
       Effect.gen(function* () {
         const att = yield* Attention
         yield* att.watch("自分が動く番のまま解消しない件", "famulus", { at: "2026-08-08T09:00:00Z" })
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
       }),
     )
 
@@ -466,7 +466,7 @@ test("同じ理由で実行が続くとcooldownが倍に伸びる。新しい入
     let at = T0
     const seen: number[] = []
     for (let i = 0; i < 8; i++) {
-      const d = await h.run(digestAt(at + hours(MAX_COOLDOWN_HOURS)))
+      const d = await h.run(planAt(at + hours(MAX_COOLDOWN_HOURS)))
       assert.equal(d.idle, false)
       assert.equal(d.reasonKey, "stalled", "組み合わせは経過時間で変わらない(変わると上限が上限でなくなる)")
       seen.push(d.cooldownHours)
@@ -474,17 +474,17 @@ test("同じ理由で実行が続くとcooldownが倍に伸びる。新しい入
       await h.run(
         Effect.gen(function* () {
           const att = yield* Attention
-          yield* att.commit({ active: true, at: new Date(at).toISOString(), reasonKey: d.reasonKey })
+          yield* att.completeCycle({ active: true, at: new Date(at).toISOString(), reasonKey: d.reasonKey })
         }),
       )
     }
     // 倍々に伸びて 24 時間で止まる = 最後は1日1回まで下がる(完全には止めない)。
     assert.deepEqual(seen, [1.5, 3, 6, 12, 24, 24, 24, 24])
 
-    const capped = await h.run(digestAt(at + hours(MAX_COOLDOWN_HOURS)))
+    const capped = await h.run(planAt(at + hours(MAX_COOLDOWN_HOURS)))
     assert.equal(capped.cooldownHours, MAX_COOLDOWN_HOURS)
     assert.equal(capped.idle, false, "上限に達しても1日1回は実行条件になる")
-    const tooSoon = await h.run(digestAt(at + hours(MAX_COOLDOWN_HOURS - 1)))
+    const tooSoon = await h.run(planAt(at + hours(MAX_COOLDOWN_HOURS - 1)))
     assert.equal(tooSoon.idle, true, "上限に達したら24時間は再実行しない")
 
     // 外部入力が来たら指数バックオフをリセットする。
@@ -493,15 +493,15 @@ test("同じ理由で実行が続くとcooldownが倍に伸びる。新しい入
         const mem = yield* Memory
         const att = yield* Attention
         yield* mem.remember({ source: "owner", content: { said: "その件やっといて" } })
-        const d = yield* att.digest(at + hours(0.1))
-        yield* att.commit({ active: true, at: new Date(at).toISOString(), reasonKey: d.reasonKey })
+        const d = yield* att.planCycle(at + hours(0.1))
+        yield* att.completeCycle({ active: true, at: new Date(at).toISOString(), reasonKey: d.reasonKey })
         return d
       }),
     )
     assert.equal(fresh.idle, false, "cooldown中でも新しい入力は実行条件になる")
     assert.equal(fresh.reasonKey, "", "新しい入力では指数バックオフを最初から数え直す")
 
-    const back = await h.run(digestAt(at + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
+    const back = await h.run(planAt(at + hours(ACTIVE_COOLDOWN_HOURS + 0.1)))
     assert.equal(back.cooldownHours, ACTIVE_COOLDOWN_HOURS, "cooldownが最短に戻っている")
   })
 })
@@ -519,10 +519,10 @@ test("期限が近い承認待ちは実行条件になる", async () => {
                    'w','t','famulus','h','v','{}','[]','proposed', ?)`,
           new Date(T0 + hours(24)).toISOString(),
         )
-        yield* att.commit({ active: true, at: "2026-08-08T09:00:00Z" })
+        yield* att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z" })
       }),
     )
-    const d = await h.run(digestAt(T0 + hours(4)))
+    const d = await h.run(planAt(T0 + hours(4)))
     assert.equal(d.idle, false)
     assert.equal(d.pending.length, 1)
     assert.match(d.reasons.join(), /期限が近い承認待ち/)
@@ -532,10 +532,10 @@ test("期限が近い承認待ちは実行条件になる", async () => {
     await h.run(
       Effect.gen(function* () {
         const proposals = yield* Proposals
-        yield* proposals.settle("p1", "承認はユーザーしか出せない。こちらからは進まない。")
+        yield* proposals.recordPendingConclusion("p1", "承認はユーザーしか出せない。こちらからは進まない。")
       }),
     )
-    const after = await h.run(digestAt(T0 + hours(8)))
+    const after = await h.run(planAt(T0 + hours(8)))
     assert.equal(after.idle, true, "結論を置いた提案は実行条件にしない")
     // 一覧からは消さない。承認はまだ要るので、別件の実行時にはプロンプトへ載る。
     assert.equal(after.pending.length, 1)
@@ -568,10 +568,10 @@ test("断られた提案はプロンプトに載る — ただし実行条件に
       Effect.gen(function* () {
         const att = yield* Attention
         yield* denied(1, "2026-08-08T08:00:00Z", "希望日が経過した")
-        yield* att.commit({ active: true, at: new Date(T0).toISOString() })
+        yield* att.completeCycle({ active: true, at: new Date(T0).toISOString() })
       }),
     )
-    const d = await h.run(digestAt(T0 + hours(1)))
+    const d = await h.run(planAt(T0 + hours(1)))
     assert.deepEqual(
       d.refused.map((r) => [r.summary, r.reason]),
       [["1 件目の用件", "希望日が経過した"]],
@@ -590,10 +590,10 @@ test("断られたぶんは新しい順に決めた数だけ — 古いものか
         for (let n = 1; n <= REFUSED_LIMIT + 2; n++) {
           yield* denied(n, `2026-08-0${n}T08:00:00Z`, `理由 ${n}`)
         }
-        yield* att.commit({ active: true, at: new Date(T0).toISOString() })
+        yield* att.completeCycle({ active: true, at: new Date(T0).toISOString() })
       }),
     )
-    const d = await h.run(digestAt(T0 + hours(1)))
+    const d = await h.run(planAt(T0 + hours(1)))
     assert.equal(d.refused.length, REFUSED_LIMIT)
     assert.equal(d.refused[0]?.summary, `${REFUSED_LIMIT + 2} 件目の用件`)
   })
@@ -611,10 +611,10 @@ test("下書き生成条件は決めた時刻から1日1回だけ成立する", 
       await h.run(
         Effect.gen(function* () {
           const att = yield* Attention
-          yield* att.commit({ active: true, at: new Date(T0).toISOString() })
+          yield* att.completeCycle({ active: true, at: new Date(T0).toISOString() })
         }),
       )
-      const due = await h.run(digestAt(T0 + hours(0.5)))
+      const due = await h.run(planAt(T0 + hours(0.5)))
       assert.equal(due.draftDue, true, "時刻を過ぎたらcooldown中でも成立する")
       assert.match(due.reasons.join(), /下書き/)
 
@@ -624,11 +624,11 @@ test("下書き生成条件は決めた時刻から1日1回だけ成立する", 
           yield* db.setMeta("daily:draft", "2026-08-08")
         }),
       )
-      const done = await h.run(digestAt(T0 + hours(1)))
+      const done = await h.run(planAt(T0 + hours(1)))
       assert.equal(done.draftDue, false, "その日ぶんが済んでいれば二度は成立しない")
       assert.equal(done.idle, true)
 
-      const nextDay = await h.run(digestAt(T0 + hours(23)))
+      const nextDay = await h.run(planAt(T0 + hours(23)))
       assert.equal(nextDay.draftDue, true, "日が変われば再び成立する")
     })
   } finally {
@@ -641,7 +641,7 @@ test("決めた時刻より前は下書き生成条件が成立しない — そ
   process.env.OPEN_ZERO_DAILY_HOUR = "23"
   try {
     await withHarness(async (h) => {
-      const d = await h.run(digestAt(T0))
+      const d = await h.run(planAt(T0))
       assert.equal(d.draftDue, false)
       assert.equal(d.reasons.join().includes("下書き"), false)
     })
@@ -657,7 +657,7 @@ test("走っている最中に届いたぶんは既読にしない — 返さな
         const mem = yield* Memory
         const att = yield* Attention
         yield* mem.remember({ source: "owner", content: "1本目" })
-        return yield* att.digest(T0)
+        return yield* att.planCycle(T0)
       }),
     )
     assert.equal(seen.newEvents.length, 1)
@@ -666,33 +666,33 @@ test("走っている最中に届いたぶんは既読にしない — 返さな
       Effect.gen(function* () {
         const mem = yield* Memory
         const att = yield* Attention
-        // tick が走り終える前に届いた2本目。この回の digest には載っていない。
+        // cycle が走り終える前に届いた2本目。この回の planCycle には載っていない。
         yield* mem.remember({ source: "owner", content: "2本目" })
         yield* mem.remember({ source: "system", content: { said: "1本目に答えた" } })
-        yield* att.commit({
+        yield* att.completeCycle({
           active: true,
           at: "2026-08-08T09:00:00Z",
           upto: seen.newEvents.at(-1)?.rowid ?? seen.cursor,
         })
-        return yield* att.digest(T0 + hours(0.1))
+        return yield* att.planCycle(T0 + hours(0.1))
       }),
     )
     assert.equal(after.newEvents.length, 1, "見ていない入力は残る")
     assert.equal(after.newEvents[0]?.content, '"2本目"')
-    assert.equal(after.idle, false, "未処理入力が残っている限り次の tick の実行条件になる")
+    assert.equal(after.idle, false, "未処理入力が残っている限り次の cycle の実行条件になる")
   })
 })
 
 test("idle でも位置は進めない — 判定と入れ違いに届いたぶんが消えない", async () => {
   await withHarness(async (h) => {
-    const d = await h.run(digestAt(T0))
+    const d = await h.run(planAt(T0))
     const after = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
         const att = yield* Attention
         yield* mem.remember({ source: "owner", content: "入れ違い" })
-        yield* att.commit({ upto: d.cursor })
-        return yield* att.digest(T0 + hours(0.1))
+        yield* att.completeCycle({ upto: d.cursor })
+        return yield* att.planCycle(T0 + hours(0.1))
       }),
     )
     assert.equal(after.newEvents.length, 1)
