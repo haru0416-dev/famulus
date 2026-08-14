@@ -50,6 +50,7 @@ Persist only with the first production reader, writer, CLI, and tests:
 - discovered components, quarantined probe results, and diagnostics
 - grants bound to component/server/tool, input/output-schema hashes, Capability/adapter version, credential scope, and package digest
 - revoked/disabled state and timestamps
+- generation leases from active consumers; this plan starts with Operations/live sessions, and later plans add turn/checkpoint/handler-request references with their first writers
 
 Manifest `version` is display/update-candidate metadata only. Existing approved Operations remain pinned to the exact old generation until terminal.
 
@@ -59,12 +60,12 @@ Manifest `version` is display/update-candidate metadata only. Existing approved 
 2. Build a no-exec validator for JSON shape, supported `$schema`, resolved path containment, symlink/archive traversal, device files, case collisions, file count, and total size.
 3. Implement fixed discovery for `skills/*/SKILL.md` and `mcp.json`, preserving the specification's narrow failure boundaries and diagnostics.
 4. Install into a staged immutable generation, atomically activate it disabled-by-default, and keep `PLUGIN_DATA` outside the package generation.
-5. Import valid Skills as instruction candidates with package provenance. Loading a Skill never expands tools, budget, network, credentials, or approval scope.
+5. Import valid Skills as generation-pinned instruction candidates with package provenance. Plan 011 owns selection and turn composition. Loading a Skill never expands tools, budget, network, credentials, or approval scope.
 6. Import MCP entries as disabled provider candidates. Remote origins, redirects, and credential scopes require local configuration; package header/env values are not a secret mechanism.
 7. Use plan 007's quarantined non-LLM probe to connect/initialize/list capabilities. A probe cannot call tools, and failure never enables a candidate.
 8. Bind enabled components to local grants. Any package digest, executable, MCP config, input/output tool schema, adapter, credential scope, or effect classification change invalidates the affected grant.
-9. Route only explicitly audited/granted read adapters through restricted profiles. Raw remote MCP tools stay `unknown`; a standing remote-origin grant is an acceptance of server trust, not proof of read-only behavior. Route every write/share/money/deploy tool through plan 007 Operations; a missing effect-specific adapter leaves the candidate discovered but disabled.
-10. Implement generation-based update, capability diff, rollback, disable, and revocation. Recheck revocation when claiming work and immediately before external I/O; close sessions, kill processes/containers, revoke credential leases, and block egress on revocation.
+9. Route only host-owned, replay-safe read adapters with enforceable origin/method/data constraints inline through restricted profiles. Raw remote MCP tools stay `unknown` and disabled even when described as reads; they cannot receive a grant or create an Operation until a host-owned effect-specific adapter defines effects, resources, schemas, execution, and recovery. Known write/share/money/deploy adapters route through Operations; a missing adapter leaves the candidate discovered but disabled.
+10. Implement generation-based update, capability diff, rollback, disable, and revocation. Keep a generation while any currently implemented consumer references it; start with nonterminal Operations and sessions, and extend the same reference rule when plan 011 adds turns/checkpoints/handler requests. Recheck revocation when claiming work and immediately before external I/O; close sessions, kill processes/containers, revoke credential leases, and block egress on revocation. Revocation forbids new I/O but may retain read-only package bytes required by a pinned non-effectful consumer.
 11. Add marketplace/source acquisition only after local-directory and pinned-repository installs pass the same inspection and rollback tests. Do not invent a registry protocol before the standard defines one or a concrete source requires it.
 
 ## Runtime isolation
@@ -85,13 +86,14 @@ bun run gate
 bun run test:plugins-e2e
 ```
 
-Fixtures must cover a minimal plugin, Skills plus MCP, unknown top-level manifest fields, fatal field errors, unsupported schema, missing optional component locations, symlink escape, archive traversal, component-level failure isolation, disabled-by-default install, no install-time execution, Skill grant non-escalation, forbidden code load from `PLUGIN_DATA`, quarantined probe, probe tool-call denial, MCP schema drift, same-schema remote misbehavior remaining a trust risk, update commit crash, startup reconciliation, update diff, rollback, revocation with live session, `PLUGIN_DATA` preservation, and an effectful MCP tool blocked before Operation creation.
+Fixtures must cover a minimal plugin, Skills plus MCP, unknown top-level manifest fields, fatal field errors, unsupported schema, missing optional component locations, symlink escape, archive traversal, component-level failure isolation, disabled-by-default install, no install-time execution, Skill grant non-escalation, forbidden code load from `PLUGIN_DATA`, quarantined probe, probe tool-call denial, raw MCP grant/Operation denial, MCP schema drift, same-schema remote misbehavior remaining a trust risk, update commit crash, startup reconciliation, generation retained by a nonterminal Operation/session, update diff, rollback, revocation with live session, read-only package retention after revocation, `PLUGIN_DATA` preservation, and an effectful MCP tool blocked before Operation creation.
 
 ## Done criteria
 
 - A conforming 1.0.0 package can be inspected and installed without executing its contents.
 - Package identity and grants are pinned to content and local policy, not self-reported metadata.
 - Skills and MCP provider candidates cannot silently expand permissions.
+- Plugin packages cannot register hooks, loops, schedulers, domain handlers, or durable state machines.
 - MCP write tools cannot execute outside plan 007.
 - Updates preserve data, keep in-flight generations, show capability diffs, and invalidate changed grants.
 - Revoked generations cannot start new external I/O.

@@ -2,7 +2,7 @@
 
 Planned at `2ce2a2a`.
 
-Depends on plan 001 and is cross-cutting for plans 003 through 007 and plan 010.
+Depends on plan 001 and is cross-cutting for plans 003 through 007, 010, and 011.
 
 ## Why
 
@@ -38,15 +38,17 @@ Telemetry is observability, not audit. Partial structured streams are display-on
 1. Pin `ai` to the exact version whose public types and behavior are tested; dependency upgrades are explicit changes, not semver-range drift.
 2. Add provider contract tests for plain text, tools, `Output.object` without tools, `Output.object` with tools, invalid output repair, and approval pause/replay. Implement response-format/tool-protocol composition in each custom `LanguageModelV4` adapter before adopting combined output modes.
 3. Replace the compatibility alias `Experimental_Agent` with stable `ToolLoopAgent`; replace compatibility stop helper names with current stable APIs after confirming installed declarations.
-4. Define a shared agent factory that always wraps models with governance middleware and requires explicit stop conditions, zero SDK retries by default, run ID, deadline, telemetry metadata, and an effect-classified effective toolset. The effective set includes SDK tools plus provider-native/injected tools; provider adapters cannot append a tool after validation. Replace the current model-ID-based Codex web-search injection (`src/model/codex-responses.ts:362-378`) with explicit classified registration.
+4. Define a shared agent factory that always wraps models with governance middleware and requires explicit stop conditions, zero SDK retries by default, run ID, deadline, telemetry metadata, and an effect-classified effective toolset. Governed runs reject provider-native/injected tools that perform external I/O, including web reads, because local journaling cannot precede provider I/O. No-I/O protocol controls such as Claude structured response formatting and tool-call serialization remain allowed and are covered by provider contract tests. Replace the current model-ID-based Codex web-search injection (`src/model/codex-responses.ts:362-378`) with the existing local Search tool binding; plan 007 later places that same binding behind Capability authorization.
 5. Introduce `prepareStep` for dynamic model routing, `activeTools` restriction, budget/deadline enforcement, and research-mode-specific instructions. Revalidate the effective toolset after model switching. Do not mutate durable state from `prepareStep`.
 6. Move new structured results to `Output.object`, `Output.array`, and `Output.choice` only on provider paths proven by the contract suite; preserve the Valibot runtime-validation bridge.
 7. Add a tool invocation journal keyed by run/turn/tool-call ID and canonical input hash. Record `prepared/started/succeeded/failed/unknown` before and after execution and persist a reusable result or durable Operation/delivery reference. SDK tool execution starts only after the `started` record commits.
-8. Persist versioned `ModelMessage`-compatible messages plus tool call/result IDs at durable checkpoints. Validate before replay. A succeeded invocation reuses its stored result; an interrupted idempotent invocation follows its declared recovery rule; an effectful, arbitrary-command, or otherwise non-idempotent `started` invocation becomes `unknown` and makes the turn non-resumable until reconciled/manual resolution. Never merely discard an unmatched call and regenerate the turn.
+8. Persist versioned `ModelMessage`-compatible messages plus tool call/result IDs at durable checkpoints. Validate before replay. A succeeded invocation reuses its stored result; an interrupted inline replay-safe invocation follows its declared recovery rule; an operation-classified, arbitrary-command, or otherwise non-replay-safe `started` invocation becomes `unknown` and makes the turn non-resumable until reconciled/manual resolution. Never merely discard an unmatched call and regenerate the turn.
 9. Register lifecycle telemetry with inputs/outputs disabled by default. Emit run/step/model/tool durations and provider metadata while retaining Ledger and audit rows in SQLite.
 10. Do not use AI SDK approval replay for effect execution. An SDK approval message can represent a paused model turn or Operation UI projection, while plan 007 owns the sole approval and out-of-band executor.
 11. Use provider response IDs or MCP session IDs only as optional acceleration metadata; local state remains sufficient to explain and recover a run.
-12. Add contract tests against the installed package types and AI SDK test utilities so upgrades fail visibly when APIs or message shapes change.
+12. Remove or expose open-zero's Claude adapter resubmission (`src/model/language-model.ts:191-209`) as a separately governed and accounted model call; one SDK call cannot hide multiple adapter-controlled calls.
+13. Inspect and pin the installed Claude CLI's transport-retry behavior. Disable internal retries when supported. If retries are opaque and cannot be disabled, treat one CLI process invocation as the adapter's bounded transport-attempt unit, record `transportRetryVisibility: "opaque"`, enforce the process deadline once, and do not claim per-HTTP-attempt accounting.
+14. Add contract tests against the installed package types and AI SDK test utilities so upgrades fail visibly when APIs or message shapes change.
 
 ## MCP policy
 
@@ -55,7 +57,7 @@ Telemetry is observability, not audit. Partial structured streams are display-on
 - MCP read tools are filtered through agent-specific allowlists.
 - MCP write tools become typed Operations; they are never passed through as directly executable dynamic tools.
 - `dynamicTool` input/output is `unknown` and must be validated by grant-pinned Capability input and output schemas.
-- Provider-executed write tools are forbidden for governed operations.
+- Provider-executed external-I/O tools are forbidden for governed runs. All read/write/search tools are locally bound, authorized, and journaled. Provider response-format and serialization controls are allowed because they do not independently perform external effects.
 
 ## Verification
 
@@ -64,7 +66,7 @@ git diff --stat 2ce2a2a..HEAD -- src/agent src/model src/services/Governance.ts 
 bun run gate
 ```
 
-Targeted tests must cover step limit, deadline-based active-tool reduction, model switching, provider-injected tool rejection, revalidation after routing, plain/tool/structured/combined provider modes, invalid structured output, invalid tool input repair, governance on every model call, rejection of unclassified effective tools, telemetry with redacted payloads, successful result replay, crash before/after tool I/O, unknown non-resumable invocation, approval pause without effectful replay, and SDK upgrade type drift.
+Targeted tests must cover step limit, deadline-based active-tool reduction, model switching, provider-native/injected external-I/O tool rejection before I/O, local Search binding replacement, allowed no-I/O structured response protocol, revalidation after routing, plain/tool/structured/combined provider modes, invalid structured output, invalid tool input repair, governance and accounting on every adapter-controlled model call including repair/resubmission, pinned CLI retry visibility/deadline behavior, rejection of unclassified effective tools, telemetry with redacted payloads, successful result replay, crash before/after tool I/O, unknown non-resumable invocation, approval pause without effectful replay, and SDK upgrade type drift.
 
 ## Done criteria
 

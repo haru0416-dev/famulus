@@ -17,6 +17,19 @@ Self-deployment is separate from normal Operation because it changes the executo
 
 Agent Plugins 1.0.0 is the preferred external package format, not a fourth execution model. Its portable `plugin.json`, `skills/`, and `mcp.json` components feed the internal registry. Installation trust, permission grants, credentials, approval, sandboxing, updates, and audit remain open-zero responsibilities because the specification does not define them.
 
+Extension authority is split by responsibility:
+
+- **Skill** supplies instructions for one turn; it owns no state, tools, model, budget, schedule, or authority.
+- **Router** chooses at most one allowed Skill before a turn; it cannot call tools or change state.
+- **Agent profile / policy compiler** creates the immutable turn specification and effective scope.
+- **AI SDK loop** runs one live bounded turn; it does not own durable repetition.
+- **Domain service** owns durable repetition and transitions, such as research campaigns or delivery.
+- **Hook observer** reacts only to committed typed events by requesting a core-owned handler; it cannot execute effects directly.
+- **Plugin** packages generation-pinned Skills and MCP candidates; it does not register loops, hooks, schedulers, or state machines.
+- **Capability / Operation** is the only path to external effects.
+
+Authority only decreases across routing and delegation. Skill text, plugin metadata, model choice, and events never carry grants.
+
 Shared invariants, not a shared state machine:
 
 - immutable typed spec before approval or execution
@@ -29,6 +42,7 @@ Shared invariants, not a shared state machine:
 - capability-specific verification defines completion
 - every effective model-visible tool, including provider-injected/native tools, has a local effect classification; unclassified tools are unavailable
 - network egress, user notification, and arbitrary command execution are effects even when sandboxed or first-party
+- provider-executed external-I/O tools are unavailable in governed runs, including read/search tools, because local policy cannot journal before their I/O; no-I/O protocol features such as structured response formatting remain allowed
 
 ## AI SDK boundary
 
@@ -57,9 +71,10 @@ SQLite remains authoritative for runs, checkpoints, the single Operation approva
 | [006](006-research-campaigns.md) | P2 | 004, 005, 009 | durable campaigns, branches, checkpoints, signposts |
 | [007](007-capability-operations.md) | Future foundation | 001, 002, 009 | typed capabilities, approval-safe operations, MCP boundary |
 | [010](010-agent-plugin-packages.md) | Future foundation | 001, 007, 009 | Agent Plugins 1.0.0 loader, pinned installs, grants, updates |
+| [011](011-extension-control-boundaries.md) | Future foundation | 007, 009, 010 | native Skill routing, turn scopes, typed observers, delegation rules |
 | [008](008-self-deploy.md) | Future foundation | 001, 003, 007 | staged self-update with health check and rollback |
 
-P0 through P2 means plans 001 through 006 plus cross-cutting plan 009. Plans 007, 008, and 010 fix the future shape without pretending connectors, plugin installation, or autonomous deployment already exist.
+P0 through P2 means plans 001 through 006 plus cross-cutting plan 009. Plans 007, 008, 010, and 011 fix the future shape without pretending connectors, plugin installation, extension routing, or autonomous deployment already exist.
 
 ## Global stop conditions
 

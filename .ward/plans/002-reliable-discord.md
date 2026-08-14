@@ -16,7 +16,7 @@ Out of scope: additional channels, generic connectors, research campaign state.
 
 ## Data model
 
-`deliveries`: immutable destination, body hash, purpose, dedupe key, state, created/updated timestamps.
+`deliveries`: immutable destination, body hash, purpose, dedupe key, optional Operation/spec-hash reference, state, created/updated timestamps; unique `(purpose, dedupe_key)`.
 
 `delivery_parts`: ordinal, body, state, attempt count, remote message ID, error, timestamps; unique `(delivery_id, ordinal)`.
 
@@ -29,11 +29,13 @@ Delivery state: `pending -> sending -> sent`; failures become `retryable`, `part
 1. Return typed Discord fetch errors, rate-limit metadata, and pages instead of `undefined`.
 2. Page backwards from newest until the stored cursor is reached; never advance past an unfetched gap.
 3. Make inbox event insertion and cursor/tap commit one transaction using existing origin dedupe.
-4. Add Delivery service and enqueue replies/drafts before external I/O.
+4. Add Delivery service with idempotent enqueue that returns the existing row on a duplicate `(purpose, dedupe_key)`.
 5. Send each part in order, persist every remote ID, stop on first non-success, and resume from the first unsent part.
 6. Record Discord reactions/thread creation as delivery receipts, not incidental side effects.
-7. Add a delivery worker command and let cycle enqueue rather than call `Discord.post()` directly.
+7. Add a delivery worker command and let cycle enqueue rather than call `Discord.post()` directly. For replies/drafts derived from consumed input, enqueue and cycle cursor completion occur in one SQLite transaction using a stable input/artifact-derived dedupe key.
 8. Show pending/partial/unknown deliveries and last successful inbound poll in `oz status`.
+
+Delivery is the sole owner of transport I/O, retry, reconciliation, and remote receipts. Plan 007 exposes owner replies, owner notifications, and review drafts through a host-owned replay-safe Delivery Capability under a narrow standing `share.owner` grant. Future third-party publication is authorized by an Operation, which atomically enqueues an immutable delivery bound to the approved spec hash; the Operation waits for the Delivery receipt and never sends or retries transport itself.
 
 ## Verification
 
@@ -42,7 +44,7 @@ git diff --stat 2ce2a2a..HEAD -- src/services/Discord.ts src/inbox.ts src/poll.t
 bun run gate
 ```
 
-Fault cases must cover 51+ inbound messages, HTTP 429/500/timeout, failure on outbound part 2 of 3, crash after remote success before local commit, restart/resume, duplicate poll, and reaction replay.
+Fault cases must cover 51+ inbound messages, HTTP 429/500/timeout, failure on outbound part 2 of 3, crash before/after atomic reply enqueue plus cursor completion, duplicate enqueue returning the same delivery, crash after remote success before local commit, restart/resume, duplicate poll, and reaction replay.
 
 ## Done criteria
 
