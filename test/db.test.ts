@@ -10,7 +10,16 @@ import { makeRuntime } from "../src/runtime.ts"
 import { Db, DbLive } from "../src/services/Db.ts"
 
 let root = ""
+const dropKernel = (db: ReturnType<typeof openDb>): void => {
+  db.exec(`DROP TABLE model_attempts;
+    DROP TABLE budget_reservations;
+    DROP TABLE loop_attempts;
+    DROP TABLE loop_specs;
+    DROP TABLE execution_root_state;
+    DROP TABLE execution_roots`)
+}
 const makeV4 = (db: ReturnType<typeof openDb>): void => {
+  dropKernel(db)
   db.exec("DROP TABLE cycle_lease; DROP TABLE schema_migrations")
 }
 beforeAll(() => {
@@ -177,6 +186,7 @@ test("v5を現行版へ移行してlease singletonを作る", async () => {
   const path = join(root, "migrate-v5.db")
   const db = openDb(path)
   db.exec(SCHEMA_SQL)
+  dropKernel(db)
   db.exec(`DROP TABLE cycle_lease;
     INSERT INTO schema_meta VALUES ('version','5'), ('sentinel-v5','keep');
     INSERT INTO schema_migrations VALUES (5,'baseline','2026-08-15T00:00:00.000Z')`)
@@ -203,14 +213,17 @@ test("v5を現行版へ移行してlease singletonを作る", async () => {
       { version: 5, name: "baseline" },
       { version: 6, name: "cycle-lease" },
       { version: 7, name: "cycle-lease-invariants" },
+      { version: 8, name: "execution-kernel" },
+      { version: 9, name: "model-attempt-request-identity" },
     ],
   })
 })
 
-test("弱い制約のv6をv7へ再構築しlease行を保持する", async () => {
+test("弱い制約のv6を現行版へ再構築しlease行を保持する", async () => {
   const path = join(root, "migrate-v6.db")
   const db = openDb(path)
   db.exec(SCHEMA_SQL)
+  dropKernel(db)
   db.exec(`DROP TRIGGER cycle_lease_no_delete;
     DROP TRIGGER cycle_lease_no_reinsert;
     DROP TRIGGER cycle_lease_fence_monotonic;
@@ -251,6 +264,8 @@ test("弱い制約のv6をv7へ再構築しlease行を保持する", async () =>
     migrations: [
       { version: 6, name: "cycle-lease" },
       { version: 7, name: "cycle-lease-invariants" },
+      { version: 8, name: "execution-kernel" },
+      { version: 9, name: "model-attempt-request-identity" },
     ],
   })
 })
@@ -284,6 +299,8 @@ test("v4を現行版へ一度だけ移行し既存データを保持する", asy
         { version: 5, name: "schema-migrations" },
         { version: 6, name: "cycle-lease" },
         { version: 7, name: "cycle-lease-invariants" },
+        { version: 8, name: "execution-kernel" },
+        { version: 9, name: "model-attempt-request-identity" },
       ],
     })
   }

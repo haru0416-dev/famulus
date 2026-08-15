@@ -4,8 +4,9 @@ import { Database } from "bun:sqlite"
 import { readFileSync } from "node:fs"
 
 export type Sqlite = Database
-export const SCHEMA_VERSION = "7"
-export const SCHEMA_SQL = readFileSync(new URL("./schema.sql", import.meta.url), "utf8")
+export const SCHEMA_VERSION = "9"
+const KERNEL_SQL = readFileSync(new URL("./kernel.sql", import.meta.url), "utf8")
+export const SCHEMA_SQL = `${readFileSync(new URL("./schema.sql", import.meta.url), "utf8")}\n${KERNEL_SQL}`
 
 interface Migration {
   readonly from: string
@@ -160,6 +161,48 @@ const MIGRATIONS: readonly Migration[] = [
     BEGIN
       SELECT RAISE(ABORT, 'cycle lease owner change requires a higher fence');
     END;`,
+  },
+  {
+    from: "7",
+    to: "8",
+    name: "execution-kernel",
+    sql: KERNEL_SQL,
+  },
+  {
+    from: "8",
+    to: "9",
+    name: "model-attempt-request-identity",
+    sql: `ALTER TABLE model_attempts RENAME TO model_attempts_v8;
+    CREATE TABLE model_attempts (
+      id                   TEXT PRIMARY KEY,
+      loop_attempt_id      TEXT NOT NULL REFERENCES loop_attempts(id),
+      step_ordinal         INTEGER NOT NULL CHECK (step_ordinal > 0),
+      attempt_ordinal      INTEGER NOT NULL CHECK (attempt_ordinal > 0),
+      state                TEXT NOT NULL CHECK (state IN ('started','succeeded','failed','unknown')),
+      reservation_id       TEXT NOT NULL UNIQUE REFERENCES budget_reservations(id),
+      profile_id           TEXT NOT NULL,
+      profile_generation   INTEGER NOT NULL CHECK (profile_generation > 0),
+      profile_digest       TEXT NOT NULL,
+      request_digest       TEXT NOT NULL,
+      owner_fence          INTEGER NOT NULL CHECK (owner_fence > 0),
+      response_json        TEXT CHECK (response_json IS NULL OR json_valid(response_json)),
+      actual_tokens        INTEGER CHECK (actual_tokens IS NULL OR actual_tokens >= 0),
+      actual_cost_microusd INTEGER CHECK (actual_cost_microusd IS NULL OR actual_cost_microusd >= 0),
+      started_at           TEXT NOT NULL,
+      finished_at          TEXT,
+      UNIQUE(loop_attempt_id, step_ordinal, attempt_ordinal),
+      CHECK ((state = 'started') = (finished_at IS NULL)),
+      CHECK ((state = 'succeeded') = (response_json IS NOT NULL))
+    ) STRICT;
+    INSERT INTO model_attempts
+      (id,loop_attempt_id,step_ordinal,attempt_ordinal,state,reservation_id,profile_id,profile_generation,
+       profile_digest,request_digest,owner_fence,response_json,actual_tokens,actual_cost_microusd,started_at,finished_at)
+    SELECT m.id,m.loop_attempt_id,m.step_ordinal,m.attempt_ordinal,m.state,m.reservation_id,m.profile_id,
+           m.profile_generation,m.profile_digest,'legacy:' || m.id,m.owner_fence,m.response_json,
+           CASE WHEN m.state='started' THEN NULL ELSE b.consumed_tokens END,
+           CASE WHEN m.state='started' THEN NULL ELSE b.consumed_cost_microusd END,m.started_at,m.finished_at
+      FROM model_attempts_v8 m JOIN budget_reservations b ON b.id=m.reservation_id;
+    DROP TABLE model_attempts_v8;`,
   },
 ]
 

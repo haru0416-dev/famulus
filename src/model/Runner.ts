@@ -11,10 +11,12 @@ import * as Layer from "effect/Layer"
 import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown } from "../core/errors.ts"
 import { RunnerFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
+import { ExecutionKernel, type KernelLoopContext } from "../services/ExecutionKernel.ts"
 import { Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { callClaude } from "./claude-cli.ts"
 import { callCodex } from "./codex-responses.ts"
+import { digestOf, profileRefForModel } from "./kernel-spec.ts"
 import {
   assertKnownModel,
   isGptModel,
@@ -77,6 +79,7 @@ export interface RunnerRequest {
   readonly onText?: (delta: string) => void
   readonly signal?: AbortSignal
   readonly kind: string
+  readonly execution?: KernelLoopContext
 }
 
 export interface RunnerResult {
@@ -117,43 +120,93 @@ const makeRunner = (
   Effect.gen(function* () {
     const gov = yield* Governance
     const ledger = yield* Ledger
+    const kernel = yield* ExecutionKernel
 
     const run = (req: RunnerRequest) =>
       Effect.gen(function* () {
         const p = plan(req.role)
+        if (req.execution) {
+          const actualProfile = yield* Effect.try({
+            try: () => profileRefForModel(p.model),
+            catch: (error) => new RunnerFailed({ pool: p.pool, message: String(error) }),
+          })
+          if (
+            actualProfile.id !== req.execution.profile.id ||
+            actualProfile.generation !== req.execution.profile.generation ||
+            actualProfile.digest !== req.execution.profile.digest
+          )
+            return yield* Effect.fail(
+              new RunnerFailed({ pool: p.pool, message: "実行modelと固定済みProfileが一致しない" }),
+            )
+        }
         const at = nowIso()
+        const requestDigest = digestOf({
+          model: p.model,
+          prompt: req.prompt,
+          systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,
+          schema: req.schema?.jsonSchema ?? null,
+        })
+        const replay = req.execution
+          ? yield* kernel.replayModelResult(req.execution, requestDigest)
+          : undefined
+        const replayed = replay !== undefined
+        let out: Omit<RunnerResult, "model">
+        if (replay) {
+          const stored = replay as Partial<RunnerResult>
+          if (stored.model !== p.model || typeof stored.text !== "string" || !stored.usage)
+            return yield* Effect.fail(new RunnerFailed({ pool: p.pool, message: "保存済みmodel応答が不正" }))
+          out = {
+            text: stored.text,
+            ...(stored.structured !== undefined ? { structured: stored.structured } : {}),
+            usage: stored.usage,
+            ...(stored.quota ? { quota: stored.quota } : {}),
+          }
+        } else {
+          // ゲート。失敗チャネルに拒否が載るので、ここを通らずに下へは行けない。
+          yield* gov.precheck({ pool: p.pool, at, nowMs: Date.now() })
 
-        // ゲート。失敗チャネルに拒否が載るので、ここを通らずに下へは行けない。
-        yield* gov.precheck({ pool: p.pool, at, nowMs: Date.now() })
+          const attempt = req.execution
+            ? yield* kernel.startModelAttempt(req.execution, requestDigest)
+            : undefined
+          out = yield* exec(req, p).pipe(
+            // 失敗でもクォータシグナルが取れていれば必ず再実行を抑止する。
+            // 抑止しないとリセット前のクォータへ毎 run 再試行する。
+            Effect.tapError((e) =>
+              e.exhausted === true
+                ? gov.noteQuota({ pool: p.pool, window: "unknown", exhausted: true }, at, Date.now())
+                : Effect.void,
+            ),
+            Effect.tapError(() => (attempt ? kernel.finishModelAttempt(attempt, "unknown") : Effect.void)),
+          )
 
-        const out = yield* exec(req, p).pipe(
-          // 失敗でもクォータシグナルが取れていれば必ず再実行を抑止する。
-          // 抑止しないとリセット前のクォータへ毎 run 再試行する。
-          Effect.tapError((e) =>
-            e.exhausted === true
-              ? gov.noteQuota({ pool: p.pool, window: "unknown", exhausted: true }, at, Date.now())
-              : Effect.void,
-          ),
-        )
+          if (attempt) {
+            yield* kernel.finishModelAttempt(attempt, "succeeded", {
+              tokens: out.usage.inTok + out.usage.outTok + out.usage.cacheRead + out.usage.cacheWrite,
+              costMicrousd: Math.ceil(out.usage.notionalUsd * 1_000_000),
+              response: { ...out, model: p.model },
+            })
+          }
 
-        if (out.quota) yield* gov.noteQuota(out.quota, at, Date.now())
+          if (out.quota) yield* gov.noteQuota(out.quota, at, Date.now())
+        }
 
         const checked = req.schema?.validate(out.structured)
 
-        yield* ledger.record({
-          kind: req.kind,
-          role: req.role, // role を入れないと日次 run 数の上限を適用できない
-          model: p.model,
-          usage: {
-            inTok: out.usage.inTok,
-            outTok: out.usage.outTok,
-            cacheRead: out.usage.cacheRead,
-            cacheWrite: out.usage.cacheWrite,
-          },
-          summary: traceOf(out.text),
-          provenance: { pool: p.pool, notionalUsd: out.usage.notionalUsd },
-          at,
-        })
+        if (!replayed)
+          yield* ledger.record({
+            kind: req.kind,
+            role: req.role, // role を入れないと日次 run 数の上限を適用できない
+            model: p.model,
+            usage: {
+              inTok: out.usage.inTok,
+              outTok: out.usage.outTok,
+              cacheRead: out.usage.cacheRead,
+              cacheWrite: out.usage.cacheWrite,
+            },
+            summary: traceOf(out.text),
+            provenance: { pool: p.pool, notionalUsd: out.usage.notionalUsd },
+            at,
+          })
 
         if (checked && !checked.success) {
           return yield* Effect.fail(
@@ -235,6 +288,7 @@ export interface StubReply {
   readonly quota?: QuotaSignal
   /** 立てるとこの応答で失敗する(クォータ枯渇経路の検査用)。 */
   readonly fail?: string
+  readonly usage?: RunnerResult["usage"]
 }
 
 /**
@@ -262,7 +316,7 @@ export const RunnerStub = (script: readonly StubReply[]) => {
       return Effect.succeed({
         text: reply.text,
         ...(reply.structured !== undefined ? { structured: reply.structured } : {}),
-        usage: { inTok: 100, outTok: 20, cacheRead: 0, cacheWrite: 0, notionalUsd: 0.001 },
+        usage: reply.usage ?? { inTok: 100, outTok: 20, cacheRead: 0, cacheWrite: 0, notionalUsd: 0.001 },
         ...(reply.quota ? { quota: reply.quota } : {}),
       })
     }, defaultPlan),

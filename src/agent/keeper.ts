@@ -16,8 +16,14 @@
 import * as Effect from "effect/Effect"
 import * as v from "valibot"
 import { causeReason } from "../core/errors.ts"
+import { profileRefForModel, resultContractRef } from "../model/kernel-spec.ts"
 import { Runner } from "../model/Runner.ts"
 import { rs } from "../model/schema.ts"
+import {
+  ExecutionKernel,
+  type ExecutionOwnerRef,
+  type KernelLoopContext,
+} from "../services/ExecutionKernel.ts"
 import { Memory } from "../services/Memory.ts"
 
 /** 1回で確定値として保存してよい数。保存した値は無検査で使われるので、多いほど良いのではない。 */
@@ -135,10 +141,13 @@ export const keep = (opts: {
   label?: string
   /** 判定に足す一節。対象期間が1回ぶんでないときに、何を数えてよいかを書き足す。 */
   extraSystem?: string
+  /** 指定された回だけExecutionRootへ載せる。移行中の互換経路では省略する。 */
+  executionOwner?: ExecutionOwnerRef
 }) =>
   Effect.gen(function* () {
     const runner = yield* Runner
     const mem = yield* Memory
+    const kernel = yield* ExecutionKernel
     const tag = opts.label ?? "keeper"
     if (bare(opts.material).length === 0) return `${tag}: 判定対象が無い(ユーザーの発言がこの回に無い)`
 
@@ -158,6 +167,28 @@ export const keep = (opts: {
       since === undefined ? [] : slots.filter((s) => s.updatedAt >= since).map((s) => s.slot),
     )
 
+    let execution: KernelLoopContext | undefined
+    if (opts.executionOwner) {
+      const plan = runner.plan("structurer")
+      execution = yield* kernel.openSingleLoop({
+        owner: opts.executionOwner,
+        stableSlot: "keeper",
+        role: "structurer",
+        profile: profileRefForModel(plan.model),
+        resultContract: resultContractRef("keeper-v1", KEEPER_SCHEMA),
+        taskInput: {
+          material: opts.material,
+          known,
+          header: opts.header ?? "この回のユーザーの発言",
+          extraSystem: opts.extraSystem ?? null,
+        },
+        deadlineAtMs: Date.now() + KEEP_MS,
+        budget: { modelCalls: 1, toolCalls: 0, tokens: 100_000, costMicrousd: 5_000_000 },
+        modelTokenAllowance: 100_000,
+        modelCostAllowanceMicrousd: 5_000_000,
+      })
+    }
+
     const out = yield* Effect.result(
       runner.run({
         role: "structurer",
@@ -165,10 +196,14 @@ export const keep = (opts: {
         systemPrompt: opts.extraSystem ? `${KEEPER_SYSTEM}\n\n${opts.extraSystem}` : KEEPER_SYSTEM,
         prompt: `## いま DB にある確定値\n${known}\n\n## ${opts.header ?? "この回のユーザーの発言"}\n${opts.material}`,
         schema: KEEPER_SCHEMA,
+        ...(execution ? { execution } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
     )
-    if (out._tag === "Failure") return `${tag}: 呼べなかった(${causeReason(out.failure)})`
+    if (out._tag === "Failure") {
+      if (execution) yield* kernel.finishLoop(execution, "failed").pipe(Effect.ignore)
+      return `${tag}: 呼べなかった(${causeReason(out.failure)})`
+    }
 
     const res = out.success.structured as { looked: string; values: KeptValue[] }
     const grounded = keepGrounded(res.values, opts.material)
@@ -188,6 +223,7 @@ export const keep = (opts: {
         evidenceQuote: v.quote,
       })
     }
+    if (execution) yield* kernel.finishLoop(execution, "completed")
     const head =
       kept.length === 0 ? `${tag}: 保存対象は無かった` : `${tag}: ${kept.length} 件を確定値として保存`
     const body = kept.map(({ value: v }) => `${v.slot}=${v.value}`).join(" / ")

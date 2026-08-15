@@ -14,6 +14,7 @@ import { Attention } from "./services/Attention.ts"
 import { CycleLease } from "./services/CycleLease.ts"
 import { type Db, DbLive } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
+import { ExecutionKernel } from "./services/ExecutionKernel.ts"
 import { Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
@@ -30,6 +31,7 @@ const services = Layer.mergeAll(
   CycleLease.layer,
   Intake.layer,
   Discord.layer,
+  ExecutionKernel.layer,
 )
 
 /**
@@ -37,7 +39,7 @@ const services = Layer.mergeAll(
  * (テストは `RunnerStub([...]).layer` を渡す)。
  */
 export type DbLayer = Layer.Layer<Db, DbFailed>
-export type RunnerLayer = Layer.Layer<Runner, never, Governance | Ledger>
+export type RunnerLayer = Layer.Layer<Runner, never, Governance | Ledger | ExecutionKernel>
 
 export const makeAppLayer = (db: DbLayer = DbLive(), runner: RunnerLayer = RunnerLive) =>
   Layer.provideMerge(runner, Layer.provideMerge(services, db))
@@ -81,6 +83,7 @@ export type AppServices =
   | CycleLease
   | Intake
   | Discord
+  | ExecutionKernel
   | Runner
 
 export function run<A, E>(effect: Effect.Effect<A, E, AppServices>, rt: AppRuntime = runtime()): Promise<A> {

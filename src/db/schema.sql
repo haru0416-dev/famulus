@@ -1,4 +1,4 @@
--- open-zero schema v7.
+-- open-zero base schema. Execution-kernel tables are appended from kernel.sql.
 
 CREATE TABLE schema_meta (
   key TEXT PRIMARY KEY,

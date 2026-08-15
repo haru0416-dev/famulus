@@ -80,6 +80,7 @@ try {
         keep({
           material: `owner: ${line}`,
           ...(turn.inputEventId ? { evidence: [{ id: turn.inputEventId, text: `owner: ${line}` }] } : {}),
+          ...(turn.inputEventId ? { executionOwner: { kind: "owner-event", id: turn.inputEventId } } : {}),
           signal: AbortSignal.timeout(KEEP_MS),
         }),
       ).catch((e: unknown) => `keeper: 落ちた(${causeReason(e)})`)
