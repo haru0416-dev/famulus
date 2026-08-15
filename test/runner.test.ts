@@ -5,10 +5,12 @@
 
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
+import * as ManagedRuntime from "effect/ManagedRuntime"
 import * as v from "valibot"
 import { test } from "vitest"
 import { callClaude } from "../src/model/claude-cli.ts"
 import { parseCodexAuth, quotaFromHeaders } from "../src/model/codex-responses.ts"
+import { PROFILE_REFS, profileRefForModel } from "../src/model/kernel-spec.ts"
 import { needsResubmit, TOOL_PROTOCOL_SCHEMA } from "../src/model/language-model.ts"
 import {
   assertKnownModel,
@@ -17,9 +19,10 @@ import {
   poolForModel,
   stripCitationMarkers,
 } from "../src/model/models.ts"
-import { ROLE_MODEL, Runner } from "../src/model/Runner.ts"
+import { ROLE_MODEL, Runner, RunnerLive } from "../src/model/Runner.ts"
 import { rs } from "../src/model/schema.ts"
-import { Db } from "../src/services/Db.ts"
+import { makeAppLayer } from "../src/runtime.ts"
+import { Db, DbLive } from "../src/services/Db.ts"
 import { Governance } from "../src/services/Governance.ts"
 import { Ledger } from "../src/services/Ledger.ts"
 import { withHarness } from "./helpers.ts"
@@ -155,6 +158,31 @@ test("役割→モデルは静的表。role 名でなければモデル id そ�
     assert.equal(plans.scout.pool, "chatgpt-rmod")
     assert.notEqual(plans.dialogue.pool, plans.scout.pool)
   })
+})
+
+test("production Runnerは任意model IDをprovider I/O前に拒否する", async () => {
+  const rt = ManagedRuntime.make(makeAppLayer(DbLive(":memory:"), RunnerLive))
+  try {
+    await assert.rejects(
+      () =>
+        rt.runPromise(
+          Effect.flatMap(Runner, (runner) =>
+            runner.run({ role: "claude-opus-5", kind: "raw-model", prompt: "呼ばない" }),
+          ),
+        ),
+      /固定roleのみ/,
+    )
+    const rows = await rt.runPromise(Effect.flatMap(Db, (db) => db.all("SELECT id FROM ledger")))
+    assert.deepEqual(rows, [])
+  } finally {
+    await rt.dispose()
+  }
+})
+
+test("production roleの全modelに固定Profileがある", () => {
+  for (const model of Object.values(ROLE_MODEL)) {
+    assert.equal(profileRefForModel(model), PROFILE_REFS[model as keyof typeof PROFILE_REFS])
+  }
 })
 
 /**

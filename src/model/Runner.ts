@@ -124,7 +124,14 @@ const makeRunner = (
 
     const run = (req: RunnerRequest) =>
       Effect.gen(function* () {
-        const p = plan(req.role)
+        const p = yield* Effect.try({
+          try: () => plan(req.role),
+          catch: (error) =>
+            new RunnerFailed({
+              pool: "unselected",
+              message: error instanceof Error ? error.message : String(error),
+            }),
+        })
         if (req.execution) {
           const actualProfile = yield* Effect.try({
             try: () => profileRefForModel(p.model),
@@ -256,7 +263,7 @@ const makeRunner = (
     return { plan, run } as RunnerApi
   })
 
-const defaultPlan = (role: string): RunPlan => {
+const testPlan = (role: string): RunPlan => {
   // 既知の role でなければモデル id そのものとして読む。ただし知らない id は受け付けない —
   // 通すと `claude` 側は「不明なモデル」、Codex 側は上流の 4xx で、どちらも実行開始後に失敗する。
   const model = assertKnownModel(ROLE_MODEL[role as Role] ?? role)
@@ -266,6 +273,12 @@ const defaultPlan = (role: string): RunPlan => {
     // 計上され、「作業を GPT に振り分けたのに対話が止まる」が起きる。
     pool: poolForModel(model),
   }
+}
+
+const productionPlan = (role: string): RunPlan => {
+  const model = ROLE_MODEL[role as Role]
+  if (!model) throw new Error(`production Runnerは固定roleのみ受け付ける: ${role}`)
+  return { model, pool: poolForModel(model) }
 }
 
 /**
@@ -307,7 +320,7 @@ export const RunnerLive = Layer.effect(
           ...(r.quota ? { quota: r.quota } : {}),
         })),
       ),
-    defaultPlan,
+    productionPlan,
   ),
 )
 
@@ -348,7 +361,7 @@ export const RunnerStub = (script: readonly StubReply[]) => {
         usage: reply.usage ?? { inTok: 100, outTok: 20, cacheRead: 0, cacheWrite: 0, notionalUsd: 0.001 },
         ...(reply.quota ? { quota: reply.quota } : {}),
       })
-    }, defaultPlan),
+    }, testPlan),
   )
   return { layer, calls }
 }
