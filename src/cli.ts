@@ -18,6 +18,7 @@ import { resolve } from "node:path"
  *   oz approve <id>        … 承認actionを書き、payloadを指紋で固定する
  *   oz deny <id> <理由>    … 却下。理由は次の生成へ還流させるので必須
  *   oz recall <語>         … 記憶を引く
+ *   oz dossier [id]        … 調査dossier一覧または引用・実験・限界の全文
  *   oz belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
  *   oz dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定値として保存する(1回ぶんでは見えない値)
  *   oz cleanup [日数] [--dry]… `.data/` の増え続けるものを削除する(events は触らない)
@@ -55,6 +56,7 @@ import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
 import { Memory, renderRecall, STALE_BELIEF_DAYS } from "./services/Memory.ts"
 import { type ProposalRow, type ProposalStatus, Proposals } from "./services/Proposals.ts"
+import { Research } from "./services/Research.ts"
 import { runsRoot } from "./services/Sandbox.ts"
 
 const short = (id: string) => id.slice(0, 8)
@@ -83,6 +85,7 @@ const USAGE = `oz — open-zero の承認 CLI
   oz approve <id>          承認(実行はされない — 実行の仕組みはまだ無い)
   oz deny <id> <理由>      却下。理由は必須
   oz recall <語>           DB を全文検索
+  oz dossier [id]          調査dossier一覧。idを渡すと引用・hash・実験check・限界を表示
   oz belief <slot>         事実の今の値と変遷(いつからいつまで何だったか)
   oz belief <slot> <値>    新しい値を確定。前の区間はそこで閉じる(上書きしない)
                            --from <ISO> で「いつから真だったか」を遡って書ける
@@ -181,6 +184,26 @@ const program = (argv: readonly string[]) =>
     const proposals = yield* Proposals
 
     switch (cmd) {
+      case "dossier": {
+        const research = yield* Research
+        const db = yield* Db
+        const [id] = rest
+        if (!id) {
+          const rows = yield* research.list()
+          return rows.length === 0
+            ? "調査dossierはまだ無い"
+            : rows.map((row) => `${short(String(row.id))}  ${row.state}  ${row.question}`).join("\n")
+        }
+        const matches = yield* db.all(
+          "SELECT id FROM research_dossiers WHERE substr(id,1,?)=? ORDER BY created_at DESC LIMIT 2",
+          id.length,
+          id,
+        )
+        if (matches.length === 0) return yield* Effect.fail(new Error(`dossier が無い: ${id}`))
+        if (matches.length > 1) return yield* Effect.fail(new Error(`dossier id が曖昧: ${id}`))
+        return yield* research.render(String(matches[0]?.id))
+      }
+
       case "status": {
         const ledger = yield* Ledger
         const db = yield* Db

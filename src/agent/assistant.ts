@@ -41,7 +41,7 @@ import { Ledger } from "../services/Ledger.ts"
 import { Memory, renderRecall } from "../services/Memory.ts"
 import { Proposals } from "../services/Proposals.ts"
 import { Research } from "../services/Research.ts"
-import { runDir, runInSandbox } from "../services/Sandbox.ts"
+import { type RunResult, runDir, runInSandbox } from "../services/Sandbox.ts"
 import { defaultSources, renderHits, SOURCE_MENU, searchSources } from "../services/Search.ts"
 import { fetchPage } from "../services/Web.ts"
 import {
@@ -73,6 +73,16 @@ const researchModel = () => appConfig().models.research
 const RUN_RESERVE_MS = 45_000
 /** これを下回る持ち時間なら走らせない。取得だけで消えて、出力が出る前に切られる。 */
 const MIN_RUN_MS = 15_000
+
+const experimentResult = (result: RunResult) => ({
+  status: result.timedOut
+    ? ("timed_out" as const)
+    : result.exitCode === 127 && result.output.includes("[走らせられなかった]")
+      ? ("unavailable" as const)
+      : ("completed" as const),
+  ...(result.timedOut ? {} : { exitCode: result.exitCode }),
+  output: result.output,
+})
 
 /**
  * 精査役1回の上限。実測 31 秒(1200字の下書きに対して指摘3件、出力 1759 token)で、
@@ -848,6 +858,95 @@ function buildTools(state: TurnState, gate: ToolGate) {
           }),
         ),
       toModelOutput: untrustedToolOutput("sandbox", "command-output"),
+    }),
+
+    experiment: tool({
+      description:
+        "仮説をSandboxで検証し、commandとcheckを別々に実行してresearch dossierへ固定する。" +
+        "commandの終了コード0だけではverifiedにならず、checkが終了コード0のときだけverifiedになる。" +
+        "記事や公開判断の根拠に実験を使うときはshellではなくこれを使う。",
+      inputSchema: vs(
+        v.object({
+          question: v.pipe(v.string(), v.description("この実験で答える問い。")),
+          hypothesis: v.pipe(v.string(), v.description("検証する仮説。")),
+          acceptance: v.pipe(v.string(), v.description("checkが何を満たせば仮説を支持するか。")),
+          environment: v.pipe(v.string(), v.description("runtime、version、前提条件。")),
+          workspace: v.pipe(v.string(), v.description("永続workspace名。")),
+          command: v.pipe(v.string(), v.description("変更・測定を行うcommand。")),
+          checkCommand: v.pipe(v.string(), v.description("受入条件を判定する独立したcommand。")),
+          net: v.optional(v.boolean()),
+        }),
+      ),
+      execute: async (
+        { question, hypothesis, acceptance, environment, workspace, command, checkCommand, net },
+        { abortSignal },
+      ) =>
+        run(
+          Effect.gen(function* () {
+            const gov = yield* Governance
+            const halted = yield* gov.readHalt
+            if (halted) return `走らせない: 停止中(halt)— ${halted.reason}`
+            const research = yield* Research
+            const dir = runDir(workspace)
+            const left = remainingMs()
+            if (left < RUN_RESERVE_MS + MIN_RUN_MS * 2) {
+              return `実験しなかった: ${remainingLabel()}`
+            }
+            const commandRun = yield* Effect.promise(() =>
+              runInSandbox(command, {
+                workDir: dir,
+                ...(abortSignal ? { signal: abortSignal } : {}),
+                ...(net ? { net } : {}),
+                ...(Number.isFinite(left) ? { timeoutMs: Math.max(MIN_RUN_MS, left / 2) } : {}),
+              }),
+            )
+            const afterCommand = remainingMs()
+            let checkRun: RunResult | undefined
+            if (afterCommand >= RUN_RESERVE_MS + MIN_RUN_MS) {
+              checkRun = yield* Effect.promise(() =>
+                runInSandbox(checkCommand, {
+                  workDir: dir,
+                  ...(abortSignal ? { signal: abortSignal } : {}),
+                  ...(net ? { net } : {}),
+                  ...(Number.isFinite(afterCommand)
+                    ? { timeoutMs: Math.max(MIN_RUN_MS, afterCommand - RUN_RESERVE_MS) }
+                    : {}),
+                }),
+              )
+            }
+            const dossier = yield* research.open(question)
+            const hypothesisClaim = yield* research.addClaim(dossier.id, hypothesis, "hypothesis")
+            const recorded = yield* research.recordExperiment({
+              hypothesisClaimId: hypothesisClaim.id,
+              protocol: { acceptance },
+              environment: { description: environment },
+              workspace: basename(dir),
+              command,
+              commandResult: experimentResult(commandRun),
+              checkCommand,
+              ...(checkRun ? { checkResult: experimentResult(checkRun) } : {}),
+            })
+            if (recorded.verdict === "verified") {
+              yield* research.linkExperiment(hypothesisClaim.id, recorded.id, "support")
+              yield* research.resolveClaim(hypothesisClaim.id, "supported")
+              const conclusion = yield* research.addClaim(dossier.id, hypothesis, "conclusion")
+              yield* research.linkExperiment(conclusion.id, recorded.id, "support")
+              yield* research.resolveClaim(conclusion.id, "supported")
+              yield* research.conclude(dossier.id, conclusion.id, `environment: ${environment}`)
+            } else {
+              yield* research.linkExperiment(hypothesisClaim.id, recorded.id, "context")
+              yield* research.resolveClaim(hypothesisClaim.id, "inconclusive")
+              yield* research.inconclusive(
+                dossier.id,
+                recorded.verdict === "failed"
+                  ? `check failed in environment: ${environment}`
+                  : `check did not complete in environment: ${environment}`,
+              )
+            }
+            return yield* research.render(dossier.id)
+          }),
+        ),
+      toModelOutput: untrustedToolOutput("sandbox", "experiment"),
     }),
 
     /**
