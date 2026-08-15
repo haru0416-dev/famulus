@@ -1,6 +1,7 @@
 import { homedir } from "node:os"
 import { isAbsolute, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { isKnownModel } from "../model/models.ts"
 
 export const PROJECT_ROOT = fileURLToPath(new URL("../../", import.meta.url)).replace(/\/$/, "")
 
@@ -156,7 +157,21 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     issues.push("OPEN_ZERO_TZ: IANAタイムゾーンが必要です")
   }
 
-  const model = text(env, "OPEN_ZERO_MODEL", "claude-opus-5")
+  const model = text(env, "OPEN_ZERO_MODEL", "gpt-5.6-sol")
+  const models = {
+    default: model,
+    cycle: text(env, "OPEN_ZERO_CYCLE_MODEL", model),
+    work: text(env, "OPEN_ZERO_WORK_MODEL", "gpt-5.6-luna"),
+    research: text(env, "OPEN_ZERO_RESEARCH_MODEL", "gpt-5.6-luna-web"),
+  }
+  for (const [key, id] of [
+    ["OPEN_ZERO_MODEL", models.default],
+    ["OPEN_ZERO_CYCLE_MODEL", models.cycle],
+    ["OPEN_ZERO_WORK_MODEL", models.work],
+    ["OPEN_ZERO_RESEARCH_MODEL", models.research],
+  ] as const) {
+    if (!isKnownModel(id)) issues.push(`${key}: GPT model idが必要です: ${id}`)
+  }
   const discordToken = optional(env, "OPEN_ZERO_DISCORD_TOKEN")
   const discordOwnerId = optional(env, "OPEN_ZERO_DISCORD_OWNER_ID")
   const runImage = optional(env, "OPEN_ZERO_RUN_IMAGE")
@@ -183,12 +198,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
       ),
     },
     timeZone,
-    models: {
-      default: model,
-      cycle: text(env, "OPEN_ZERO_CYCLE_MODEL", model),
-      work: text(env, "OPEN_ZERO_WORK_MODEL", "gpt-5.6-luna"),
-      research: text(env, "OPEN_ZERO_RESEARCH_MODEL", "gpt-5.6-luna-web"),
-    },
+    models,
     cycle: {
       timeoutMs,
       heartbeatMs,

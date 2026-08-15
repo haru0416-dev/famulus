@@ -12,21 +12,21 @@
  * 道具は `createAssistant()` が1ターンぶんの状態をクロージャで保持して作る。前の形はフックで登録していて、
  * 1回のターンに固有のもの(今の入力の event id)をモジュール変数に置くしかなかった。
  *
- * モデル id は `poolForModel` が pool を決める。`gpt-` で始まるものは Codex の Responses、
- * 残りは `claude -p`(src/model/models.ts)。
+ * モデル呼び出しは全て Codex Responses 経由の GPT を使う。
  */
 
 import { basename } from "node:path"
 import { type ModelMessage, stepCountIs, ToolLoopAgent, tool } from "ai"
 import * as Effect from "effect/Effect"
 import * as v from "valibot"
+import { appConfig } from "../core/config.ts"
 import { remainingLabel, remainingMs } from "../core/deadline.ts"
 import { loadEnv } from "../core/env.ts"
 import { causeReason } from "../core/errors.ts"
 import { localDayRange, localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
-import { claudeMax, lane } from "../model/governed.ts"
-import { CLAUDE_POOL, CODEX_POOL } from "../model/models.ts"
+import { governedModel, lane } from "../model/governed.ts"
+import { CODEX_POOL } from "../model/models.ts"
 import { Runner } from "../model/Runner.ts"
 import { vs } from "../model/schema.ts"
 import { run } from "../runtime.ts"
@@ -56,16 +56,15 @@ import { soulInstruction } from "./soul.ts"
 loadEnv()
 
 /**
- * 作業役のモデル。対話とは別のクォータから消費する(src/model/models.ts の CODEX_POOL)。
- * 語を変えて何度も検索するのは量を使う仕事で、opus でやると対話のクォータがそこで減る。
+ * 作業役のモデル。語を変えて何度も検索する量の多い仕事なので軽量modelに固定する。
  */
-const workModel = () => process.env.OPEN_ZERO_WORK_MODEL ?? "gpt-5.6-luna"
+const workModel = () => appConfig().models.work
 
 /**
  * researcher の委譲エージェントに使うモデル。`-web` は Codex 側の web_search を有効にする接尾辞。
  * researcher には別途 `search` と `fetch` も渡す。
  */
-const researchModel = () => process.env.OPEN_ZERO_RESEARCH_MODEL ?? "gpt-5.6-luna-web"
+const researchModel = () => appConfig().models.research
 
 /**
  * `shell` が締切のために空けておく時間。この回で分かったことを書くための取り分。
@@ -389,7 +388,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
       execute: async ({ task }, { abortSignal }) =>
         delegate(
           new ToolLoopAgent({
-            model: claudeMax(researchModel()),
+            model: governedModel(researchModel()),
             instructions: RESEARCHER,
             tools: gateTools({ search: searchTool, fetch: fetchTool }, gate),
             ...childOpts(10),
@@ -414,7 +413,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
       execute: async ({ task }, { abortSignal }) =>
         delegate(
           new ToolLoopAgent({
-            model: claudeMax(workModel()),
+            model: governedModel(workModel()),
             instructions: DIGGER,
             tools: gateTools({ recall: recallTool(state) }, gate),
             ...childOpts(8),
@@ -1019,7 +1018,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
             // もう片方は動くので、一括りにすると出来ることを取り違える。
             const now = Date.now()
             const states: string[] = []
-            for (const pool of [CLAUDE_POOL, CODEX_POOL]) {
+            for (const pool of [CODEX_POOL]) {
               const cd = yield* gov.quotaCooldown(pool, now)
               states.push(
                 cd
@@ -1055,7 +1054,7 @@ export interface AssistantTurnResult {
 }
 
 export interface AssistantOptions {
-  /** 対話に使うモデル。省くと `OPEN_ZERO_MODEL`、それも無ければ opus。 */
+  /** 対話に使うモデル。省くと検証済みの `OPEN_ZERO_MODEL` を使う。 */
   readonly model?: string | undefined
   readonly leaseToken?: CycleLeaseToken | undefined
   readonly onLeaseLost?: ((reason: unknown) => void) | undefined
@@ -1070,7 +1069,7 @@ export const replyStepText = (text: string, toolCalls: readonly unknown[]): stri
  * chat は同じオブジェクトで会話履歴を継ぎ、cycle は起動ごとに新しく作って CyclePlan から文脈を再構成する。
  */
 export function createAssistant(opts: AssistantOptions = {}) {
-  const modelId = opts.model ?? process.env.OPEN_ZERO_MODEL ?? "claude-opus-5"
+  const modelId = opts.model ?? appConfig().models.default
   const state: TurnState = { lastInputEventId: undefined }
   let history: ModelMessage[] = []
   const token = opts.leaseToken
@@ -1085,12 +1084,11 @@ export function createAssistant(opts: AssistantOptions = {}) {
       }
     : undefined
   const agent = new ToolLoopAgent({
-    model: claudeMax(modelId),
+    model: governedModel(modelId),
     instructions: soulInstruction(),
     tools: buildTools(state, gate),
     stopWhen: stepCountIs(MAX_STEPS),
     // CLI 1回が分単位なので、SDK 側の自動再試行は入れない。取り直しが要る場面
-    // (提出の呼び方を間違えた回)は language-model.ts が中で1回だけやる。
     maxRetries: 0,
   })
 

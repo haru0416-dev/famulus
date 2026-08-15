@@ -7,8 +7,7 @@
  *
  * 経路を変えて解消するもの:
  *  - 入力トークン。`claude` のシステムプロンプトが付かない(最小の1問で実測 186 → 27 tok)。
- *  - 道具呼び出し。Responses はツール呼び出しをそのまま返すので、language-model.ts の
- *    「構造化出力として提出させて変換し、拒否されたら取り直す」処理は GPT 側では不要。
+ *  - 道具呼び出し。Responsesのtool-callをAI SDKへそのまま返す。
  *  - クォータ。応答ヘッダに使用率とリセット時刻が入る(下の `quotaFromHeaders`)。
  *    rmod 経由では `{status:"allowed"}` しか来ず、Governance の使用率によるクールダウンは
  *    GPT 側で一度も適用されなかった。動いていたのは 429 を受けた後の抑止だけ。
@@ -431,7 +430,7 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
 }
 
 /**
- * `callClaude` と同じ入出力で Codex を1回呼ぶ。構造化処理の入口(src/model/Runner.ts)が使う。
+ * Codexを1回呼ぶ構造化処理の入口。src/model/Runner.tsが使う。
  * そちらは道具ループを持たないので、prompt 1つと任意の JSON Schema だけを渡す。
  */
 export async function callCodex(opts: ModelCallOptions): Promise<ModelCallResult> {

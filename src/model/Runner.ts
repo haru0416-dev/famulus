@@ -1,7 +1,7 @@
 /**
  * 構造化処理用の推論入口。precheck → 実行 → クォータ状態の更新 → 会計をまとめる。
  * AI SDK Agent 経路は src/model/governed.ts が同じ順序を middleware で実装する。
- * Layer が差し替え点なので、テストは `RunnerStub` を積むだけで API キーも `claude` バイナリも要らない。
+ * Layer が差し替え点なので、テストは `RunnerStub` を積むだけでOAuth資格情報は要らない。
  *
  * 役割→モデルは静的表。LLM にモデル選択と課金経路を開かない。
  */
@@ -14,37 +14,23 @@ import { nowIso } from "../core/time.ts"
 import { ExecutionKernel, type KernelLoopContext } from "../services/ExecutionKernel.ts"
 import { Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
-import { callClaude } from "./claude-cli.ts"
 import { callCodex } from "./codex-responses.ts"
 import { digestOf, profileRefForModel } from "./kernel-spec.ts"
-import {
-  assertKnownModel,
-  isGptModel,
-  ModelCallError,
-  poolForModel,
-  type QuotaSignal,
-  RUNTIME_PROMPT,
-} from "./models.ts"
+import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal, RUNTIME_PROMPT } from "./models.ts"
 import type { RuntimeSchema } from "./schema.ts"
 import { traceOf } from "./trace.ts"
 
 export type Role = "structurer" | "scout" | "reviewer"
 
 /**
- * 役割→モデル。品質が製品そのものになる役だけ opus に置く。
- *
- * 作業系は GPT(Codex の OAuth 定額枠)へ振り分ける。減っているのは金ではなくユーザーの Claude クォータなので、
- * 量を使う役をそちらから外すと、対話用クォータが残る。ChatGPT 側も OAuth の定額クォータで、
- * `poolForModel` が別の pool に数えるため、片方を回してももう片方は止まらない。
+ * 役割→モデル。全てChatGPT OAuthのGPTで、品質と処理量に応じてmodelを分ける。
  *
  * 現在 ROLE_MODEL を参照して呼ばれるのは `scout` / `reviewer` / `structurer`。
  * `briefing` / `dialogue` / `classify` の ROLE_MODEL エントリには呼び手がない。
  * 対話と cycle 本体のモデルは createAssistant() に渡す model id で決まる。
  * ここを取り違えると「structurer を守った」つもりで、引用を写す仕事のほうを動かすことになる。
  *
- * `reviewer` は書いた側と別のモデルに置く。前は opus が書いて opus が読んでいたが、
- * 同じモデルの2回目は同じ死角を持つ。
- * 弱い読み手に渡せないのはそのままなので、下げるのではなく別の系列の同じ段に移した。
+ * `reviewer` は引用精度を実測済みのgpt-5.6-solに置く。
  *
  * 実測(下書き4本 × 本文2通り = 8件): 引用を本文から一字一句写した割合は
  * opus 19/19・sol 18/18(luna は 19/24 で、写せなかった指摘はコードが落とす)。
@@ -56,10 +42,10 @@ export type Role = "structurer" | "scout" | "reviewer"
 export const ROLE_MODEL: Record<Role, string> = {
   // 締めの keeper(keeper)。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
   // (keepGrounded)。scout と同じ性質なので同じ側に置く。ユーザーが話した回ごとに1回通るため、
-  // ここを opus にすると対話と同じクォータを毎回2回消費することになる。
+  // 対話ごとに通るため、処理量を抑えたmodelに置く。
   structurer: "gpt-5.6-luna",
   // 下書きの精査(assistant の draft)。外に出る前の最後の検査で、書いた側とは別の系列に置く。
-  // クォータも分かれる(CODEX_POOL)ので、精査に1回使っても対話用クォータは減らない。
+  // 既定の対話modelとは別modelに置く。
   reviewer: "gpt-5.6-sol",
   scout: "gpt-5.6-luna", // 取り込みの構造化。引用を写す役(Intake.ingest)
 }
@@ -74,7 +60,7 @@ export interface RunnerRequest {
   readonly role: Role | (string & {})
   readonly prompt: string
   readonly systemPrompt?: string
-  /** 与えると構造化応答を要求する(Claude は StructuredOutput、GPT は Responses の json_schema)。 */
+  /** 与えるとResponsesのjson_schemaによる構造化応答を要求する。 */
   readonly schema?: RuntimeSchema<unknown>
   readonly onText?: (delta: string) => void
   readonly signal?: AbortSignal
@@ -111,7 +97,7 @@ export class Runner extends Context.Service<Runner, RunnerApi>()("Runner") {}
 
 /**
  * precheck → run → クォータ状態の更新 → 会計 の共通処理。実行本体だけ差し替えられるようにしてある
- * (これが ClaudeCli 層と Stub 層の唯一の違い)。
+ * (これがCodex層とStub層の唯一の違い)。
  */
 const makeRunner = (
   exec: (req: RunnerRequest, plan: RunPlan) => Effect.Effect<Omit<RunnerResult, "model">, RunnerFailed>,
@@ -265,12 +251,10 @@ const makeRunner = (
 
 const testPlan = (role: string): RunPlan => {
   // 既知の role でなければモデル id そのものとして読む。ただし知らない id は受け付けない —
-  // 通すと `claude` 側は「不明なモデル」、Codex 側は上流の 4xx で、どちらも実行開始後に失敗する。
+  // 通すとCodex上流の4xxで、実行開始後に失敗する。
   const model = assertKnownModel(ROLE_MODEL[role as Role] ?? role)
   return {
     model,
-    // pool は role ではなくモデルで決まる。ここを固定にしていると GPT の消費が Claude のクォータに
-    // 計上され、「作業を GPT に振り分けたのに対話が止まる」が起きる。
     pool: poolForModel(model),
   }
 }
@@ -282,9 +266,7 @@ const productionPlan = (role: string): RunPlan => {
 }
 
 /**
- * 本番の層。どちらもユーザー本人の定額クォータで、実装だけがモデルで分かれる。
- * Claude は `claude -p`、GPT は Codex の Responses を HTTP で直接(src/model/codex-responses.ts)。
- * 入出力の型は揃えてあるので、ここは呼び先を選ぶだけ。
+ * 本番の層。ChatGPT OAuthの定額クォータをCodex Responsesで使う。
  */
 export const RunnerLive = Layer.effect(
   Runner,
@@ -292,7 +274,7 @@ export const RunnerLive = Layer.effect(
     (req, p) =>
       Effect.tryPromise({
         try: (abort) =>
-          (isGptModel(p.model) ? callCodex : callClaude)({
+          callCodex({
             prompt: req.prompt,
             model: p.model,
             systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,
@@ -334,7 +316,7 @@ export interface StubReply {
 }
 
 /**
- * テスト用の層。API キーも `claude` バイナリも要らない。
+ * テスト用の層。OAuth資格情報は要らない。
  * 台本を順に返し、尽きたら最後を繰り返す。precheck・記録・クォータ抑止は本番と同じ処理を通るので、
  * 「ゲートが実際に判定するか」をモデルを呼ばずに端から端まで確かめられる。
  */

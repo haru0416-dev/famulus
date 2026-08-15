@@ -98,7 +98,7 @@ test("provider結果が不明な失敗は予約をunknownのまま保持する",
         role: "structurer",
         in_tok: 0,
         out_tok: 0,
-        provenance: JSON.stringify({ outcome: "unknown", pool: "chatgpt-rmod" }),
+        provenance: JSON.stringify({ outcome: "unknown", pool: "chatgpt-oauth" }),
       })
     },
     [{ text: "", fail: "provider disconnected" }],

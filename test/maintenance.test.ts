@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 import * as Effect from "effect/Effect"
 import { afterAll, beforeAll, test } from "vitest"
 import { checkDatabase, createBackup, listBackups, verifyRestore } from "../src/db/maintenance.ts"
-import { openDb, SCHEMA_VERSION } from "../src/db/sqlite.ts"
+import { openDb } from "../src/db/sqlite.ts"
 import { RunnerStub } from "../src/model/Runner.ts"
 import { makeRuntime } from "../src/runtime.ts"
 import { Db, DbLive } from "../src/services/Db.ts"
@@ -35,10 +35,9 @@ test("WAL-safe backupを復元した一時DBで検証し成功を記録する", 
   const result = createBackup(source, backups, { keep: 2, now: new Date("2026-08-15T10:20:30.123Z") })
   writer.close()
 
-  assert.equal(result.schemaVersion, SCHEMA_VERSION)
   assert.ok(result.bytes > 0)
   assert.deepEqual(result.removed, [])
-  assert.equal(verifyRestore(result.path).schemaVersion, SCHEMA_VERSION)
+  assert.ok(verifyRestore(result.path).bytes > 0)
 
   const copy = openDb(result.path)
   assert.equal(

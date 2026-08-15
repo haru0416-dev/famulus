@@ -8,10 +8,8 @@ import * as Effect from "effect/Effect"
 import * as ManagedRuntime from "effect/ManagedRuntime"
 import * as v from "valibot"
 import { test } from "vitest"
-import { callClaude } from "../src/model/claude-cli.ts"
 import { parseCodexAuth, quotaFromHeaders } from "../src/model/codex-responses.ts"
 import { PROFILE_REFS, profileRefForModel } from "../src/model/kernel-spec.ts"
-import { needsResubmit, TOOL_PROTOCOL_SCHEMA } from "../src/model/language-model.ts"
 import {
   assertKnownModel,
   baseModel,
@@ -33,16 +31,16 @@ test("run は結果を返し、role 付きで記録する", async () => {
       const out = await h.run(
         Effect.gen(function* () {
           const runner = yield* Runner
-          const r = yield* runner.run({ role: "claude-opus-5", kind: "run", prompt: "こんにちは" })
+          const r = yield* runner.run({ role: "gpt-5.6-sol", kind: "run", prompt: "こんにちは" })
           const t = yield* (yield* Ledger).today()
           const row = yield* (yield* Db).get("SELECT role, model FROM ledger")
           return { r, t, row }
         }),
       )
       assert.equal(out.r.text, "はい")
-      assert.equal(out.r.model, "claude-opus-5")
+      assert.equal(out.r.model, "gpt-5.6-sol")
       assert.equal(out.t.runs, 1)
-      assert.equal(out.row?.role, "claude-opus-5")
+      assert.equal(out.row?.role, "gpt-5.6-sol")
       assert.equal(h.calls.length, 1)
       assert.equal(h.calls[0]?.prompt, "こんにちは")
     },
@@ -79,7 +77,7 @@ test("halt が立っていると run はモデルに到達しない", async () =
         Effect.gen(function* () {
           yield* (yield* Governance).writeHalt("停止", "2026-08-08T09:00:00Z")
           const runner = yield* Runner
-          yield* runner.run({ role: "claude-opus-5", kind: "run", prompt: "走るな" })
+          yield* runner.run({ role: "gpt-5.6-sol", kind: "run", prompt: "走るな" })
         }),
       )
       assert.equal((e as { _tag: string })._tag, "Halt")
@@ -103,7 +101,7 @@ test("クォータ枯渇後はリセット時刻まで再実行を抑止する",
       const first = await h.fail(
         Effect.gen(function* () {
           const runner = yield* Runner
-          yield* runner.run({ role: "claude-opus-5", kind: "run", prompt: "1回目" })
+          yield* runner.run({ role: "gpt-5.6-sol", kind: "run", prompt: "1回目" })
         }),
       )
       assert.equal((first as { _tag: string })._tag, "RunnerFailed")
@@ -111,14 +109,20 @@ test("クォータ枯渇後はリセット時刻まで再実行を抑止する",
       const second = await h.fail(
         Effect.gen(function* () {
           const runner = yield* Runner
-          yield* runner.run({ role: "claude-opus-5", kind: "run", prompt: "2回目" })
+          yield* runner.run({ role: "gpt-5.6-sol", kind: "run", prompt: "2回目" })
         }),
       )
       // リセット前のクォータへ毎 run 再試行しない。
       assert.equal((second as { _tag: string })._tag, "QuotaCooldown")
       assert.equal(h.calls.length, 1)
     },
-    [{ text: "", fail: "usage limit reached", quota: { pool: "claude-max", window: "5h", exhausted: true } }],
+    [
+      {
+        text: "",
+        fail: "usage limit reached",
+        quota: { pool: "chatgpt-oauth", window: "5h", exhausted: true },
+      },
+    ],
   )
 })
 
@@ -129,12 +133,12 @@ test("利用可能なクォータシグナルは再実行抑止を残さない",
         Effect.gen(function* () {
           const runner = yield* Runner
           yield* runner.run({ role: "scout", kind: "run", prompt: "要約" })
-          return yield* (yield* Db).meta("quota:claude-max")
+          return yield* (yield* Db).meta("quota:chatgpt-oauth")
         }),
       )
       assert.equal(left, undefined)
     },
-    [{ text: "要約した", quota: { pool: "claude-max", window: "5h", usedPercent: 30 } }],
+    [{ text: "要約した", quota: { pool: "chatgpt-oauth", window: "5h", usedPercent: 30 } }],
   )
 })
 
@@ -144,19 +148,18 @@ test("役割→モデルは静的表。role 名でなければモデル id そ�
       Effect.gen(function* () {
         const runner = yield* Runner
         return {
-          dialogue: runner.plan("claude-opus-5"),
+          dialogue: runner.plan("gpt-5.6-sol"),
           scout: runner.plan("scout"),
-          raw: runner.plan("claude-haiku-4-5"),
+          raw: runner.plan("gpt-5.6-sol"),
         }
       }),
     )
-    assert.equal(plans.dialogue.model, "claude-opus-5")
+    assert.equal(plans.dialogue.model, "gpt-5.6-sol")
     assert.equal(plans.scout.model, "gpt-5.6-luna")
-    assert.equal(plans.raw.model, "claude-haiku-4-5")
-    // クォータは別々に数える。同じ pool になっていると、作業を GPT に振り分けても対話が止まる。
-    assert.equal(plans.dialogue.pool, "claude-max")
-    assert.equal(plans.scout.pool, "chatgpt-rmod")
-    assert.notEqual(plans.dialogue.pool, plans.scout.pool)
+    assert.equal(plans.raw.model, "gpt-5.6-sol")
+    // modelは役割で分けるが、クォータは同じChatGPT OAuth枠に載る。
+    assert.equal(plans.dialogue.pool, "chatgpt-oauth")
+    assert.equal(plans.scout.pool, "chatgpt-oauth")
   })
 })
 
@@ -167,7 +170,7 @@ test("production Runnerは任意model IDをprovider I/O前に拒否する", asyn
       () =>
         rt.runPromise(
           Effect.flatMap(Runner, (runner) =>
-            runner.run({ role: "claude-opus-5", kind: "raw-model", prompt: "呼ばない" }),
+            runner.run({ role: "gpt-5.6-sol", kind: "raw-model", prompt: "呼ばない" }),
           ),
         ),
       /固定roleのみ/,
@@ -185,21 +188,24 @@ test("production roleの全modelに固定Profileがある", () => {
   }
 })
 
+test("generation 1のGPT Profile digestを維持する", () => {
+  assert.equal(
+    PROFILE_REFS["gpt-5.6-sol"].digest,
+    "67ccd6de67d2c436dcf632a2642f09af90fb352339ec9e830d93a470ecbda82b",
+  )
+  assert.equal(
+    PROFILE_REFS["gpt-5.6-luna"].digest,
+    "810ca5ddcc3ee573d8b03b0baad42f0ee9bbef1fd60c7a38c6c123ff5d2f7ab1",
+  )
+})
+
 /**
  * 混在 routing の要点。経路とクォータはモデルで決まる。
  * 環境変数1つで決めていた頃は、GPT に切り替えると対話まで別経路になった。
  */
-test("モデルごとに経路とクォータが分かれる", async () => {
-  // GPT は `claude -p` 側へ行かない。行くと Claude のサブスクで GPT を呼ぶことになり、上流で失敗する。
-  await assert.rejects(
-    () => callClaude({ prompt: "x", model: "gpt-5.6-luna" }),
-    /codex-responses/,
-    "GPT が Claude CLI 経路に入らないこと",
-  )
-
-  assert.equal(poolForModel("gpt-5.6-luna"), "chatgpt-rmod")
-  assert.equal(poolForModel("claude-opus-5"), "claude-max")
-  assert.equal(poolForModel("claude-haiku-4-5"), "claude-max")
+test("全modelが同じChatGPT OAuthクォータに載る", () => {
+  assert.equal(poolForModel("gpt-5.6-luna"), "chatgpt-oauth")
+  assert.equal(poolForModel("gpt-5.6-sol"), "chatgpt-oauth")
 })
 
 /**
@@ -262,7 +268,7 @@ test("Codex の応答ヘッダから使用率の高い窓を読む", () => {
     },
     now,
   )
-  assert.equal(q?.pool, "chatgpt-rmod")
+  assert.equal(q?.pool, "chatgpt-oauth")
   assert.equal(q?.window, "300m")
   assert.equal(q?.usedPercent, 80)
   assert.equal(q?.resetsAtMs, now + 60_000)
@@ -295,7 +301,7 @@ test("`-web` は外に出られる目印で、上流には接尾辞を外して�
   assert.equal(baseModel("gpt-5.6-luna-web"), "gpt-5.6-luna")
   assert.equal(baseModel("gpt-5.6-luna"), "gpt-5.6-luna")
   // クォータは本体と同じ。外を見たかどうかで会計単位は変わらない。
-  assert.equal(poolForModel("gpt-5.6-luna-web"), "chatgpt-rmod")
+  assert.equal(poolForModel("gpt-5.6-luna-web"), "chatgpt-oauth")
 })
 
 test("検索結果の引用マーカーを DB に持ち込まない", () => {
@@ -313,35 +319,21 @@ test("検索結果の引用マーカーを DB に持ち込まない", () => {
  * 文面では判定しない — 「ツールが使えない」と書いてあるかどうかで決めると、
  * 呼ぶ必要が無くてそう書いた回までやり直すことになる。見るのは CLI の tool_use_error だけ。
  */
-test("ネイティブツール呼び出しが拒否され、提出が0件のときだけ再提出する", () => {
-  assert.equal(needsResubmit(true, true, 0), true)
-  assert.equal(needsResubmit(true, true, 1), false)
-  assert.equal(needsResubmit(true, false, 0), false)
-  assert.equal(needsResubmit(true, undefined, 0), false)
-  assert.equal(needsResubmit(false, true, 0), false)
-})
-
-test("ツール提出中の text は利用者向け経過を書かせない", () => {
-  const text = TOOL_PROTOCOL_SCHEMA.properties.text
-  assert.match(text.description, /途中.*空文字/)
-})
-
 /**
  * 精査役は書いた側と別の系列に置く。同じモデルの2回目は同じ死角を持つ。
  * クォータも分かれていること(CODEX_POOL)まで確認する — 同じ pool に記録すると、精査1回ぶん対話用クォータが減る。
  */
-test("精査役は対話と別のモデル・別の枠から出る", async () => {
+test("精査役は実測済みのsolに固定する", async () => {
   await withHarness(
     async (h) => {
       const out = await h.run(
         Effect.gen(function* () {
           const runner = yield* Runner
-          return { dialogue: runner.plan("claude-opus-5"), reviewer: runner.plan("reviewer") }
+          return runner.plan("reviewer")
         }),
       )
-      assert.notEqual(out.reviewer.model, out.dialogue.model)
-      assert.notEqual(out.reviewer.pool, out.dialogue.pool)
-      assert.equal(out.reviewer.pool, poolForModel(ROLE_MODEL.reviewer))
+      assert.equal(out.model, "gpt-5.6-sol")
+      assert.equal(out.pool, poolForModel(ROLE_MODEL.reviewer))
     },
     [{ text: "" }],
   )

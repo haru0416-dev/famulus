@@ -17,6 +17,28 @@ test("SQLiteのmemory pathと空のcycle unitを保持する", () => {
   assert.equal(config.cycle.unit, "")
 })
 
+test("model既定値はGPTだけで構成する", () => {
+  assert.deepEqual(parseConfig({}, "/tmp/open-zero").models, {
+    default: "gpt-5.6-sol",
+    cycle: "gpt-5.6-sol",
+    work: "gpt-5.6-luna",
+    research: "gpt-5.6-luna-web",
+  })
+})
+
+test.each([
+  "OPEN_ZERO_MODEL",
+  "OPEN_ZERO_CYCLE_MODEL",
+  "OPEN_ZERO_WORK_MODEL",
+  "OPEN_ZERO_RESEARCH_MODEL",
+] as const)("%sのClaude modelを起動前に拒否する", (key) => {
+  assert.throws(() => parseConfig({ [key]: "claude-opus-5" }, "/tmp/open-zero"), ConfigError)
+})
+
+test("terra modelを起動前に拒否する", () => {
+  assert.throws(() => parseConfig({ OPEN_ZERO_MODEL: "gpt-5.6-terra" }, "/tmp/open-zero"), ConfigError)
+})
+
 test.each(["NaN", "Infinity", "1e3", "-1", "1.5"])("不正な数値 %s を拒否する", (value) => {
   assert.throws(() => parseConfig({ OPEN_ZERO_CYCLE_TIMEOUT_MS: value }, "/tmp/open-zero"), ConfigError)
 })

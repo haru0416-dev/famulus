@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "vitest"
-import { SCHEMA_SQL, SCHEMA_VERSION } from "../src/db/sqlite.ts"
+import { SCHEMA_SQL } from "../src/db/sqlite.ts"
 import { presence, stateLine } from "../src/presence.ts"
 
 /** 現行schemaのDBを1つ作る。shape境界も含めてpresenceと同じ条件で読む。 */
@@ -22,7 +22,6 @@ const withDb = (fn: (path: string, db: Database) => void): void => {
   const db = new Database(path)
   try {
     db.exec(SCHEMA_SQL)
-    db.run("INSERT INTO schema_meta VALUES ('version',?)", [SCHEMA_VERSION])
     fn(path, db)
   } finally {
     db.close()
@@ -60,16 +59,6 @@ test("未読があれば件数を前に出す", () => {
 
 test("DB が読めなければ文は作らない", () => {
   assert.equal(stateLine(join(tmpdir(), "oz-presence-無い.db")), undefined)
-})
-
-test("旧versionのDBは部分的に表示しない", () => {
-  withDb((path, db) => {
-    db.run("UPDATE schema_meta SET value='2' WHERE key='version'")
-    db.run(`INSERT INTO watchlist
-      (id,subject,opened_at,last_activity_at,next_move_owner,status,cooldown_hours)
-      VALUES ('a','a','2026-08-14T00:00:00Z','2026-08-14T00:00:00Z','human','open',24)`)
-    assert.equal(stateLine(path), undefined)
-  })
 })
 
 /**

@@ -1,5 +1,5 @@
 /**
- * DB サービス。新規 DB は `src/db/schema.sql` から作り、既存 DB は順番にmigrationする。
+ * DB サービス。新規 DB は `src/db/schema.sql` から一度だけ作り、既存 DB は現行shapeだけを受理する。
  *
  * events の append-only は SQL トリガで強制する(DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)。
  * どのドライバから触っても同じように掛かる。
@@ -17,15 +17,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { appConfig } from "../core/config.ts"
 import { DbFailed } from "../core/errors.ts"
-import {
-  assertCurrentSchema,
-  assertUnownedEmptyDb,
-  migrateToCurrent,
-  openDb,
-  SCHEMA_SQL,
-  SCHEMA_VERSION,
-  type Sqlite,
-} from "../db/sqlite.ts"
+import { assertCurrentSchema, assertUnownedEmptyDb, openDb, SCHEMA_SQL, type Sqlite } from "../db/sqlite.ts"
 export interface Row {
   readonly [k: string]: unknown
 }
@@ -113,15 +105,8 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
                 if (afterLock.n === 0) {
                   assertUnownedEmptyDb(d, path)
                   d.exec(SCHEMA_SQL)
-                  d.prepare("INSERT INTO schema_meta (key, value)VALUES ('version', ?)").run(SCHEMA_VERSION)
-                  d.prepare("INSERT INTO schema_migrations (version, name, applied_at)VALUES (?, ?, ?)").run(
-                    Number(SCHEMA_VERSION),
-                    "baseline",
-                    new Date().toISOString(),
-                  )
                   assertCurrentSchema(d, path)
                 } else {
-                  migrateToCurrent(d, path)
                   assertCurrentSchema(d, path)
                 }
                 d.exec("COMMIT")
@@ -132,7 +117,6 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
             } else {
               d.exec("BEGIN IMMEDIATE")
               try {
-                migrateToCurrent(d, path)
                 assertCurrentSchema(d, path)
                 d.exec("COMMIT")
               } catch (e) {
@@ -140,23 +124,7 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
                 throw e
               }
             }
-            // 現行 schema を受理した DB だけ、旧実行状態を一度だけ新しい名前へ移す。
-            d.exec("BEGIN IMMEDIATE")
-            try {
-              d.exec(`INSERT INTO schema_meta (key, value)
-                SELECT 'cycle:' || substr(key, 6), value FROM schema_meta
-                 WHERE key LIKE 'tick:%'
-                   AND NOT EXISTS (
-                     SELECT 1 FROM schema_meta current
-                      WHERE current.key = 'cycle:' || substr(schema_meta.key, 6)
-                   );
-                DELETE FROM schema_meta WHERE key LIKE 'tick:%';`)
-              d.exec("COMMIT")
-            } catch (e) {
-              d.exec("ROLLBACK")
-              throw e
-            }
-            // 版を受理してから永続設定を変える。拒否したDBは接続モードも変更しない。
+            // shapeを受理してから接続モードを変更する。拒否したDBは変更しない。
             if (path !== ":memory:") d.exec("PRAGMA journal_mode = WAL;")
             return d
           },

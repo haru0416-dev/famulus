@@ -31,9 +31,9 @@ test("取り出せるものが無ければ元の文字列を返す", () => {
 
 test("何段包まれていても辿る", () => {
   const deep = new Error("外", {
-    cause: new Error("中", { cause: new Error("pool claude-max は再実行抑止中") }),
+    cause: new Error("中", { cause: new Error("pool chatgpt-oauth は再実行抑止中") }),
   })
-  assert.equal(causeReason(deep), "pool claude-max は再実行抑止中")
+  assert.equal(causeReason(deep), "pool chatgpt-oauth は再実行抑止中")
 })
 
 test("cause が輪になっていても止まる", () => {

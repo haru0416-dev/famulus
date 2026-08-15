@@ -13,13 +13,12 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
-import { assertCurrentSchema, openDb, schemaVersion } from "./sqlite.ts"
+import { assertCurrentSchema, openDb } from "./sqlite.ts"
 
 const BACKUP_FILE = /^open-zero-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f-]+\.db$/
 
 export interface DatabaseCheck {
   readonly path: string
-  readonly schemaVersion: string
   readonly bytes: number
 }
 
@@ -47,7 +46,7 @@ export const checkDatabase = (path: string): DatabaseCheck => {
     if (foreignKeys.length !== 0)
       throw new Error(`foreign_key_check failed: ${foreignKeys.length} violation(s)`)
     assertCurrentSchema(db, path)
-    return { path, schemaVersion: schemaVersion(db) as string, bytes: statSync(path).size }
+    return { path, bytes: statSync(path).size }
   } finally {
     db.close()
   }
@@ -196,7 +195,6 @@ export const createBackup = (
     return {
       path: backupPath,
       createdAt,
-      schemaVersion: restored.schemaVersion,
       bytes: restored.bytes,
       removed: removed.map((path) => basename(path)),
     }

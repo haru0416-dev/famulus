@@ -5,12 +5,6 @@ CREATE TABLE schema_meta (
   value TEXT NOT NULL
 ) STRICT;
 
-CREATE TABLE schema_migrations (
-  version    INTEGER PRIMARY KEY,
-  name       TEXT NOT NULL UNIQUE,
-  applied_at TEXT NOT NULL
-) STRICT;
-
 CREATE TABLE cycle_lease (
   lease_name          TEXT PRIMARY KEY CHECK (lease_name = 'cycle'),
   state               TEXT NOT NULL CHECK (state IN ('free','held','released')),

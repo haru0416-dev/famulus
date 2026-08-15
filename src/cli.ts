@@ -44,7 +44,7 @@ import { localDayRange, localStamp, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces } from "./core/workspaces.ts"
 import { checkDatabase, createBackup, latestBackup, verifyAndRecordRestore } from "./db/maintenance.ts"
 import { readJournal, renderJournal } from "./journal.ts"
-import { CLAUDE_POOL, CODEX_POOL } from "./model/models.ts"
+import { CODEX_POOL } from "./model/models.ts"
 import { isRefusal, runtime } from "./runtime.ts"
 import { Attention, type NextMove } from "./services/Attention.ts"
 import { CycleLease } from "./services/CycleLease.ts"
@@ -185,11 +185,10 @@ const program = (argv: readonly string[]) =>
         const ledger = yield* Ledger
         const db = yield* Db
         const halt = yield* gov.readHalt
-        // クォータの pool は2つある。対話は claude-max、作業と調査は codex。片方だけ見ていると
-        // 「利用可」と出したまま取り込みが全部失敗する、が起こる。
+        // production modelは全て同じChatGPT OAuthクォータを使う。
         const nowMs = Date.now()
         const pools: string[] = []
-        for (const pool of [CLAUDE_POOL, CODEX_POOL]) {
+        for (const pool of [CODEX_POOL]) {
           const cd = yield* gov.quotaCooldown(pool, nowMs)
           pools.push(
             cd
@@ -575,7 +574,7 @@ const main = async (): Promise<void> => {
       console.log(
         [
           `バックアップ完了: ${result.path}`,
-          `schema v${result.schemaVersion} / ${kb(result.bytes)}`,
+          `DB ${kb(result.bytes)}`,
           `復元検証: ok`,
           `削除: ${result.removed.length} 世代`,
         ].join("\n"),
@@ -590,7 +589,7 @@ const main = async (): Promise<void> => {
       const backup = paths[0] ? resolve(config.rootDir, paths[0]) : latestBackup(config.paths.backups)
       if (!backup) throw new Error("検証するbackupが無い: 先に oz backup")
       const result = verifyAndRecordRestore(config.paths.db, backup)
-      console.log(`復元検証完了: ${backup}\nschema v${result.schemaVersion} / ${kb(result.bytes)}`)
+      console.log(`復元検証完了: ${backup}\nDB ${kb(result.bytes)}`)
       return
     }
     if (command === "doctor") {
@@ -601,7 +600,7 @@ const main = async (): Promise<void> => {
       console.log(
         [
           "設定: ok",
-          `live DB: ok (schema v${live.schemaVersion} / ${kb(live.bytes)})`,
+          `live DB: ok (${kb(live.bytes)})`,
           restored
             ? `最新backup復元: ok (${backup} / ${kb(restored.bytes)})`
             : "最新backup復元: 未実施 (backupなし — oz backup)",

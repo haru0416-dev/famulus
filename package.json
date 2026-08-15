@@ -1,7 +1,7 @@
 {
   "name": "open-zero",
   "version": "0.0.0",
-  "description": "famulus の governance/memory を Effect で持ち上げ、道具ループを AI SDK に載せる層。推論はサブスク枠(claude -p)のまま。",
+  "description": "famulus の governance/memory を Effect で持ち上げ、GPTの道具ループを AI SDK に載せる層。",
   "type": "module",
   "private": true,
   "engines": {

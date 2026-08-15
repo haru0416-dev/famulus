@@ -61,12 +61,12 @@ test("provenance は JSON として保存される", async () => {
         yield* ledger.record({
           kind: "run",
           role: "dialogue",
-          provenance: { pool: "claude-max", notionalUsd: 0.031 },
+          provenance: { pool: "chatgpt-oauth", notionalUsd: 0.031 },
           at: AT,
         })
         return yield* db.get("SELECT provenance FROM ledger")
       }),
     )
-    assert.deepEqual(JSON.parse(String(row?.provenance)), { pool: "claude-max", notionalUsd: 0.031 })
+    assert.deepEqual(JSON.parse(String(row?.provenance)), { pool: "chatgpt-oauth", notionalUsd: 0.031 })
   })
 })

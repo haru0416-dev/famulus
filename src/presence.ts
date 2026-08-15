@@ -22,7 +22,6 @@ import { Database } from "bun:sqlite"
 import { appConfig } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { nowIso } from "./core/time.ts"
-import { SCHEMA_VERSION, schemaVersion } from "./db/sqlite.ts"
 
 loadEnv()
 
@@ -56,7 +55,6 @@ export function stateLine(path: string = appConfig().paths.db): string | undefin
     try {
       // 最初に置く。これより前に読むと、他が WAL を開き直している間は locked で表示が消える。
       db.exec("PRAGMA busy_timeout = 2000;")
-      if (schemaVersion(db) !== SCHEMA_VERSION) return undefined
       const cursor = Number(
         (db.query("SELECT value v FROM schema_meta WHERE key='cycle:cursor'").get() as { v?: string } | null)
           ?.v ?? 0,
