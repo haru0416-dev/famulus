@@ -198,26 +198,34 @@ export function toText(raw: string, contentType: string): string {
   }
   const body = decodeEntities(
     trimChrome(html)
-      // 閉じが無ければ末尾まで落とす。取得上限で切ると最後の `<script>` が閉じないまま終わり、
-      // その中身が丸ごと本文になる。
+      // 閉じが無ければ末尾まで落とす。`Web.ts` の取得上限で切ると最後の `<script>` が
+      // 閉じないまま終わり、その中身が丸ごと本文になる。
+      // 上限を上げても、それを超えるページでは同じことが起きる。
       .replace(/<script[\s\S]*?(?:<\/script>|$)/gi, " ")
       .replace(/<style[\s\S]*?(?:<\/style>|$)/gi, " ")
       .replace(/<!--[\s\S]*?(?:-->|$)/g, " ")
       .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
       .replace(/<br\s*\/?>/gi, "\n")
-      // 属性値の中の `>` をタグの終わりと取り違えない。引用符で囲まれた塊を1つの単位として飛ばす。
+      // 属性値の中の `>` をタグの終わりと取り違えない。Wikipedia の infobox のように
+      // 属性に生の JSON を持つページでは、単純な `<[^>]+>` が属性の途中で閉じたと見なして
+      // その JSON が本文に混ざる。引用符で囲まれた塊を1つの単位として飛ばす。
       .replace(/<\/?[a-zA-Z][a-zA-Z0-9:-]*(?:"[^"]*"|'[^']*'|[^>"'])*>/g, " ")
       // 引用符が閉じていない壊れたタグは上で剥がれない。取りこぼしをここで掃除する。
       .replace(/<[^>]+>/g, " "),
   )
     .replace(/[ \t]+/g, " ")
+    // 行頭・行末の空白を先に落とす。これが無いと、タグを剥がした跡が空白1つだけの行として残り、
+    // `\n{3,}` の畳み込みに当たらない。取得側の文字数枠がその空白で埋まる。
     .replace(/[ \t]*\n[ \t]*/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-  // `trimChrome` が塊を選ぶとページの題は本文の外なので落ちる。頭に戻す。
+  // `trimChrome` が塊を選ぶとページの題は本文の外なので落ちる。読み手は複数のページを並べて
+  // 読むので、見出しが無いとどれの話か取り違える。頭に戻す。
   const title = pick(html, "title")
   const headed = title && !body.slice(0, 200).includes(title) ? `${title}\n\n${body}` : body
-  // 本文が組み上がらないページでも `<meta>` には題と説明が入っている。
+  // 本文が組み上がらないページでも `<meta>` には題と説明が入っている(YouTube・ニコニコ・
+  // note・Bluesky は `<title>` すら JS が後から入れるので、ここが無いと返る文字が 0 になる)。
+  // 本文が取れているページでは触らない — 拾った説明は本文の要約で、並べると同じ話が二重になる。
   return headed.length >= 300 ? headed : [metaSummary(html), headed].filter(Boolean).join("\n\n").trim()
 }
 
@@ -256,18 +264,24 @@ export function isReadableType(contentType: string): boolean {
 }
 
 /**
- * バイト列を文字にする。日本語のページは utf-8 とは限らない。優先順は
- * Content-Type の charset → HTML の meta 宣言 → utf-8。
+ * バイト列を文字にする。日本語のページは utf-8 とは限らない(Shift_JIS のページを utf-8 で読むと
+ * 本文の大半が置換文字になる)。優先順は Content-Type の charset → HTML の meta 宣言 → utf-8。
+ *
+ * 末尾が文字の途中で切れていたら、その分は捨てる。取得上限の打ち切りはバイト数で入るので、
+ * 日本語のページでは 3 バイト文字の途中で終わることがある。`stream: true` で復号すると、
+ * 復号コンテナは不完全な列を出力せずに持ち越すので、そのまま捨てられる。
  */
 export function decodeBody(buf: Uint8Array, contentType: string): string {
   const fromHeader = /charset=["']?([\w-]+)/i.exec(contentType)?.[1]
-  // meta の宣言は先頭にあるので、探すのは頭の 2KB だけでいい。
+  // meta の宣言は先頭にあるので、探すのは頭の 2KB だけでいい(全部 latin1 に起こす必要は無い)。
   const head = Buffer.from(buf.slice(0, 2048)).toString("latin1")
   const fromMeta =
     /<meta[^>]+charset=["']?([\w-]+)/i.exec(head)?.[1] ?? /<\?xml[^>]+encoding=["']([\w-]+)/i.exec(head)?.[1]
   for (const enc of [fromHeader, fromMeta, "utf-8"]) {
     if (!enc) continue
     try {
+      // 名前はページから拾った文字列で、既知の一覧に入っているとは限らない。
+      // 型は既知の名前しか許さないので、投げさせて下の catch で落とすために外す。
       return new TextDecoder(enc as never, { fatal: false }).decode(buf, { stream: true })
     } catch {
       // 知らない名前の charset。次の候補へ落とす。
