@@ -15,6 +15,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import * as Effect from "effect/Effect"
+import { appConfig } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { nowIso } from "./core/time.ts"
 import { drainInbox } from "./inbox.ts"
@@ -22,11 +23,12 @@ import { run, runtime } from "./runtime.ts"
 import { Db } from "./services/Db.ts"
 
 loadEnv()
+const CONFIG = appConfig()
 
 const exec = promisify(execFile)
 
 /** 起動する unit。検査のときだけ空にして、実際に systemd を呼ばない。 */
-const cycleUnit = (): string => process.env.OPEN_ZERO_CYCLE_UNIT ?? "open-zero-cycle.service"
+const cycleUnit = (): string => CONFIG.cycle.unit
 
 /**
  * 再起動を試すまでの最小間隔。クォータ枯渇や停止で cycle が即時終了したとき、未読は残るので

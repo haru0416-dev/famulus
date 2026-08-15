@@ -32,6 +32,7 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import { DREAM_DAYS, dream } from "./agent/dream.ts"
 import { CLEANUP_DAYS, cleanup } from "./core/cleanup.ts"
+import { appConfig } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
 import { selfdev } from "./core/selfdev.ts"
@@ -524,6 +525,7 @@ function describe(e: unknown): string {
 
 const main = async (): Promise<void> => {
   loadEnv()
+  appConfig()
   const rt = runtime()
   try {
     // runPromise は失敗を FiberFailure で包んで投げてくる(message が "An error has occurred" になる)。

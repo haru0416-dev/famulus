@@ -16,6 +16,7 @@ import { dirname } from "node:path"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { appConfig } from "../core/config.ts"
 import { DbFailed } from "../core/errors.ts"
 import { assertSchemaV4, openDb, SCHEMA_SQL, SCHEMA_VERSION } from "../db/sqlite.ts"
 export interface Row {
@@ -32,10 +33,10 @@ export interface DbApi {
 
 export class Db extends Context.Service<Db, DbApi>()("Db") {}
 
-export const DEFAULT_DB_PATH = process.env.OPEN_ZERO_DB ?? ".data/open-zero.db"
+export const defaultDbPath = (): string => appConfig().paths.db
 
 /** 接続を開き、スキーマを適用する。`:memory:` を渡せばプロセス内だけの本物の SQLite。 */
-export const DbLive = (path: string = DEFAULT_DB_PATH): Layer.Layer<Db, DbFailed> =>
+export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed> =>
   Layer.effect(
     Db,
     Effect.gen(function* () {

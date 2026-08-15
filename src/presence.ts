@@ -19,15 +19,12 @@
  * DB が読めなくても接続は落とさない。表示のために接続を切らない。
  */
 import { Database } from "bun:sqlite"
+import { appConfig } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { nowIso } from "./core/time.ts"
 import { SCHEMA_VERSION, schemaVersion } from "./db/sqlite.ts"
-import { DEFAULT_DB_PATH } from "./services/Db.ts"
 
 loadEnv()
-
-const token = process.env.OPEN_ZERO_DISCORD_TOKEN
-const API = process.env.OPEN_ZERO_DISCORD_API ?? "https://discord.com/api/v10"
 
 /** 既定の入口。READY が `resume_gateway_url` を寄越したら、次はそちらへ繋ぐ。 */
 const ENTRY = "wss://gateway.discord.gg/?v=10&encoding=json"
@@ -53,7 +50,7 @@ const log = (m: string): void => console.log(`${nowIso()} ${m}`)
  * 表示に出す文。読み取り専用で開く — 常駐が書き込みの錠を持つと、cycle が待たされる。
  * 読めなければ `undefined`(掃除の最中や、まだ DB が無い状態は普通にある)。
  */
-export function stateLine(path: string = DEFAULT_DB_PATH): string | undefined {
+export function stateLine(path: string = appConfig().paths.db): string | undefined {
   try {
     const db = new Database(path, { readonly: true })
     try {
@@ -107,6 +104,7 @@ interface Session {
 function once(
   prev: Session | undefined,
   seqIn: number | null,
+  token: string,
 ): Promise<{ session: Session | undefined; seq: number | null; fatal?: number; connected: boolean }> {
   return new Promise((done) => {
     const ws = new WebSocket(prev ? `${prev.url}/?v=10&encoding=json` : ENTRY)
@@ -217,13 +215,15 @@ function once(
 }
 
 async function main(): Promise<void> {
+  const config = appConfig()
+  const token = config.discord.token
   if (!token) {
     // 設定が無いのは異常ではない(Discord と同じ契約)。走り続ける理由も無い。
     log("OPEN_ZERO_DISCORD_TOKEN が無い — 接続しない")
     return
   }
   // 出せる先が実在するかを1回だけ確かめる。トークンが無効だと 4004 で無限に張り直すことになる。
-  const me = await fetch(`${API}/users/@me`, { headers: { authorization: `Bot ${token}` } })
+  const me = await fetch(`${config.discord.api}/users/@me`, { headers: { authorization: `Bot ${token}` } })
   if (!me.ok) {
     log(`トークンが通らない: ${me.status} — 接続しない`)
     process.exitCode = 1
@@ -236,7 +236,7 @@ async function main(): Promise<void> {
   let seq: number | null = null
   let wait = 1_000
   for (;;) {
-    const r = await once(session, seq)
+    const r = await once(session, seq, token)
     if (r.fatal !== undefined) {
       log(`直らない終わり方: ${r.fatal} — 止まる`)
       process.exitCode = 1

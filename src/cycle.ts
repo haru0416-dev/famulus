@@ -22,6 +22,7 @@ import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
 import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
+import { appConfig } from "./core/config.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
 import { causeReason, describeRefusal } from "./core/errors.ts"
@@ -39,6 +40,7 @@ import { Memory } from "./services/Memory.ts"
 
 // モジュール直下の設定より先に読む。下の const は評価時に env を見るので、順番が意味を持つ。
 loadEnv()
+const CONFIG = appConfig()
 
 /**
  * 1回の cycle に許す時間。上限を付けないと無限に待つ。
@@ -47,11 +49,11 @@ loadEnv()
  * 実測した回は 270 秒の時点でまだ3稿目を書いていた。unit の `TimeoutStartSec` は 600 秒なので、
  * その内側に収まる範囲で伸ばす。個々のコンテナ走行は180秒で先に切り、締め処理の時間を残す。
  */
-const TIMEOUT_MS = Number(process.env.OPEN_ZERO_CYCLE_TIMEOUT_MS ?? 420_000)
+const TIMEOUT_MS = CONFIG.cycle.timeoutMs
 
 const short = (id: string) => id.slice(0, 8)
 /** cycle が使うモデル。既定は対話と同じ — 自走のほうを安くしたいときだけ差し替える。 */
-const cycleModel = () => process.env.OPEN_ZERO_CYCLE_MODEL ?? process.env.OPEN_ZERO_MODEL ?? "claude-opus-5"
+const cycleModel = () => CONFIG.models.cycle
 const log = (...parts: unknown[]) => console.error("[cycle]", ...parts)
 
 /** イベントの content は JSON 文字列。人(とモデル)が読める1行に戻す。 */

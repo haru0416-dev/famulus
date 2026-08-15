@@ -16,6 +16,7 @@ import { createInterface } from "node:readline/promises"
 import * as Effect from "effect/Effect"
 import { createAssistant } from "./agent/assistant.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
+import { appConfig } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { causeReason } from "./core/errors.ts"
 import { run, runtime } from "./runtime.ts"
@@ -23,6 +24,7 @@ import { Attention } from "./services/Attention.ts"
 import { Memory } from "./services/Memory.ts"
 
 loadEnv()
+appConfig()
 
 const rt = runtime()
 const assistant = createAssistant()
