@@ -161,6 +161,30 @@ interface RawMessage {
   readonly reactions?: { emoji: { name: string }; count: number; me: boolean }[]
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const isRawReaction = (value: unknown): boolean =>
+  isRecord(value) &&
+  typeof value.count === "number" &&
+  typeof value.me === "boolean" &&
+  isRecord(value.emoji) &&
+  typeof value.emoji.name === "string"
+
+const isRawMessages = (value: unknown): value is RawMessage[] =>
+  Array.isArray(value) &&
+  value.every(
+    (message: unknown) =>
+      isRecord(message) &&
+      typeof message.id === "string" &&
+      /^\d+$/.test(message.id) &&
+      typeof message.content === "string" &&
+      isRecord(message.author) &&
+      typeof message.author.id === "string" &&
+      (message.reactions === undefined ||
+        (Array.isArray(message.reactions) && message.reactions.every(isRawReaction))),
+  )
+
 /** snowflake は上位ビットに生成時刻を持つ。文字列比較を避け、同時刻内は数値順で扱う。 */
 const newer = (a: string, b: string): boolean => BigInt(a) > BigInt(b)
 
@@ -780,8 +804,18 @@ const makeDiscord = () =>
         // 並びがチャンネルの順序に依存する。`Effect.all` は入力順で返す。
         const fetched = yield* Effect.all(
           (yield* listening()).map((ch) =>
-            readJson<RawMessage[]>(`/channels/${ch}/messages?limit=50`).pipe(
-              Effect.map((msgs) => ({ ch, msgs })),
+            readJson<unknown>(`/channels/${ch}/messages?limit=50`).pipe(
+              Effect.flatMap((msgs) =>
+                isRawMessages(msgs)
+                  ? Effect.succeed({ ch, msgs })
+                  : Effect.fail(
+                      new ConnectorFailed({
+                        connector: "Discord",
+                        operation: `GET /channels/${ch}/messages`,
+                        message: "response is not a message array",
+                      }),
+                    ),
+              ),
             ),
           ),
           { concurrency: FETCH_AT_ONCE },

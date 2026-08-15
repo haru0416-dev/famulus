@@ -882,6 +882,25 @@ test("受信GETの5xxを空受信にせず失敗として返す", async () => {
   }
 })
 
+test("受信GETの不正な200応答を空受信にせず失敗として返す", async () => {
+  const dc = await fakeDiscord([], (hit) =>
+    hit.method === "GET" && hit.path.includes("/messages?")
+      ? { status: 200, body: { message: "upstream error" } }
+      : undefined,
+  )
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const result = await h.run(Effect.result(Effect.flatMap(Discord, (d) => d.pollInbound())))
+      assert.equal(result._tag, "Failure")
+      if (result._tag === "Failure") assert.equal(result.failure._tag, "ConnectorFailed")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
 test("別workerが送信中のactionをreceiptなしでsentにしない", async () => {
   const dc = await fakeDiscord()
   wire(dc.url, { talk: TALK })
