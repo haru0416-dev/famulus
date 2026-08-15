@@ -33,6 +33,7 @@ import { logPost, readJournal } from "./journal.ts"
 import { poolForModel } from "./model/models.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
 import { Attention, type CyclePlan, type ObservedEvent } from "./services/Attention.ts"
+import { CycleLease, type CycleLeaseToken } from "./services/CycleLease.ts"
 import { Db } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
 import { buildFencedPrompt, Governance, type UntrustedBlock } from "./services/Governance.ts"
@@ -289,9 +290,15 @@ const bumpCount = (key: string) =>
     return n
   })
 
-export async function runCycle(): Promise<string> {
+const assertLease = (token: CycleLeaseToken): Promise<void> =>
+  run(Effect.flatMap(CycleLease, (lease) => lease.assertCurrent(token)))
+
+async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController): Promise<string> {
+  const leaseSignal = leaseAbort.signal
   const d = await run(
     Effect.gen(function* () {
+      const lease = yield* CycleLease
+      yield* lease.assertCurrent(token)
       // planCycle より先に読む — 届いていた文がそのまま未読の入力になり、「ユーザーから
       // 言われた」ことが実行条件になる。ここが後だと、返事は次回まで読まれない。
       // poll が先に取り込んでいれば0件で通り、DB に残っているぶんが planCycle に出る。
@@ -309,18 +316,24 @@ export async function runCycle(): Promise<string> {
     // 話しかけられた回に挟むとその秒数だけ返事が遅れる。実行条件が無い回なら誰も待っていない。
     // その日に idle の回が一度も来なければ翌日へ回る — 対象期間は 7 日あり、`dream:through` が
     // 進んだところを覚えているので、飛ばした日ぶんの材料は次の回にそのまま出てくる。
-    const dreamed = (await run(dreamDue(d.at)))
-      ? await run(dream()).catch((e: unknown) => `dream: 失敗(${causeReason(e)})`)
+    const shouldDream = await run(dreamDue(d.at))
+    if (shouldDream) await assertLease(token)
+    const dreamed = shouldDream
+      ? await run(dream({ signal: leaseSignal })).catch((e: unknown) => `dream: 失敗(${causeReason(e)})`)
       : undefined
     if (dreamed) log(dreamed)
     // 削除処理も1日1回。実行済み状態は別に持つ — 見直しが失敗した日に
     // 掃除まで止まると、データの増加だけが進む。こちらはモデルを呼ばないのでクォータにも関係しない。
-    const swept = (await run(cleanupDue(d.at)))
+    const shouldClean = await run(cleanupDue(d.at))
+    if (shouldClean) await assertLease(token)
+    const swept = shouldClean
       ? await run(cleanup()).catch((e: unknown) => `cleanup: 失敗(${causeReason(e)})`)
       : undefined
     if (swept) log(swept)
     const n = await run(
       Effect.gen(function* () {
+        const lease = yield* CycleLease
+        yield* lease.assertCurrent(token)
         const att = yield* Attention
         const db = yield* Db
         const mem = yield* Memory
@@ -367,7 +380,11 @@ export async function runCycle(): Promise<string> {
   const { createAssistant } = await import("./agent/assistant.ts")
 
   try {
-    const assistant = createAssistant({ model: cycleModel() })
+    const assistant = createAssistant({
+      model: cycleModel(),
+      leaseToken: token,
+      onLeaseLost: (reason) => leaseAbort.abort(reason),
+    })
     // 道具に締切を見せる。プロンプトに書くだけでは足りない — 起動時の文は、9回目を
     // 走らせるかどうかを決める時点では過去の話になっている(src/core/deadline.ts)。
     startDeadline(TIMEOUT_MS)
@@ -382,13 +399,16 @@ export async function runCycle(): Promise<string> {
     if (d.stalled.length > 0) {
       await run(
         Effect.gen(function* () {
+          const lease = yield* CycleLease
+          yield* lease.assertCurrent(token)
           const att = yield* Attention
           yield* att.noteShown(d.stalled.map((w) => w.id))
         }),
       )
     }
     const began = Date.now()
-    const turn = await assistant.respond(prompt, { signal: deadline })
+    await assertLease(token)
+    const turn = await assistant.respond(prompt, { signal: AbortSignal.any([deadline, leaseSignal]) })
     const ms = Date.now() - began
     // 時間切れと、それ以外の止まり方を混ぜない。混ぜると「420秒で切られた」だけが DB に残り、
     // 自律実行上限への到達もモデル側の失敗も同じ文言になる。次回に何を直せばいいか読めなくなる。
@@ -411,12 +431,13 @@ export async function runCycle(): Promise<string> {
       const evidence = d.newEvents.filter((e) => e.source === "owner" && e.taint === 0)
       const material = evidence.map(renderEvent).join("\n")
       // `since` はこの回の起点。本体が既に確定させた slot を keeper が言い換え直さないための線。
+      await assertLease(token)
       kept = await run(
         keep({
           material,
           evidence: evidence.map((e) => ({ id: e.id, text: renderEvent(e) })),
           since: d.at,
-          signal: AbortSignal.timeout(KEEP_MS),
+          signal: AbortSignal.any([AbortSignal.timeout(KEEP_MS), leaseSignal]),
         }),
       ).catch((e: unknown) => `keeper: 落ちた(${causeReason(e)})`)
       log(kept)
@@ -424,6 +445,8 @@ export async function runCycle(): Promise<string> {
 
     await run(
       Effect.gen(function* () {
+        const lease = yield* CycleLease
+        yield* lease.assertCurrent(token)
         const mem = yield* Memory
         const att = yield* Attention
         const db = yield* Db
@@ -433,6 +456,7 @@ export async function runCycle(): Promise<string> {
         // 切られた回の補完文は出さない。届けてよいのは、書かれた返事だけ。
         if (spokenTo && text && !cutOff) {
           yield* discord.post({ text })
+          yield* lease.assertCurrent(token)
         }
         yield* mem.remember({
           kind: "observe",
@@ -479,12 +503,63 @@ export async function runCycle(): Promise<string> {
         // `oz journal` の値が別々に育って、食い違ったときにどちらが本当か決められなくなる。
         // 最後に置いてあるのは、外へ出すのに失敗しても commit まで済んでいるようにするため。
         const [entry] = yield* readJournal(1)
-        if (entry) yield* discord.post({ text: logPost(entry), to: "log" })
+        if (entry) {
+          yield* lease.assertCurrent(token)
+          yield* discord.post({ text: logPost(entry), to: "log" })
+        }
       }),
     )
     if (cutOff) return `止まった(${cutOff})— 走った跡は DB に残っている`
     return text ? `動いた: ${text.slice(0, 400)}` : "動いた(発話なし)"
   } finally {
+    clearDeadline()
+  }
+}
+
+export async function runCycle(): Promise<string> {
+  let token: CycleLeaseToken
+  try {
+    token = await run(
+      Effect.flatMap(CycleLease, (lease) => lease.acquire({ ttlMs: CONFIG.cycle.leaseTtlMs })),
+    )
+  } catch (error) {
+    const tag = (error as { _tag?: unknown })._tag
+    if (tag === "CycleLeaseHeld") return "見送った: 別のcycleが実行中"
+    if (tag === "CycleLeaseRecoveryUncertain") return "見送った: 前のcycleの終了を確認できない"
+    throw error
+  }
+
+  const leaseAbort = new AbortController()
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let heartbeat: Promise<void> | undefined
+  let heartbeatFailure: unknown
+  const schedule = () => {
+    timer = setTimeout(() => {
+      heartbeat = run(Effect.flatMap(CycleLease, (lease) => lease.heartbeat(token)))
+        .catch((error) => {
+          heartbeatFailure = error
+          leaseAbort.abort(error)
+        })
+        .finally(() => {
+          heartbeat = undefined
+          if (!stopped) schedule()
+        })
+    }, CONFIG.cycle.heartbeatMs)
+  }
+  schedule()
+
+  try {
+    const result = await runCycleHeld(token, leaseAbort)
+    if (heartbeatFailure) throw heartbeatFailure
+    return result
+  } finally {
+    stopped = true
+    clearTimeout(timer)
+    await heartbeat
+    await run(Effect.flatMap(CycleLease, (lease) => lease.release(token))).catch((error) => {
+      if (!heartbeatFailure) throw error
+    })
     clearDeadline()
   }
 }

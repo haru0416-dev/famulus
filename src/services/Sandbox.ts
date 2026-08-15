@@ -60,6 +60,7 @@ export interface RunOptions {
   readonly net?: boolean
   readonly timeoutMs?: number
   readonly image?: string
+  readonly signal?: AbortSignal
 }
 
 export interface RunResult {
@@ -261,10 +262,12 @@ export async function sweepOrphans(dry = false): Promise<{ removed: string[]; ke
  * 「どのコマンドがどこで失敗したか」の前後関係が消える。読む側が要るのはその順序のほう。
  */
 export async function runInSandbox(command: string, opts: RunOptions): Promise<RunResult> {
+  opts.signal?.throwIfAborted()
   if (!isAbsolute(opts.workDir)) throw new Error(`workspace は絶対パスで渡す: ${opts.workDir}`)
   mkdirSync(cacheRoot(), { recursive: true })
   // image が明示されている場合は、自動ビルドせず指定されたイメージを使う。
   const image = opts.image ?? process.env.OPEN_ZERO_RUN_IMAGE ?? (await ensureImage())
+  opts.signal?.throwIfAborted()
   const fellBack = image === BASE_IMAGE && opts.image === undefined && !process.env.OPEN_ZERO_RUN_IMAGE
   const startedAt = Date.now()
   // コンテナの名前は時刻で作る(同じ走行を続けて呼んでも衝突しない)。時間切れのとき外から消すのに要る。
@@ -284,13 +287,15 @@ export async function runInSandbox(command: string, opts: RunOptions): Promise<R
   child.stdout.on("data", take)
   child.stderr.on("data", take)
 
-  const timer = setTimeout(() => {
+  const stop = () => {
     timedOut = true
     // クライアントを殺してもコンテナは生き残る。docker の子は daemon 側にいるので、
     // プロセス木を落としても中身は走り続ける。名前を指して外から消す。
     spawn("docker", ["rm", "-f", name], { stdio: "ignore" }).on("error", () => {})
     child.kill("SIGKILL")
-  }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  }
+  const timer = setTimeout(stop, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  opts.signal?.addEventListener("abort", stop, { once: true })
 
   const exitCode = await new Promise<number>((done) => {
     child.on("error", (e) => {
@@ -302,6 +307,8 @@ export async function runInSandbox(command: string, opts: RunOptions): Promise<R
     child.on("close", (code) => done(code ?? -1))
   })
   clearTimeout(timer)
+  opts.signal?.removeEventListener("abort", stop)
+  opts.signal?.throwIfAborted()
 
   const truncated = out.length > MAX_OUTPUT_CHARS
   return {

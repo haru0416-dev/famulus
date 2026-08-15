@@ -110,6 +110,21 @@ test("見たところまで進み、次の回はその先だけを見る", async
   )
 })
 
+test("abort後は見た位置を進めない", async () => {
+  await withHarness(
+    async (h) => {
+      const controller = new AbortController()
+      controller.abort(new Error("lease lost"))
+      await assert.rejects(
+        () => h.run(seed.pipe(Effect.andThen(dream({ at: AT, signal: controller.signal })))),
+        /lease lost/,
+      )
+      assert.equal(await h.run(Effect.flatMap(Db, (db) => db.meta(DREAM_CURSOR))), undefined)
+    },
+    [{ text: "", structured: { looked: "見た", values: [] } }],
+  )
+})
+
 test("材料の見出しに、1回ぶんではないと書いてある", async () => {
   await withHarness(
     async (h) => {

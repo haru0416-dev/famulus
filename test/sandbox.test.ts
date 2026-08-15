@@ -13,7 +13,14 @@ import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
 import { test } from "vitest"
 import { TZ } from "../src/core/time.ts"
-import { cacheRoot, dockerArgs, orphanNames, runDir, runsRoot } from "../src/services/Sandbox.ts"
+import {
+  cacheRoot,
+  dockerArgs,
+  orphanNames,
+  runDir,
+  runInSandbox,
+  runsRoot,
+} from "../src/services/Sandbox.ts"
 
 const withRoot = (fn: () => void): void => {
   const prev = process.env.OPEN_ZERO_RUNS
@@ -116,4 +123,13 @@ test("コマンドは最後の1要素として渡す(語に割らない)", () =>
   const cmd = "npm install && node index.js | head -5"
   const args = dockerArgs(cmd, { workDir: "/tmp/w", name: "oz-run-test" })
   assert.deepEqual(args.slice(-3), ["bash", "-lc", cmd])
+})
+
+test("開始前にabortされていればdockerを起動しない", async () => {
+  const controller = new AbortController()
+  controller.abort(new Error("lease lost"))
+  await assert.rejects(
+    () => runInSandbox("echo should-not-run", { workDir: tmpdir(), signal: controller.signal }),
+    /lease lost/,
+  )
 })

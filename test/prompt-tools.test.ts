@@ -15,7 +15,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { test } from "vitest"
-import { replyStepText, untrustedToolOutput } from "../src/agent/assistant.ts"
+import { gateTools, replyStepText, untrustedToolOutput } from "../src/agent/assistant.ts"
 import { readSoul } from "../src/agent/soul.ts"
 
 const read = (rel: string): string =>
@@ -117,4 +117,46 @@ test("自由文のツール結果は親モデルへの指示と分離する", ()
 test("ツールを呼ぶ step の経過文は最終返信へ入れない", () => {
   assert.equal(replyStepText("調べます", [{ toolName: "recall" }]), "")
   assert.equal(replyStepText("結果は3件だった", []), "結果は3件だった")
+})
+
+test("lease gateはtool実行の前後に通り失敗時は実行しない", async () => {
+  const calls: string[] = []
+  const tools = gateTools(
+    {
+      sample: {
+        execute: async (value: string) => {
+          calls.push(`execute:${value}`)
+          return value.toUpperCase()
+        },
+      },
+    },
+    async () => {
+      calls.push("gate")
+    },
+  )
+  assert.equal(await tools.sample.execute("ok"), "OK")
+  assert.deepEqual(calls, ["gate", "execute:ok", "gate"])
+
+  const denied = gateTools({ sample: { execute: async () => calls.push("should-not-run") } }, async () => {
+    throw new Error("lease lost")
+  })
+  await assert.rejects(() => denied.sample.execute(), /lease lost/)
+  assert.ok(!calls.includes("should-not-run"))
+
+  const failed: string[] = []
+  const checkedAfterFailure = gateTools(
+    {
+      sample: {
+        execute: async () => {
+          failed.push("execute")
+          throw new Error("tool failed")
+        },
+      },
+    },
+    async () => {
+      failed.push("gate")
+    },
+  )
+  await assert.rejects(() => checkedAfterFailure.sample.execute(), /tool failed/)
+  assert.deepEqual(failed, ["gate", "execute", "gate"])
 })

@@ -23,6 +23,7 @@ export interface CycleLeaseToken {
   readonly fence: number
   readonly incarnation: ProcessIncarnation
   readonly acquiredAtMs: number
+  readonly ttlMs: number
 }
 
 export interface CycleLeaseRow extends Row {
@@ -43,7 +44,9 @@ export interface CycleLeaseRow extends Row {
 }
 
 export interface CycleLeaseApi {
-  readonly acquire: () => Effect.Effect<
+  readonly acquire: (options?: {
+    readonly ttlMs?: number
+  }) => Effect.Effect<
     CycleLeaseToken,
     DbFailed | ProcessIdentityUnavailable | CycleLeaseHeld | CycleLeaseRecoveryUncertain
   >
@@ -71,7 +74,7 @@ const defaults: CycleLeaseDeps = {
   liveness: incarnationLiveness,
   now: Date.now,
   ownerId: randomUUID,
-  ttlMs: 30_000,
+  ttlMs: 90_000,
 }
 
 const leaseRow = (tx: DbTx): CycleLeaseRow =>
@@ -135,8 +138,13 @@ export const makeCycleLease = (overrides: Partial<CycleLeaseDeps> = {}) =>
     const status = () =>
       db.get("SELECT * FROM cycle_lease WHERE lease_name='cycle'") as Effect.Effect<CycleLeaseRow, DbFailed>
 
-    const acquire = (): CycleLeaseApi["acquire"] extends () => infer A ? A : never =>
+    const acquire = (options?: { readonly ttlMs?: number }) =>
       Effect.gen(function* () {
+        const ttlMs = options?.ttlMs ?? deps.ttlMs
+        if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0)
+          return yield* new ProcessIdentityUnavailable({
+            reason: "cycle lease TTL must be a positive integer",
+          })
         const incarnation = yield* Effect.try({
           try: deps.current,
           catch: (error) => new ProcessIdentityUnavailable({ reason: String(error) }),
@@ -146,6 +154,7 @@ export const makeCycleLease = (overrides: Partial<CycleLeaseDeps> = {}) =>
           ownerId: deps.ownerId(),
           incarnation,
           acquiredAtMs: deps.now(),
+          ttlMs,
         }
 
         for (let attempt = 0; attempt < 4; attempt++) {
@@ -153,7 +162,7 @@ export const makeCycleLease = (overrides: Partial<CycleLeaseDeps> = {}) =>
           const decision = yield* db.withImmediateTransaction("acquire cycle lease", (tx) => {
             const row = leaseRow(tx)
             if (row.state !== "held")
-              return { kind: "claimed" as const, token: claim(tx, row, base, now, deps.ttlMs) }
+              return { kind: "claimed" as const, token: claim(tx, row, base, now, ttlMs) }
             if ((row.expires_at_ms as number) > now) return { kind: "held" as const, row }
             return { kind: "expired" as const, row }
           })
@@ -188,7 +197,7 @@ export const makeCycleLease = (overrides: Partial<CycleLeaseDeps> = {}) =>
               current.expires_at_ms !== decision.row.expires_at_ms
             )
               return undefined
-            return claim(tx, current, base, deps.now(), deps.ttlMs)
+            return claim(tx, current, base, deps.now(), ttlMs)
           })
           if (recovered) return recovered
         }
@@ -223,7 +232,7 @@ export const makeCycleLease = (overrides: Partial<CycleLeaseDeps> = {}) =>
         const result = tx.run(
           "UPDATE cycle_lease SET heartbeat_at_ms=?, expires_at_ms=? WHERE lease_name='cycle' AND fence=? AND owner_id=?",
           heartbeatAt,
-          heartbeatAt + deps.ttlMs,
+          heartbeatAt + token.ttlMs,
           token.fence,
           token.ownerId,
         )

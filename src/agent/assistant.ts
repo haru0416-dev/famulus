@@ -31,6 +31,7 @@ import { Runner } from "../model/Runner.ts"
 import { vs } from "../model/schema.ts"
 import { run } from "../runtime.ts"
 import { Attention } from "../services/Attention.ts"
+import { CycleLease, type CycleLeaseToken } from "../services/CycleLease.ts"
 import { Db } from "../services/Db.ts"
 import { Discord } from "../services/Discord.ts"
 import { buildFencedPrompt, Governance } from "../services/Governance.ts"
@@ -341,8 +342,35 @@ async function delegate(
 /** 委譲エージェントに共通の設定。CLI 1回が分単位なので、SDK 側の自動再試行は入れない。 */
 const childOpts = (maxSteps: number) => ({ stopWhen: stepCountIs(maxSteps), maxRetries: 0 }) as const
 
-function buildTools(state: TurnState) {
-  return {
+type ToolGate = (() => Promise<void>) | undefined
+
+export const gateTools = <T extends Record<string, unknown>>(tools: T, gate: ToolGate): T => {
+  if (!gate) return tools
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, value]) => {
+      const entry = value as { execute?: (...args: unknown[]) => unknown }
+      if (!entry.execute) return [name, value]
+      const execute = entry.execute
+      return [
+        name,
+        {
+          ...entry,
+          execute: async (...args: unknown[]) => {
+            await gate()
+            try {
+              return await execute(...args)
+            } finally {
+              await gate()
+            }
+          },
+        },
+      ]
+    }),
+  ) as T
+}
+
+function buildTools(state: TurnState, gate: ToolGate) {
+  const tools = {
     // ── web を調べる役。明示的な search / fetch と、上流側の web_search を使う。
     researcher: tool({
       description:
@@ -363,7 +391,7 @@ function buildTools(state: TurnState) {
           new Agent({
             model: claudeMax(researchModel()),
             instructions: RESEARCHER,
-            tools: { search: searchTool, fetch: fetchTool },
+            tools: gateTools({ search: searchTool, fetch: fetchTool }, gate),
             ...childOpts(10),
           }),
           task,
@@ -388,7 +416,7 @@ function buildTools(state: TurnState) {
           new Agent({
             model: claudeMax(workModel()),
             instructions: DIGGER,
-            tools: { recall: recallTool(state) },
+            tools: gateTools({ recall: recallTool(state) }, gate),
             ...childOpts(8),
           }),
           task,
@@ -710,7 +738,7 @@ function buildTools(state: TurnState) {
           ),
         }),
       ),
-      execute: async ({ command, workspace, purpose, net }) =>
+      execute: async ({ command, workspace, purpose, net }, { abortSignal }) =>
         run(
           Effect.gen(function* () {
             const gov = yield* Governance
@@ -736,12 +764,14 @@ function buildTools(state: TurnState) {
             const r = yield* Effect.promise(() =>
               runInSandbox(command, {
                 workDir: dir,
+                ...(abortSignal ? { signal: abortSignal } : {}),
                 ...(net ? { net } : {}),
                 // コンテナの上限より締切のほうが近いなら、締切に合わせる。コンテナの中で時間切れになれば
                 // 出力は返るが、cycle ごと切られると走った跡が1行も残らない。
                 ...(Number.isFinite(left) ? { timeoutMs: left - RUN_RESERVE_MS } : {}),
               }),
             )
+            if (gate) yield* Effect.promise(gate)
             const head = r.timedOut
               ? `時間切れで打ち切った(${Math.round(r.elapsedMs / 1000)}秒)`
               : `終了コード ${r.exitCode}(${Math.round(r.elapsedMs / 1000)}秒)`
@@ -820,6 +850,7 @@ function buildTools(state: TurnState) {
               // ミュートを上書きする通知を繰り返すと、必要な通知まで読まれにくくなる。
               ping: urgent === true,
             })
+            if (gate) yield* Effect.promise(gate)
             // Discord 投稿APIがメッセージIDを返したかを DB に残す。結果を残さないと、
             // 投稿に失敗した通知を送信済みとして次のターンが進む。
             yield* mem.remember({
@@ -861,7 +892,7 @@ function buildTools(state: TurnState) {
           ),
         }),
       ),
-      execute: async ({ title, body, basis }) =>
+      execute: async ({ title, body, basis }, { abortSignal }) =>
         run(
           Effect.gen(function* () {
             const discord = yield* Discord
@@ -930,7 +961,12 @@ function buildTools(state: TurnState) {
                   { source: "draft", label: title, content: body },
                 ]),
                 schema: REVIEW_SCHEMA,
-                signal: AbortSignal.timeout(Math.min(REVIEW_MS, left - RUN_RESERVE_MS)),
+                signal: abortSignal
+                  ? AbortSignal.any([
+                      AbortSignal.timeout(Math.min(REVIEW_MS, left - RUN_RESERVE_MS)),
+                      abortSignal,
+                    ])
+                  : AbortSignal.timeout(Math.min(REVIEW_MS, left - RUN_RESERVE_MS)),
               }),
             )
             // レビュー呼び出しが失敗したときに検査なしで通すと、クォータ利用不能の日だけ無検査の文が公開候補として出る。
@@ -941,6 +977,7 @@ function buildTools(state: TurnState) {
             // 精査役が「出す」と言ったときだけ出す。判断そのものは drafting.ts に置く。
             const outcome = reviewOutcome(review.success.structured as Review | undefined, title, body)
             if (!outcome.post) return outcome.text
+            if (gate) yield* Effect.promise(gate)
             const id = yield* discord.post({
               text: `**${title}**\n\n${body}\n\n---\n根拠: ${basis}`,
               // 押してもらわないと外に出ない文なので、ミュートしてある場所でも呼ぶ。
@@ -954,6 +991,7 @@ function buildTools(state: TurnState) {
                 { emoji: "🛑", emojiReply: "捨てる" },
               ].map((t) => ({ emoji: t.emoji, reply: `下書き「${title}」→ ${t.emojiReply}` })),
             })
+            if (gate) yield* Effect.promise(gate)
             // 出した事実は日付で持つ。1日1本の上限はここで数える(押されたかは関係ない)。
             if (id) yield* db.setMeta("daily:draft", localDayRange(nowIso()).key)
             yield* mem.remember({
@@ -995,6 +1033,7 @@ function buildTools(state: TurnState) {
         ),
     }),
   }
+  return gateTools(tools, gate)
 }
 
 /** 1ターンの結果。途中で止まっても、そこまでに書けた文は返す。 */
@@ -1018,6 +1057,8 @@ export interface AssistantTurnResult {
 export interface AssistantOptions {
   /** 対話に使うモデル。省くと `OPEN_ZERO_MODEL`、それも無ければ opus。 */
   readonly model?: string | undefined
+  readonly leaseToken?: CycleLeaseToken | undefined
+  readonly onLeaseLost?: ((reason: unknown) => void) | undefined
 }
 
 /** ツールを呼ぶ step の文は経過なので、利用者向けの最終本文には入れない。 */
@@ -1032,10 +1073,21 @@ export function createAssistant(opts: AssistantOptions = {}) {
   const modelId = opts.model ?? process.env.OPEN_ZERO_MODEL ?? "claude-opus-5"
   const state: TurnState = { lastInputEventId: undefined }
   let history: ModelMessage[] = []
+  const token = opts.leaseToken
+  const gate: ToolGate = token
+    ? async () => {
+        try {
+          await run(Effect.flatMap(CycleLease, (lease) => lease.assertCurrent(token)))
+        } catch (error) {
+          opts.onLeaseLost?.(error)
+          throw error
+        }
+      }
+    : undefined
   const agent = new Agent({
     model: claudeMax(modelId),
     instructions: soulInstruction(),
-    tools: buildTools(state),
+    tools: buildTools(state, gate),
     stopWhen: stepCountIs(MAX_STEPS),
     // CLI 1回が分単位なので、SDK 側の自動再試行は入れない。取り直しが要る場面
     // (提出の呼び方を間違えた回)は language-model.ts が中で1回だけやる。
@@ -1079,6 +1131,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
      * 投げ返すと、呼ぶ側(cycle)が締めの書き込みに辿り着けない。
      */
     async respond(input: string, o: { signal?: AbortSignal | undefined } = {}): Promise<AssistantTurnResult> {
+      if (gate) await gate()
       const inputEventId = await observe(input)
       state.lastInputEventId = inputEventId
       const sent: ModelMessage[] = [...history, { role: "user", content: input }]

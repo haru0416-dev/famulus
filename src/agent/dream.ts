@@ -141,10 +141,13 @@ export const dream = (opts?: {
       label: "dream",
       extraSystem: DREAM_NOTE,
       header: `直近 ${rows.length} 件のユーザーの発言(${span}・1回ぶんではない)`,
-      signal: opts?.signal ?? AbortSignal.timeout(KEEP_MS),
+      signal: opts?.signal
+        ? AbortSignal.any([AbortSignal.timeout(KEEP_MS), opts.signal])
+        : AbortSignal.timeout(KEEP_MS),
     })
 
     // 進めるのは最後に読んだ発言の時刻まで。`at` まで進めると、上限で切った分が飛ぶ。
+    opts?.signal?.throwIfAborted()
     const through = rows[rows.length - 1]?.at ?? from
     yield* db.setMeta(DREAM_CURSOR, through)
     return `${line}(${span}・${rows.length} 件を見た)`
