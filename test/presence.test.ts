@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "vitest"
-import { SCHEMA_SQL } from "../src/db/sqlite.ts"
+import { SCHEMA_SQL, SCHEMA_VERSION } from "../src/db/sqlite.ts"
 import { presence, stateLine } from "../src/presence.ts"
 
 /** 現行schemaのDBを1つ作る。shape境界も含めてpresenceと同じ条件で読む。 */
@@ -22,7 +22,7 @@ const withDb = (fn: (path: string, db: Database) => void): void => {
   const db = new Database(path)
   try {
     db.exec(SCHEMA_SQL)
-    db.run("INSERT INTO schema_meta VALUES ('version','4')")
+    db.run("INSERT INTO schema_meta VALUES ('version',?)", [SCHEMA_VERSION])
     fn(path, db)
   } finally {
     db.close()

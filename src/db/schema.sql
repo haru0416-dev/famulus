@@ -1,8 +1,14 @@
--- open-zero schema v4. Existing databases are not migrated; rebuild from this file.
+-- open-zero schema v5.
 
 CREATE TABLE schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE schema_migrations (
+  version    INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  applied_at TEXT NOT NULL
 ) STRICT;
 
 -- Memory source of truth. seq is the explicit cursor used by tick and dream.

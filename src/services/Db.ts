@@ -1,6 +1,5 @@
 /**
- * DB サービス。新規 DB は `src/db/schema.sql` から作る。既存 DB は同じ版だけを開き、
- * 古い版を起動時に書き換えない。版が違うDBは退避し、現行schemaから作り直す。
+ * DB サービス。新規 DB は `src/db/schema.sql` から作り、既存 DB は順番にmigrationする。
  *
  * events の append-only は SQL トリガで強制する(DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)。
  * どのドライバから触っても同じように掛かる。
@@ -18,7 +17,14 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { appConfig } from "../core/config.ts"
 import { DbFailed } from "../core/errors.ts"
-import { assertSchemaV4, openDb, SCHEMA_SQL, SCHEMA_VERSION } from "../db/sqlite.ts"
+import {
+  assertCurrentSchema,
+  assertUnownedEmptyDb,
+  migrateToCurrent,
+  openDb,
+  SCHEMA_SQL,
+  SCHEMA_VERSION,
+} from "../db/sqlite.ts"
 export interface Row {
   readonly [k: string]: unknown
 }
@@ -49,26 +55,24 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
             // poll と cycle が同じ瞬間に開くと journal_mode が WAL の復旧ロックに当たって落ちていた。
             d.exec("PRAGMA busy_timeout = 5000;")
             d.exec("PRAGMA foreign_keys = ON;")
-            const objects = d
-              .prepare(
-                `SELECT count(*)AS n FROM sqlite_master
-                  WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','view','trigger')`,
-              )
-              .get() as { n: number }
+            const objects = d.prepare("SELECT count(*)AS n FROM sqlite_master").get() as { n: number }
             if (objects.n === 0) {
               d.exec("BEGIN IMMEDIATE")
               try {
-                const afterLock = d
-                  .prepare(
-                    `SELECT count(*)AS n FROM sqlite_master
-                      WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','view','trigger')`,
-                  )
-                  .get() as { n: number }
+                const afterLock = d.prepare("SELECT count(*)AS n FROM sqlite_master").get() as { n: number }
                 if (afterLock.n === 0) {
+                  assertUnownedEmptyDb(d, path)
                   d.exec(SCHEMA_SQL)
                   d.prepare("INSERT INTO schema_meta (key, value)VALUES ('version', ?)").run(SCHEMA_VERSION)
+                  d.prepare("INSERT INTO schema_migrations (version, name, applied_at)VALUES (?, ?, ?)").run(
+                    Number(SCHEMA_VERSION),
+                    "baseline",
+                    new Date().toISOString(),
+                  )
+                  assertCurrentSchema(d, path)
                 } else {
-                  assertSchemaV4(d, path)
+                  migrateToCurrent(d, path)
+                  assertCurrentSchema(d, path)
                 }
                 d.exec("COMMIT")
               } catch (e) {
@@ -76,7 +80,15 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
                 throw e
               }
             } else {
-              assertSchemaV4(d, path)
+              d.exec("BEGIN IMMEDIATE")
+              try {
+                migrateToCurrent(d, path)
+                assertCurrentSchema(d, path)
+                d.exec("COMMIT")
+              } catch (e) {
+                d.exec("ROLLBACK")
+                throw e
+              }
             }
             // 現行 schema を受理した DB だけ、旧実行状態を一度だけ新しい名前へ移す。
             d.exec("BEGIN IMMEDIATE")

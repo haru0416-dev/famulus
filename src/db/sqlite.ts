@@ -4,8 +4,28 @@ import { Database } from "bun:sqlite"
 import { readFileSync } from "node:fs"
 
 export type Sqlite = Database
-export const SCHEMA_VERSION = "4"
+export const SCHEMA_VERSION = "5"
 export const SCHEMA_SQL = readFileSync(new URL("./schema.sql", import.meta.url), "utf8")
+
+interface Migration {
+  readonly from: string
+  readonly to: string
+  readonly name: string
+  readonly sql: string
+}
+
+const MIGRATIONS: readonly Migration[] = [
+  {
+    from: "4",
+    to: "5",
+    name: "schema-migrations",
+    sql: `CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      applied_at TEXT NOT NULL
+    ) STRICT;`,
+  },
+]
 
 export const openDb = (path: string): Sqlite => new Database(path)
 
@@ -41,7 +61,9 @@ const schemaObjects = (db: Sqlite): Map<string, string> =>
     (
       db
         .prepare(`SELECT type,name,tbl_name,sql FROM sqlite_master
-      WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY type,name`)
+      WHERE sql IS NOT NULL
+        AND name NOT IN ('sqlite_stat1','sqlite_stat2','sqlite_stat3','sqlite_stat4')
+      ORDER BY type,name`)
         .all() as {
         type: string
         name: string
@@ -64,7 +86,7 @@ const canonicalObjects = (): Map<string, string> => {
   }
 }
 
-export const assertSchemaV4 = (db: Sqlite, path: string): void => {
+export const assertCurrentSchema = (db: Sqlite, path: string): void => {
   const version = schemaVersion(db)
   if (version !== SCHEMA_VERSION) {
     throw new Error(
@@ -80,6 +102,38 @@ export const assertSchemaV4 = (db: Sqlite, path: string): void => {
   if (wrong.size !== 0) {
     throw new Error(
       `Invalid version ${SCHEMA_VERSION} database shape: path=${path} objects=${[...wrong].sort().join(",")}`,
+    )
+  }
+}
+
+export const migrateToCurrent = (db: Sqlite, path: string): void => {
+  let version = schemaVersion(db)
+  while (version !== SCHEMA_VERSION) {
+    const migration = MIGRATIONS.find((candidate) => candidate.from === version)
+    if (!migration) {
+      throw new Error(
+        `Unsupported database schema: path=${path}, found=${version ?? "missing"}, expected=${SCHEMA_VERSION}. ` +
+          "The database was not modified.",
+      )
+    }
+    db.exec(migration.sql)
+    db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(
+      Number(migration.to),
+      migration.name,
+      new Date().toISOString(),
+    )
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'version'").run(migration.to)
+    version = migration.to
+  }
+}
+
+export const assertUnownedEmptyDb = (db: Sqlite, path: string): void => {
+  const metadata = db.prepare("PRAGMA user_version").get() as { user_version: number }
+  const application = db.prepare("PRAGMA application_id").get() as { application_id: number }
+  if (metadata.user_version !== 0 || application.application_id !== 0) {
+    throw new Error(
+      `Refusing to initialize database with foreign metadata: path=${path}, ` +
+        `user_version=${metadata.user_version}, application_id=${application.application_id}. The database was not modified.`,
     )
   }
 }
