@@ -27,13 +27,6 @@ import { nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 /**
- * 提案の種類。`plan` の1つだけ。
- *
- * 前は7種あった(`reminder` `research` `vault-update` `outbound-draft` `skill-promote` `skill-retire`)。
- * 全部 famulus-zero から持ってきた種類で、こちらのコードが作れるのは `plan` だけだった
- * — 実データも8件全部 `plan`。種別が7つあると、読んだ側は「6つの経路がある」と読む。
- */
-/**
  * 提案の状態。実行の3つ(`executing` `executed` `failed`)は落とした。
  *
  * 承認しても実行する仕組みが無い。到達しない状態を残すと、`oz list` を読んだ側が

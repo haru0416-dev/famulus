@@ -1,16 +1,8 @@
 /**
  * GPT 経路の実装。`~/.codex/auth.json` の OAuth トークンで Codex の Responses API を直接呼ぶ。
  *
- * 前の実装は rmod(`claude` の CLI インターフェースのまま中身を差し替えるローカルプロキシ)を
- * 子プロセスとして起動していた。認証はそのときから同じ Codex の OAuth で、変わったのは経路だけ —
- * bash → bun → ローカルプロキシ → `claude` の4段が無くなり、HTTP リクエスト1回になる。
- *
- * 経路を変えて解消するもの:
- *  - 入力トークン。`claude` のシステムプロンプトが付かない(最小の1問で実測 186 → 27 tok)。
- *  - 道具呼び出し。Responsesのtool-callをAI SDKへそのまま返す。
- *  - クォータ。応答ヘッダに使用率とリセット時刻が入る(下の `quotaFromHeaders`)。
- *    rmod 経由では `{status:"allowed"}` しか来ず、Governance の使用率によるクールダウンは
- *    GPT 側で一度も適用されなかった。動いていたのは 429 を受けた後の抑止だけ。
+ * Responses の tool-call を AI SDK へ返し、応答ヘッダの使用率とリセット時刻を
+ * `quotaFromHeaders` で統治層へ渡す。
  *
  * 上流の制約。どちらも外すと 400 で拒否される:
  *  - `store` は false。

@@ -68,7 +68,7 @@ test("既定では外に出られない。net を渡したときだけ開く", (
   assert.equal(open[open.indexOf("--network") + 1], "bridge")
 })
 
-test("書けるのは workspace と共有キャッシュだけ。コンテナは毎回捨てる", () => {
+test("ホストへマウントするのは workspace と共有キャッシュだけ。コンテナは毎回捨てる", () => {
   const args = dockerArgs("echo hi", { workDir: "/tmp/w", name: "oz-run-test" })
   const mounts = args.filter((_, i) => args[i - 1] === "-v")
   assert.deepEqual(
@@ -89,10 +89,6 @@ test("中の時計の帯はホストと同じ", () => {
   assert.ok(env.includes(`TZ=${TZ}`), `帯が渡っていない: ${env.join(" ")}`)
 })
 
-/**
- * キャッシュを workspace の外へ出す。`HOME=/work` のままだと npm も pip も uv も
- * workspace ごとに同じパッケージを取得する(実測: 別の workspace で uv が 2041ms → 3274ms、57MB を二重に持つ)。
- */
 test("パッケージキャッシュは workspace の外で共有する", () => {
   const args = dockerArgs("npm i", { workDir: "/tmp/w", name: "oz-run-test" })
   const env = args.filter((_, i) => args[i - 1] === "-e")

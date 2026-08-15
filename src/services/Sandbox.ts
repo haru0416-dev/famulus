@@ -1,17 +1,9 @@
 /**
  * 取得したコードや手順をこのホストで実行検証するための経路。
  *
- * 読むだけの記録は誰が書いても同じ文にしかならない。停止した処理段階・失敗した経路・要った時間は、
- * 自分で走らせないと出てこない。そのために任意のコマンドを動かす手段が要るが、
- * このホストにはユーザーの鍵も DB(`.data/*.db`)も置いてある。境界を先に引かないと動かせない。
- *
- * 境界に docker を選んだのは、srt(bubblewrap)と headless の `claude -p` を実測して不採用にしたから。
- * 前者は AppArmor が入れ子の userns を拒否するので動かず、後者は workspace の中にも書けない。
- * どちらの失敗も、越えるには sudo かサンドボックスの解除が要るため許可しない。
- *
- * docker は sudo 無しで通り、「workspace には書ける / `/home/haru` は見えない /
- * `--network none` なら外に出られない」が同時に成り立つ。中に資格情報を持ち込まないので、
- * 万一持ち出されて困るのは、そのランで自分が置いたものだけになる。
+ * 任意コマンドは Docker 内だけで動かす。ホストへ書き出せるのは指定 workspace と共有キャッシュだけで、
+ * コンテナ内のそれ以外の書き込みは `--rm` とともに捨てる。ホストの home・DB・資格情報は渡さず、
+ * ネットワークも必要な実行だけ開く。
  */
 import { spawn } from "node:child_process"
 import { mkdirSync } from "node:fs"
@@ -23,12 +15,7 @@ import { TZ } from "../core/time.ts"
  * 走らせるコンテナ。docker/run.Dockerfile で組む(素の `node:24-bookworm` に
  * pip・venv・uv・jq・ripgrep を足したもの)。無ければ最初の走行が組む — `ensureImage`。
  *
- * 足すものを決めたのは走行記録 30回の実測で、呼ばれた道具は
- * git 11 / python3 7 / npx 7 / pip 6 / uv 4 / node 4 / curl 3 / apt 4 / jq 1 / go 1 / cargo 1。
- * このうち pip・uv・jq が素のイメージに無く、apt の4回は全部それを入れようとして失敗した回
- * (非 root なので通らない)。go と cargo は「何が入っているか」を調べる走行の中でだけ呼ばれている。
- *
- * **記録に無いものは足さない。**1つ足すたびに全部の走行が重くなる。ここに無い実体が要る走行は、
+ * 全走行へ影響するためイメージは小さく保つ。ここに無い実体が要る走行は、
  * その走行の中で取る(`oz selfdev` が bun を npx で引くのがそれ — src/core/selfdev.ts)。
  *
  * **札を上げたら、走っているホストでは古いイメージが残る。**`ensureImage` は名前で存在を見るので、
@@ -48,15 +35,15 @@ const BASE_IMAGE = "node:24-bookworm"
 const DEFAULT_TIMEOUT_MS = 3 * 60_000
 /** モデルに渡す上限。ビルドログは平気で数MB出るが、読ませたいのは詰まった箇所だけ。 */
 const MAX_OUTPUT_CHARS = 12_000
-/** コンテナに許す上限。このホストは 11GB / 6コアで、cycle 自身もここで動く。走行が全資源を使うと cycle が停止する。 */
+/** ホスト側の処理を止めないため、1走行が使える資源を制限する。 */
 const MEMORY = "2g"
 const CPUS = "2"
 const PIDS = "512"
 
 export interface RunOptions {
-  /** ホスト側の workspace。ここだけが書ける。`runDir()` が返す絶対パスを渡す。 */
+  /** ホストへ書き出す workspace。`runDir()` が返す絶対パスを渡す。 */
   readonly workDir: string
-  /** 外に出るか。既定は出ない。依存の取得(clone・install)が要るときだけ true。 */
+  /** 外に出るか。既定は出ない。ネットワークが必要な実行だけ true。 */
   readonly net?: boolean
   readonly timeoutMs?: number
   readonly image?: string
@@ -78,10 +65,7 @@ export const runsRoot = (): string => resolve(process.env.OPEN_ZERO_RUNS ?? ".da
 /**
  * 取得したパッケージの共有キャッシュ。workspace の外に置く。
  *
- * `HOME=/work` なので、既定のままだと npm も pip も uv も workspace ごとにキャッシュを作る。
- * このホストで測ると、`uv` で requests を入れる走行は workspace を変えた場合に
- * 2041ms → 3274ms に伸びて、両方の workspace が 57MB ずつ同じものを持っていた。
- *
+ * `HOME=/work` のため、既定のキャッシュは workspace ごとに重複する。
  * `runsRoot()` の下に置いてはいけない。`sweepRuns` は `.data/runs` の直下を全部
  * workspace として数えるので、キャッシュが workspace の一覧に出て、14日で消される側に回る。
  */
@@ -124,15 +108,13 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     CPUS,
     "--pids-limit",
     PIDS,
-    // ユーザーの uid で走らせる。既定の root で作ったファイルは、後で cycle(haru)が読めも消せもしない。
+    // ホストプロセスと同じ uid で走らせ、生成物をホスト側から読んで消せるようにする。
     "--user",
     `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
     // uid を指定するとコンテナの中に home が無くなる。npm も pip も HOME を要求するので workspace を充てる。
     "-e",
     "HOME=/work",
-    // 中の時計の帯をホストに合わせる。既定のコンテナは UTC で、こちらは Asia/Tokyo。
-    // 帯だけが違う環境で走らせると、同じコマンドが違う日付を出す — 実測で、帯の付いていない
-    // 日付を読む検査1件が中でだけ 9 時間ずれて落ちた(src/services/Search.ts の publishedDate)。
+    // 設定タイムゾーンを渡し、ホスト側の検証と日付境界を揃える。
     "-e",
     `TZ=${TZ}`,
     // 取得キャッシュは workspace をまたいで使い回す。置き場は workspace の外(cacheRoot)。

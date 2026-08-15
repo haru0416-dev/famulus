@@ -345,8 +345,7 @@ const RESEARCHER = `web を調べる役。fetchで開いた資料からclaim・�
 /**
  * 検索役の指示。返すのは原文だけで、判断は返さない。
  *
- * 語を変えて何度も検索する仕事は opus でやる理由が無い(量が要るだけで、質は引用の正確さで決まる)。
- * ただし安いモデルほど要約に寄って固有名と日付を落とすので、指示を
+ * 要約や解釈をさせると検索結果から固有名と日付が落ちるため、仕事を
  * 「写す・要約しない・無ければ無いと書く」に絞ってある。
  */
 const DIGGER = `検索役。DB を検索して、要る行を**原文のまま**返す。
@@ -470,7 +469,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
       toModelOutput: untrustedToolOutput("delegate", "researcher"),
     }),
 
-    // ── 検索役。gpt-5.6-luna は Codex 側の pool なので、何回検索を実行しても対話のクォータは減らない。
+    // ── DB 検索役。モデルは設定された作業モデルを使う。
     digger: tool({
       description:
         "DB の検索役。語を変えた検索を何度も回して、当たった行を原文のまま返す(要約しない)。" +

@@ -25,24 +25,14 @@ export type Role = "structurer" | "scout" | "reviewer"
 /**
  * 役割→モデル。全てChatGPT OAuthのGPTで、品質と処理量に応じてmodelを分ける。
  *
- * 現在 ROLE_MODEL を参照して呼ばれるのは `scout` / `reviewer` / `structurer`。
- * `briefing` / `dialogue` / `classify` の ROLE_MODEL エントリには呼び手がない。
  * 対話と cycle 本体のモデルは createAssistant() に渡す model id で決まる。
- * ここを取り違えると「structurer を守った」つもりで、引用を写す仕事のほうを動かすことになる。
  *
- * `reviewer` は引用精度を実測済みのgpt-5.6-solに置く。
- *
- * 実測(下書き4本 × 本文2通り = 8件): 引用を本文から一字一句写した割合は
- * opus 19/19・sol 18/18(luna は 19/24 で、写せなかった指摘はコードが落とす)。
- * 秒数は 8/8 で sol が opus より短い(中央値 24.8 秒 / 50.3 秒)。強さは測っていない。
- *
- * その `scout` が持つのは引用を原文のまま写す仕事で、引けなかった項目はコードが落とす。
- * 落ちた分は後から復元できないので、モデルを替えるときは引用の原文一致率を測ってから替える。
+ * `structurer` と `scout` は引用を原文のまま写す仕事を持つ。引けなかった項目はコードが落とし、
+ * 後から復元できないため、モデルを替えるときは引用の原文一致率を検証する。
  */
 export const ROLE_MODEL: Record<Role, string> = {
   // 締めの keeper(keeper)。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
-  // (keepGrounded)。scout と同じ性質なので同じ側に置く。ユーザーが話した回ごとに1回通るため、
-  // 対話ごとに通るため、処理量を抑えたmodelに置く。
+  // (keepGrounded)。scout と同じ性質で対話ごとに通るため、処理量を抑えたmodelに置く。
   structurer: "gpt-5.6-luna",
   // 下書きの精査(assistant の draft)。外に出る前の最後の検査で、書いた側とは別の系列に置く。
   // 既定の対話modelとは別modelに置く。
