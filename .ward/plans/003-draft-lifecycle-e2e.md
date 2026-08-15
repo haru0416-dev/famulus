@@ -18,7 +18,7 @@ Out of scope: publishing to Zenn, general Operation executor, research campaign 
 
 ## Data model
 
-`drafts`: one row per local day with title, body, basis, content hash, state, review feedback, delivery id, decision origin, and timestamps.
+`drafts`: one row per local day with title, body, terminal research dossier ID, content hash, state, review feedback, delivery id, decision origin, and timestamps. The hash includes the dossier ID.
 
 State: `review_pending -> revision_needed | delivery_pending | delivery_failed -> delivered -> accepted | revise_requested | discarded`. Review failure remains `review_pending`. Discord marks `delivered` only from a sent receipt; ambiguous and rejected delivery stays explicit and is not retried automatically.
 
@@ -26,10 +26,11 @@ State: `review_pending -> revision_needed | delivery_pending | delivery_failed -
 
 1. Replace the daily meta flag with a unique draft day and explicit state.
 2. Persist the body before invoking reviewer so a later cycle resumes the same revision.
-3. Keep the existing validated reviewer result boundary and persist reviewer feedback when revision is required.
+3. Pass the immutable dossier rendering to the reviewer in a separate fenced block and persist reviewer feedback when revision is required.
 4. Enqueue delivery through plan 002 and mark delivered only from its receipt.
 5. Attach Discord reactions to draft IDs and apply each origin once.
-6. Cover saved-body resume and `delivery -> reaction -> inbox -> draft decision` in the existing focused tests.
+6. Record inbound poll success/failure and draft delivery success/failure in `schema_meta`; expose both through `oz status`.
+7. Cover saved-body resume and `delivery -> reaction -> inbox -> draft decision` in the existing focused tests.
 
 ## Verification
 
@@ -46,3 +47,4 @@ bunx --bun vitest run test/attention.test.ts test/discord.test.ts test/drafting.
 - Daily completion requires a delivered receipt.
 - Revision and discard reactions update the intended draft exactly once.
 - Saved-body resume and Discord delivery/reaction paths have repeatable focused tests.
+- `oz status` shows the last inbound success/failure and draft delivery success/failure.
