@@ -242,6 +242,22 @@ WHEN NOT EXISTS (
 BEGIN
   SELECT RAISE(ABORT, 'research experiment artifacts must belong to the hypothesis dossier');
 END;
+CREATE TRIGGER research_experiment_artifacts_unowned
+BEFORE INSERT ON research_experiment_runs
+WHEN NEW.command_artifact_id = NEW.check_artifact_id
+ OR EXISTS (
+   SELECT 1 FROM research_artifacts a
+    WHERE a.id IN (NEW.command_artifact_id, NEW.check_artifact_id)
+      AND a.kind != 'sandbox_output'
+ )
+ OR EXISTS (
+   SELECT 1 FROM research_experiment_runs r
+    WHERE r.command_artifact_id IN (NEW.command_artifact_id, NEW.check_artifact_id)
+       OR r.check_artifact_id IN (NEW.command_artifact_id, NEW.check_artifact_id)
+ )
+BEGIN
+  SELECT RAISE(ABORT, 'research experiment artifacts must be distinct unowned sandbox outputs');
+END;
 CREATE TRIGGER research_dossier_conclusion_valid
 BEFORE UPDATE OF state ON research_dossiers
 WHEN NEW.state = 'concluded' AND NOT EXISTS (

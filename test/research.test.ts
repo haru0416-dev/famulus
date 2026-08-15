@@ -206,6 +206,19 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
             dossier.created_at,
           ),
         )
+        const reusedArtifacts = yield* Effect.result(
+          db.run(
+            `INSERT INTO research_experiment_runs
+              (id,hypothesis_claim_id,protocol,environment,workspace,command,command_artifact_id,command_status,
+               command_exit_code,check_command,check_artifact_id,check_status,check_exit_code,verdict,started_at,finished_at)
+             VALUES ('reused',?,'{}','{}','test','run',?,'completed',0,'check',?,'completed',0,'verified',?,?)`,
+            hypothesis.id,
+            run.commandArtifactId,
+            run.checkArtifactId,
+            dossier.created_at,
+            dossier.created_at,
+          ),
+        )
         const other = yield* research.open("別dossier")
         const otherClaim = yield* research.addClaim(other.id, "別の結論", "conclusion")
         const otherArtifact = yield* research.addSnapshot(other.id, {
@@ -239,6 +252,7 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
           verdict: run.verdict,
           failedArtifactSupport,
           fakeVerified,
+          reusedArtifacts,
           crossExperiment,
           foreignArtifacts,
           rendered,
@@ -248,6 +262,7 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
     assert.equal(verdict.verdict, "failed")
     assert.equal(verdict.failedArtifactSupport._tag, "Failure")
     assert.equal(verdict.fakeVerified._tag, "Failure")
+    assert.equal(verdict.reusedArtifacts._tag, "Failure")
     assert.equal(verdict.crossExperiment._tag, "Failure")
     assert.equal(verdict.foreignArtifacts._tag, "Failure")
     assert.match(verdict.rendered, /apply-change sha256=[0-9a-f]{64}/)
