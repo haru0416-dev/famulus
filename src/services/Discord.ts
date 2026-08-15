@@ -16,7 +16,9 @@
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import type { DbFailed } from "../core/errors.ts"
+import { Conflict, type DbFailed } from "../core/errors.ts"
+import { nowIso } from "../core/time.ts"
+import { canonicalJson, digestOf } from "../model/kernel-spec.ts"
 import { Db } from "./Db.ts"
 
 /** API の base URL。テストだけ差し替える。 */
@@ -47,7 +49,10 @@ export interface Tap {
  */
 export type Desk = "talk" | "draft" | "log"
 
-export interface Post {
+export interface Enqueue {
+  /** 同じ用途の中で、同じ論理投稿を指す安定キー。 */
+  readonly purpose: string
+  readonly dedupeKey: string
   readonly text: string
   /** 付けるリアクション。出した直後に自分で付ける。 */
   readonly taps?: readonly Tap[]
@@ -57,6 +62,28 @@ export interface Post {
   readonly ping?: boolean
   /** スレッドの名前。渡すと出した1通からスレッドを立て、そこも読みに行く。 */
   readonly thread?: string
+}
+
+export type OutboundState = "queued" | "sending" | "sent" | "failed" | "partial" | "unknown"
+
+export interface OutboundAction {
+  readonly ordinal: number
+  readonly kind: "open_dm" | "message" | "thread" | "reaction"
+  readonly state: "queued" | "sending" | "succeeded" | "failed" | "unknown"
+  readonly spec: unknown
+  readonly nonce?: string
+  readonly receipt?: unknown
+  readonly error?: string
+}
+
+export interface Outbound {
+  readonly id: string
+  readonly purpose: string
+  readonly dedupeKey: string
+  readonly state: OutboundState
+  readonly spec: unknown
+  readonly error?: string
+  readonly actions: readonly OutboundAction[]
 }
 
 /** ユーザーから返ってきた1件。押したリアクションも自由文も、同じ形にして返す。 */
@@ -197,106 +224,431 @@ const makeDiscord = () =>
         }),
       )
 
-    /** DM のチャンネル。ユーザーごとに固定なので一度引いたら覚えておく。 */
-    const dm = (): Effect.Effect<string | undefined, DbFailed> =>
-      Effect.gen(function* () {
-        const owner = ownerId()
-        if (!token() || !owner) return undefined
-        const cached = yield* db.meta("discord:dm")
-        if (cached) return cached
-        // 既にあれば同じものが返る(作り直しにはならない)。
-        const opened = yield* call("/users/@me/channels", {
-          method: "POST",
-          body: JSON.stringify({ recipient_id: owner }),
-        }).pipe(
-          Effect.flatMap((r) => Effect.tryPromise(() => r.json() as Promise<{ id?: string }>)),
-          Effect.map((j) => j.id),
-          Effect.catch(() => Effect.succeed(undefined)),
-        )
-        if (opened) yield* db.setMeta("discord:dm", opened)
-        return opened
-      })
+    /** DM を開く HTTP は flushQueued だけが行う。ここでは永続 cache だけを見る。 */
+    const dm = (): Effect.Effect<string | undefined, DbFailed> => db.meta("discord:dm")
 
     /**
      * 出す先を決める。`talk` は最後に話しかけられたチャンネルが最優先。
      * `log` は指してあるチャンネルにしか出さない — 落とす先を持たせると進み具合の1行が
      * 会話や DM に混ざる。
      */
-    const channel = (to: Desk = "talk"): Effect.Effect<string | undefined, DbFailed> =>
+    const channel = (to: Desk = "talk"): Effect.Effect<{ id?: string; dm: boolean } | undefined, DbFailed> =>
       Effect.gen(function* () {
-        if (!token()) return undefined
-        if (to === "log") return fixedChannel("log")
+        if (!token() || !ownerId()) return undefined
+        if (to === "log") {
+          const id = fixedChannel("log")
+          return id ? { id, dm: false } : undefined
+        }
         if (to === "draft") {
           const fixed = fixedChannel("draft") ?? fixedChannel("talk")
-          if (fixed) return fixed
+          if (fixed) return { id: fixed, dm: false }
         } else {
           const heard = yield* db.meta("discord:heard_in")
-          if (heard) return heard
+          if (heard) return { id: heard, dm: heard === (yield* dm()) }
           const fixed = fixedChannel("talk")
-          if (fixed) return fixed
+          if (fixed) return { id: fixed, dm: false }
         }
-        return yield* dm()
+        const cached = yield* dm()
+        return { ...(cached ? { id: cached } : {}), dm: true }
       })
 
-    /** リアクションを1つ付ける。押す側が絵文字を探さずに済むよう、出した直後に自分で置く。 */
-    const mark = (ch: string, messageId: string, emoji: string): Effect.Effect<void> =>
-      call(`/channels/${ch}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`, {
-        method: "PUT",
-      }).pipe(Effect.ignore)
+    type ActionSpec =
+      | { readonly kind: "open_dm"; readonly recipientId: string }
+      | { readonly kind: "message"; readonly channelId?: string; readonly message: Record<string, unknown> }
+      | {
+          readonly kind: "thread"
+          readonly channelId?: string
+          readonly messageOrdinal: number
+          readonly name: string
+        }
+      | {
+          readonly kind: "reaction"
+          readonly channelId?: string
+          readonly messageOrdinal: number
+          readonly emoji: string
+          readonly reply: string
+        }
 
-    /**
-     * スレッドを1本立てる。作成されたスレッドの id は起点メッセージ id と同じなので、
-     * スレッド内メッセージの channel_id から返事の宛先を特定できる。
-     *
-     * 立てた直後に cursor を起点へ置く。置かないと「cursor を持たないチャンネル」の扱いになり、
-     * 最初の1通が取り込まれないまま cursor だけ進む。
-     */
-    const branch = (ch: string, messageId: string, name: string): Effect.Effect<void, DbFailed> =>
+    const parse = (raw: unknown): unknown => JSON.parse(String(raw)) as unknown
+
+    const getOutbound = (id: string): Effect.Effect<Outbound | undefined, DbFailed> =>
       Effect.gen(function* () {
-        const made = yield* call(`/channels/${ch}/messages/${messageId}/threads`, {
-          method: "POST",
-          // 名前は 100 字まで。超えると 400 で拒否される(スレッドが立たない)。
-          body: JSON.stringify({ name: name.slice(0, 100), auto_archive_duration: 1440 }),
-        }).pipe(
-          Effect.flatMap((r) => Effect.tryPromise(() => r.json() as Promise<{ id?: string }>)),
-          Effect.map((j) => j.id),
-          Effect.catch(() => Effect.succeed(undefined)),
+        const row = yield* db.get("SELECT * FROM discord_outbound WHERE id=?", id)
+        if (!row) return undefined
+        const actions = yield* db.all(
+          "SELECT ordinal,kind,state,spec,nonce,receipt,error FROM discord_outbound_actions WHERE outbound_id=? ORDER BY ordinal",
+          id,
         )
-        if (!made) return
-        yield* db.setMeta(`discord:last:${made}`, made)
-        const open = yield* meta<string[]>("discord:threads", [])
-        yield* db.setMeta("discord:threads", JSON.stringify([...open, made].slice(-MAX_THREADS)))
+        return {
+          id: String(row.id),
+          purpose: String(row.purpose),
+          dedupeKey: String(row.dedupe_key),
+          state: row.state as OutboundState,
+          spec: parse(row.spec),
+          ...(row.error ? { error: String(row.error) } : {}),
+          actions: actions.map((a) => ({
+            ordinal: Number(a.ordinal),
+            kind: a.kind as OutboundAction["kind"],
+            state: a.state as OutboundAction["state"],
+            spec: parse(a.spec),
+            ...(a.nonce ? { nonce: String(a.nonce) } : {}),
+            ...(a.receipt ? { receipt: parse(a.receipt) } : {}),
+            ...(a.error ? { error: String(a.error) } : {}),
+          })),
+        }
       })
 
-    /** 1通出す。失敗しても例外にしない。送れたらメッセージ id、駄目なら undefined。 */
-    const post = (p: Post): Effect.Effect<string | undefined, DbFailed> =>
+    /** 宛先と全 HTTP action を確定して永続化する。ここでは network に触れない。 */
+    const enqueue = (p: Enqueue): Effect.Effect<Outbound | undefined, DbFailed | Conflict> =>
       Effect.gen(function* () {
-        const ch = yield* channel(p.to)
-        if (!ch) return undefined
-        // 呼びかけは本文に混ぜてから割る。後から足すと、分けた最後の1通だけに付く。
+        const destination = yield* channel(p.to)
+        if (!destination) return undefined
         const owner = ownerId()
-        const head = p.ping && owner && ch !== (yield* dm()) ? `<@${owner}>\n` : ""
-        let last: string | undefined
-        for (const part of chunks(head + p.text)) {
-          last = yield* call(`/channels/${ch}/messages`, {
-            method: "POST",
-            body: JSON.stringify({ content: part }),
-          }).pipe(
-            Effect.flatMap((r) => Effect.tryPromise(() => r.json() as Promise<{ id?: string }>)),
-            Effect.map((j) => j.id),
-            Effect.catch(() => Effect.succeed(undefined)),
-          )
+        if (!owner) return undefined
+        const head = p.ping && !destination.dm ? `<@${owner}>\n` : ""
+        const actionSpecs: ActionSpec[] = []
+        if (!destination.id) actionSpecs.push({ kind: "open_dm", recipientId: owner })
+        const parts = chunks(head + p.text)
+        const messageOrdinals: number[] = []
+        for (const [partIndex, content] of parts.entries()) {
+          const nonce = digestOf({ purpose: p.purpose, dedupeKey: p.dedupeKey, partIndex }).slice(0, 25)
+          messageOrdinals.push(actionSpecs.length)
+          actionSpecs.push({
+            kind: "message",
+            ...(destination.id ? { channelId: destination.id } : {}),
+            message: { content, nonce, enforce_nonce: true },
+          })
         }
-        if (!last) return last
-        // スレッドをリアクションより先に立てる。途中で落ちても返事の宛先は残る。
-        if (p.thread) yield* branch(ch, last, p.thread)
-        if (!p.taps?.length) return last
-        for (const t of p.taps) yield* mark(ch, last, t.emoji)
-        const pending = yield* meta<Pending>("discord:taps", {})
-        pending[last] = Object.fromEntries(p.taps.map((t) => [t.emoji, t.reply]))
-        const kept = Object.entries(pending).slice(-MAX_PENDING)
-        yield* db.setMeta("discord:taps", JSON.stringify(Object.fromEntries(kept)))
-        return last
+        const lastMessage = messageOrdinals.at(-1)
+        if (lastMessage === undefined) return undefined
+        if (p.thread)
+          actionSpecs.push({
+            kind: "thread",
+            ...(destination.id ? { channelId: destination.id } : {}),
+            messageOrdinal: lastMessage,
+            name: p.thread.slice(0, 100),
+          })
+        for (const tap of p.taps ?? [])
+          actionSpecs.push({
+            kind: "reaction",
+            ...(destination.id ? { channelId: destination.id } : {}),
+            messageOrdinal: lastMessage,
+            emoji: tap.emoji,
+            reply: tap.reply,
+          })
+
+        const spec = canonicalJson({
+          purpose: p.purpose,
+          dedupeKey: p.dedupeKey,
+          to: p.to ?? "talk",
+          actions: actionSpecs,
+        })
+        const specHash = digestOf(spec)
+        const existing = yield* db.get(
+          "SELECT id,spec_hash FROM discord_outbound WHERE purpose=? AND dedupe_key=?",
+          p.purpose,
+          p.dedupeKey,
+        )
+        if (existing) {
+          if (existing.spec_hash !== specHash)
+            return yield* Effect.fail(
+              new Conflict({
+                what: "Discord outbound",
+                id: `${p.purpose}:${p.dedupeKey}`,
+                reason: "同じ dedupe key の action spec が変わっている",
+              }),
+            )
+          return yield* getOutbound(String(existing.id))
+        }
+
+        const id = digestOf({ purpose: p.purpose, dedupeKey: p.dedupeKey }).slice(0, 32)
+        const at = nowIso()
+        yield* db.withImmediateTransaction("enqueue Discord outbound", (tx) => {
+          tx.run(
+            `INSERT INTO discord_outbound
+              (id,purpose,dedupe_key,spec,spec_hash,state,created_at,updated_at)
+             VALUES (?,?,?,?,?,'queued',?,?)`,
+            id,
+            p.purpose,
+            p.dedupeKey,
+            spec,
+            specHash,
+            at,
+            at,
+          )
+          for (const [ordinal, action] of actionSpecs.entries()) {
+            const actionJson = canonicalJson(action)
+            const nonce = action.kind === "message" ? String(action.message.nonce) : null
+            tx.run(
+              `INSERT INTO discord_outbound_actions
+                (outbound_id,ordinal,kind,spec,spec_hash,nonce,state,updated_at)
+               VALUES (?,?,?,?,?,?,'queued',?)`,
+              id,
+              ordinal,
+              action.kind,
+              actionJson,
+              digestOf(actionJson),
+              nonce,
+              at,
+            )
+          }
+        })
+        return yield* getOutbound(id)
+      })
+
+    /** 受信開始時にも従来どおり DM を解決するが、HTTP より先に open_dm action を残す。 */
+    const ensureDmQueued = (): Effect.Effect<void, DbFailed> =>
+      Effect.gen(function* () {
+        const owner = ownerId()
+        if (!token() || !owner || (yield* dm())) return
+        const purpose = "discord-dm-cache"
+        const dedupeKey = owner
+        if (
+          yield* db.get(
+            "SELECT id FROM discord_outbound WHERE purpose=? AND dedupe_key=?",
+            purpose,
+            dedupeKey,
+          )
+        )
+          return
+        const action: ActionSpec = { kind: "open_dm", recipientId: owner }
+        const spec = canonicalJson({ purpose, dedupeKey, to: "dm", actions: [action] })
+        const id = digestOf({ purpose, dedupeKey }).slice(0, 32)
+        const at = nowIso()
+        yield* db.withImmediateTransaction("queue Discord DM cache", (tx) => {
+          tx.run(
+            `INSERT INTO discord_outbound
+              (id,purpose,dedupe_key,spec,spec_hash,state,created_at,updated_at)
+             VALUES (?,?,?,?,?,'queued',?,?)`,
+            id,
+            purpose,
+            dedupeKey,
+            spec,
+            digestOf(spec),
+            at,
+            at,
+          )
+          const actionJson = canonicalJson(action)
+          tx.run(
+            `INSERT INTO discord_outbound_actions
+              (outbound_id,ordinal,kind,spec,spec_hash,state,updated_at)
+             VALUES (?,0,'open_dm',?,?,'queued',?)`,
+            id,
+            actionJson,
+            digestOf(actionJson),
+            at,
+          )
+        })
+      })
+
+    const flushQueued = (): Effect.Effect<readonly Outbound[], DbFailed> =>
+      Effect.gen(function* () {
+        // ceiling: systemdの単一poll worker専用。複数worker化するときはclaim ownerを永続化する。
+        const at = nowIso()
+        // 前回が HTTP の途中で止まった action は結果を判定できない。再送せず unknown で閉じる。
+        yield* db.withImmediateTransaction("close interrupted Discord outbound", (tx) => {
+          tx.run(
+            "UPDATE discord_outbound_actions SET state='unknown',error='interrupted during HTTP',updated_at=? WHERE state='sending'",
+            at,
+          )
+          tx.run(
+            "UPDATE discord_outbound SET state='unknown',error='interrupted during HTTP',updated_at=? WHERE state='sending'",
+            at,
+          )
+        })
+
+        const queued = yield* db.all(
+          "SELECT id FROM discord_outbound WHERE state='queued' ORDER BY created_at,id",
+        )
+        const flushed: Outbound[] = []
+        for (const row of queued) {
+          const id = String(row.id)
+          const outbound = yield* getOutbound(id)
+          if (!outbound) continue
+          const receipts = new Map<number, Record<string, unknown>>()
+          let stopped = false
+
+          for (const action of outbound.actions) {
+            if (action.state !== "queued") continue
+            const claimed = yield* db.withImmediateTransaction("claim Discord outbound action", (tx) => {
+              const result = tx.run(
+                "UPDATE discord_outbound_actions SET state='sending',updated_at=? WHERE outbound_id=? AND ordinal=? AND state='queued'",
+                nowIso(),
+                id,
+                action.ordinal,
+              )
+              if (result.changes !== 1) return false
+              tx.run(
+                "UPDATE discord_outbound SET state='sending',updated_at=? WHERE id=? AND state='queued'",
+                nowIso(),
+                id,
+              )
+              return true
+            })
+            if (!claimed) {
+              stopped = true
+              break
+            }
+
+            const spec = action.spec as ActionSpec
+            const dmChannel = () => {
+              const opened = receipts.get(0)?.channelId
+              return typeof opened === "string" ? opened : undefined
+            }
+            const channelId = spec.kind === "open_dm" ? undefined : (spec.channelId ?? dmChannel())
+            const messageReceipt = "messageOrdinal" in spec ? receipts.get(spec.messageOrdinal) : undefined
+            const messageId =
+              typeof messageReceipt?.messageId === "string" ? messageReceipt.messageId : undefined
+
+            let path: string | undefined
+            let init: RequestInit | undefined
+            if (spec.kind === "open_dm") {
+              path = "/users/@me/channels"
+              init = { method: "POST", body: JSON.stringify({ recipient_id: spec.recipientId }) }
+            } else if (spec.kind === "message" && channelId) {
+              path = `/channels/${channelId}/messages`
+              init = { method: "POST", body: JSON.stringify(spec.message) }
+            } else if (spec.kind === "thread" && channelId && messageId) {
+              path = `/channels/${channelId}/messages/${messageId}/threads`
+              init = {
+                method: "POST",
+                body: JSON.stringify({ name: spec.name, auto_archive_duration: 1440 }),
+              }
+            } else if (spec.kind === "reaction" && channelId && messageId) {
+              path = `/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(spec.emoji)}/@me`
+              init = { method: "PUT" }
+            }
+
+            const requested = path
+              ? yield* Effect.result(call(path, init))
+              : ({ _tag: "Failure", failure: new Error("required receipt is missing") } as const)
+            let receipt: Record<string, unknown> | undefined
+            let outcome: "succeeded" | "failed" | "unknown"
+            let error: string | undefined
+
+            if (requested._tag === "Failure") {
+              outcome = "unknown"
+              error = String(requested.failure)
+            } else if (
+              requested.success.status >= 500 ||
+              requested.success.status < 200 ||
+              requested.success.status >= 300
+            ) {
+              outcome =
+                requested.success.status >= 400 && requested.success.status < 500 ? "failed" : "unknown"
+              error = `HTTP ${requested.success.status}`
+            } else if (spec.kind === "reaction") {
+              outcome = "succeeded"
+              receipt = { status: requested.success.status }
+            } else {
+              const decoded = yield* Effect.result(
+                Effect.tryPromise(() => requested.success.json() as Promise<{ id?: unknown }>),
+              )
+              const remoteId = decoded._tag === "Success" ? decoded.success.id : undefined
+              if (typeof remoteId !== "string" || remoteId === "") {
+                outcome = "unknown"
+                error = "required receipt is missing"
+              } else {
+                outcome = "succeeded"
+                receipt =
+                  spec.kind === "open_dm"
+                    ? { channelId: remoteId }
+                    : spec.kind === "message"
+                      ? { channelId, messageId: remoteId }
+                      : { threadId: remoteId }
+              }
+            }
+
+            if (outcome !== "succeeded" || !receipt) {
+              const finalError = error ?? "Discord outbound failed"
+              yield* db.withImmediateTransaction("fail Discord outbound action", (tx) => {
+                tx.run(
+                  "UPDATE discord_outbound_actions SET state=?,error=?,updated_at=? WHERE outbound_id=? AND ordinal=? AND state='sending'",
+                  outcome,
+                  finalError,
+                  nowIso(),
+                  id,
+                  action.ordinal,
+                )
+                const succeeded = Number(
+                  tx.get(
+                    "SELECT COUNT(*) n FROM discord_outbound_actions WHERE outbound_id=? AND state='succeeded'",
+                    id,
+                  )?.n ?? 0,
+                )
+                const state = outcome === "unknown" ? "unknown" : succeeded > 0 ? "partial" : "failed"
+                tx.run(
+                  "UPDATE discord_outbound SET state=?,error=?,updated_at=? WHERE id=? AND state='sending'",
+                  state,
+                  finalError,
+                  nowIso(),
+                  id,
+                )
+              })
+              stopped = true
+              break
+            }
+
+            yield* db.withImmediateTransaction("complete Discord outbound action", (tx) => {
+              tx.run(
+                "UPDATE discord_outbound_actions SET state='succeeded',receipt=?,updated_at=? WHERE outbound_id=? AND ordinal=? AND state='sending'",
+                canonicalJson(receipt),
+                nowIso(),
+                id,
+                action.ordinal,
+              )
+              if (spec.kind === "open_dm") {
+                tx.run(
+                  "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:dm',?)",
+                  receipt.channelId,
+                )
+              } else if (spec.kind === "thread") {
+                const threadId = String(receipt.threadId)
+                tx.run(
+                  "INSERT OR REPLACE INTO schema_meta(key,value)VALUES(?,?)",
+                  `discord:last:${threadId}`,
+                  threadId,
+                )
+                const raw = tx.get("SELECT value FROM schema_meta WHERE key='discord:threads'")?.value
+                let open: string[] = []
+                try {
+                  open = raw ? (JSON.parse(String(raw)) as string[]) : []
+                } catch {
+                  open = []
+                }
+                tx.run(
+                  "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:threads',?)",
+                  JSON.stringify([...open, threadId].slice(-MAX_THREADS)),
+                )
+              } else if (spec.kind === "reaction" && messageId) {
+                const raw = tx.get("SELECT value FROM schema_meta WHERE key='discord:taps'")?.value
+                let pending: Pending = {}
+                try {
+                  pending = raw ? (JSON.parse(String(raw)) as Pending) : {}
+                } catch {
+                  pending = {}
+                }
+                pending[messageId] = { ...(pending[messageId] ?? {}), [spec.emoji]: spec.reply }
+                const kept = Object.entries(pending).slice(-MAX_PENDING)
+                tx.run(
+                  "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:taps',?)",
+                  JSON.stringify(Object.fromEntries(kept)),
+                )
+              }
+            })
+            receipts.set(action.ordinal, receipt)
+          }
+
+          if (!stopped)
+            yield* db.run(
+              "UPDATE discord_outbound SET state='sent',updated_at=? WHERE id=? AND state='sending'",
+              nowIso(),
+              id,
+            )
+          const result = yield* getOutbound(id)
+          if (result) flushed.push(result)
+        }
+        return flushed
       })
 
     /** 読みに行くチャンネル。出す先すべてと DM、立てたスレッド。 */
@@ -335,6 +687,8 @@ const makeDiscord = () =>
      */
     const pollInbound = (): Effect.Effect<Batch, DbFailed> =>
       Effect.gen(function* () {
+        yield* ensureDmQueued()
+        yield* flushQueued()
         const owner = ownerId()
         const pending = yield* meta<Pending>("discord:taps", {})
         const out: Inbound[] = []
@@ -423,14 +777,14 @@ const makeDiscord = () =>
         const lg = yield* channel("log")
         const d = yield* dm()
         return {
-          ...(talk ? { talk } : {}),
-          ...(draft ? { draft } : {}),
-          ...(lg ? { log: lg } : {}),
+          ...(talk?.id ? { talk: talk.id } : {}),
+          ...(draft?.id ? { draft: draft.id } : {}),
+          ...(lg?.id ? { log: lg.id } : {}),
           ...(d ? { dm: d } : {}),
         }
       })
 
-    return { post, pollInbound, commitInboundBatch, configured, where } as const
+    return { enqueue, getOutbound, flushQueued, pollInbound, commitInboundBatch, configured, where } as const
   })
 
 export class Discord extends Context.Service<Discord, Effect.Success<ReturnType<typeof makeDiscord>>>()(

@@ -4,8 +4,7 @@
  * events の append-only は SQL トリガで強制する(DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)。
  * どのドライバから触っても同じように掛かる。
  *
- * 外に出る行為の冪等性は担保していない。用のテーブルは作ったが読み書きする側が書かれず、
- * 落とした。
+ * Discord outbound は action と receipt を現行 schema に永続化し、曖昧な結果を再送しない。
  *
  * Tag + Layer にしてあるので、テストは `DbLive(":memory:")` を積むだけでトリガ込みの
  * 本物のスキーマを相手にできる。

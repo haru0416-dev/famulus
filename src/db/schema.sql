@@ -5,6 +5,37 @@ CREATE TABLE schema_meta (
   value TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE discord_outbound (
+  id          TEXT PRIMARY KEY,
+  purpose     TEXT NOT NULL,
+  dedupe_key  TEXT NOT NULL,
+  spec        TEXT NOT NULL CHECK (json_valid(spec)),
+  spec_hash   TEXT NOT NULL,
+  state       TEXT NOT NULL CHECK (state IN ('queued','sending','sent','failed','partial','unknown')),
+  error       TEXT,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  UNIQUE (purpose, dedupe_key),
+  CHECK ((state IN ('failed','partial','unknown')) = (error IS NOT NULL))
+) STRICT;
+
+CREATE TABLE discord_outbound_actions (
+  outbound_id TEXT NOT NULL REFERENCES discord_outbound(id),
+  ordinal     INTEGER NOT NULL CHECK (ordinal >= 0),
+  kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction')),
+  spec        TEXT NOT NULL CHECK (json_valid(spec)),
+  spec_hash   TEXT NOT NULL,
+  nonce       TEXT CHECK (nonce IS NULL OR length(nonce) <= 25),
+  state       TEXT NOT NULL CHECK (state IN ('queued','sending','succeeded','failed','unknown')),
+  receipt     TEXT CHECK (receipt IS NULL OR json_valid(receipt)),
+  error       TEXT,
+  updated_at  TEXT NOT NULL,
+  PRIMARY KEY (outbound_id, ordinal),
+  CHECK ((state IN ('failed','unknown')) = (error IS NOT NULL)),
+  CHECK ((state = 'succeeded') = (receipt IS NOT NULL))
+) STRICT;
+CREATE INDEX idx_discord_outbound_state ON discord_outbound(state, created_at);
+
 CREATE TABLE cycle_lease (
   lease_name          TEXT PRIMARY KEY CHECK (lease_name = 'cycle'),
   state               TEXT NOT NULL CHECK (state IN ('free','held','released')),

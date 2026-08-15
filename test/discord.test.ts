@@ -12,7 +12,7 @@ import type { AddressInfo } from "node:net"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import { Db } from "../src/services/Db.ts"
-import { Discord, type Post } from "../src/services/Discord.ts"
+import { Discord, type Enqueue } from "../src/services/Discord.ts"
 import { withHarness } from "./helpers.ts"
 
 const OWNER = "1211509900937793597"
@@ -37,6 +37,7 @@ interface Msg {
  */
 const fakeDiscord = async (
   seed: Msg[] = [],
+  respond?: (hit: Hit, hits: readonly Hit[]) => { status: number; body?: unknown } | undefined,
 ): Promise<{
   url: string
   hits: Hit[]
@@ -63,6 +64,11 @@ const fakeDiscord = async (
       hits.push({ method: req.method ?? "", path, body })
       const json = (v: unknown) =>
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(v))
+      const override = respond?.(hits.at(-1) as Hit, hits)
+      if (override)
+        return res
+          .writeHead(override.status, { "content-type": "application/json" })
+          .end(JSON.stringify(override.body ?? {}))
 
       if (path === "/users/@me/channels") return json({ id: CH })
       const [, ch] = /^\/channels\/(\d+)\//.exec(path) ?? []
@@ -103,10 +109,21 @@ const fakeDiscord = async (
   }
 }
 
-const post = (p: Post) =>
+let postSequence = 0
+const post = (p: Omit<Enqueue, "purpose" | "dedupeKey">) =>
   Effect.gen(function* () {
     const d = yield* Discord
-    return yield* d.post(p)
+    const outbound = yield* d.enqueue({
+      ...p,
+      purpose: "discord-test",
+      dedupeKey: String(++postSequence),
+    })
+    if (!outbound) return undefined
+    yield* d.flushQueued()
+    const done = yield* d.getOutbound(outbound.id)
+    const messages = done?.actions.filter((a) => a.kind === "message" && a.state === "succeeded") ?? []
+    const receipt = messages.at(-1)?.receipt as { messageId?: unknown } | undefined
+    return typeof receipt?.messageId === "string" ? receipt.messageId : undefined
   })
 
 const pollInbound = Effect.gen(function* () {
@@ -620,6 +637,121 @@ test("行数でも分ける — 2000 字に収まっていても縦に長いと�
       const joined = sent.map((x) => String(x.body?.content ?? "")).join("\n")
       assert.equal(joined.split("\n").length, 40)
       assert.equal(joined.split("\n").at(-1), "行39")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("enqueue は HTTP を使わず、同じ dedupe は同じ行、内容変更は Conflict", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const input = { purpose: "reply", dedupeKey: "event-1", text: "返事" } as const
+      const first = await h.run(Effect.flatMap(Discord, (d) => d.enqueue(input)))
+      const second = await h.run(Effect.flatMap(Discord, (d) => d.enqueue(input)))
+      assert.equal(first?.id, second?.id)
+      assert.equal(dc.hits.length, 0)
+      const message = first?.actions.find((a) => a.kind === "message")
+      assert.equal(message?.nonce?.length, 25)
+      assert.deepEqual(message?.spec, {
+        kind: "message",
+        channelId: TALK,
+        message: { content: "返事", enforce_nonce: true, nonce: message?.nonce },
+      })
+
+      const conflict = await h.fail(
+        Effect.flatMap(Discord, (d) => d.enqueue({ ...input, text: "変えた返事" })),
+      )
+      assert.equal((conflict as { _tag?: unknown })._tag, "Conflict")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("DM cache が無ければ open_dm を先に永続化し、flush が receipt と cache を残す", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url)
+  try {
+    await withHarness(async (h) => {
+      const queued = await h.run(
+        Effect.flatMap(Discord, (d) => d.enqueue({ purpose: "tell", dedupeKey: "dm-1", text: "本文" })),
+      )
+      assert.deepEqual(
+        queued?.actions.map((a) => a.kind),
+        ["open_dm", "message"],
+      )
+      assert.equal(dc.hits.length, 0)
+      const [done] = await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      assert.equal(done?.state, "sent")
+      assert.equal(await h.run(Effect.flatMap(Db, (db) => db.meta("discord:dm"))), CH)
+      const body = dc.hits.find((hit) => hit.path.endsWith("/messages"))?.body
+      assert.equal(body?.enforce_nonce, true)
+      assert.equal(String(body?.nonce).length, 25)
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("2通目の 429 は partial で止まり、自動再送しない", async () => {
+  let messages = 0
+  const dc = await fakeDiscord([], (hit) => {
+    if (hit.method === "POST" && hit.path.endsWith("/messages") && ++messages === 2) return { status: 429 }
+    return undefined
+  })
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const queued = await h.run(
+        Effect.flatMap(Discord, (d) =>
+          d.enqueue({
+            purpose: "reply",
+            dedupeKey: "partial",
+            text: `${"あ".repeat(1500)}\n${"い".repeat(1500)}`,
+          }),
+        ),
+      )
+      const [done] = await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      assert.equal(done?.state, "partial")
+      assert.deepEqual(
+        done?.actions.map((a) => a.state),
+        ["succeeded", "failed"],
+      )
+      await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      assert.equal(messages, 2)
+      assert.equal(done?.id, queued?.id)
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("5xx は unknown で止まり、自動再送しない", async () => {
+  let messages = 0
+  const dc = await fakeDiscord([], (hit) => {
+    if (hit.method === "POST" && hit.path.endsWith("/messages")) {
+      messages++
+      return { status: 503 }
+    }
+    return undefined
+  })
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      await h.run(
+        Effect.flatMap(Discord, (d) => d.enqueue({ purpose: "reply", dedupeKey: "unknown", text: "本文" })),
+      )
+      const [done] = await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      assert.equal(done?.state, "unknown")
+      await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      assert.equal(messages, 1)
     })
   } finally {
     wire(undefined)

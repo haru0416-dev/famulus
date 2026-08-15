@@ -30,6 +30,7 @@ import { localDayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
 import { logPost, readJournal } from "./journal.ts"
+import { digestOf } from "./model/kernel-spec.ts"
 import { poolForModel } from "./model/models.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
 import { Attention, type CyclePlan, type ObservedEvent } from "./services/Attention.ts"
@@ -451,11 +452,18 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         const att = yield* Attention
         const db = yield* Db
         const discord = yield* Discord
-        // 返信は DB より先に出す。ユーザーは待っている側なので、記録に手間取って
-        // 返事が遅れる順序にしない。出せなくても DB には残るので、失っては困るものは無い。
-        // 切られた回の補完文は出さない。届けてよいのは、書かれた返事だけ。
+        const deliveryKey = digestOf({
+          reasonKey: d.reasonKey,
+          upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
+          inputIds: d.newEvents.map((event) => event.id),
+        })
+        // 返信は HTTP に出さず durable queue に置く。切られた回の補完文は enqueue しない。
         if (spokenTo && text && !cutOff) {
-          yield* discord.post({ text })
+          yield* discord.enqueue({
+            purpose: "cycle-reply",
+            dedupeKey: deliveryKey,
+            text,
+          })
           yield* lease.assertCurrent(token)
         }
         yield* mem.remember({
@@ -501,11 +509,17 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         //
         // 書いた記録をそのまま読み直して出す。ここで数え直すと、画面で見る値と
         // `oz journal` の値が別々に育って、食い違ったときにどちらが本当か決められなくなる。
-        // 最後に置いてあるのは、外へ出すのに失敗しても commit まで済んでいるようにするため。
+        // 最後に置いてあるのは、enqueue に失敗しても commit まで済んでいるようにするため。
         const [entry] = yield* readJournal(1)
         if (entry) {
           yield* lease.assertCurrent(token)
-          yield* discord.post({ text: logPost(entry), to: "log" })
+          const logText = logPost(entry)
+          yield* discord.enqueue({
+            purpose: "cycle-log",
+            dedupeKey: deliveryKey,
+            text: logText,
+            to: "log",
+          })
         }
       }),
     )

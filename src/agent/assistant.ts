@@ -26,6 +26,7 @@ import { causeReason } from "../core/errors.ts"
 import { localDayRange, localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
 import { governedModel } from "../model/governed.ts"
+import { digestOf } from "../model/kernel-spec.ts"
 import { CODEX_POOL } from "../model/models.ts"
 import { Runner } from "../model/Runner.ts"
 import { vs } from "../model/schema.ts"
@@ -833,7 +834,9 @@ function buildTools(state: TurnState, gate: ToolGate) {
           Effect.gen(function* () {
             const discord = yield* Discord
             const mem = yield* Memory
-            const id = yield* discord.post({
+            const outbound = yield* discord.enqueue({
+              purpose: "assistant-tell",
+              dedupeKey: digestOf({ title, body, urgent: urgent === true }),
               text: `**${title}**\n${body}`,
               to: "talk",
               // メンションを付けるのは、今日中に対応しないと間に合わないものだけ。
@@ -841,16 +844,14 @@ function buildTools(state: TurnState, gate: ToolGate) {
               ping: urgent === true,
             })
             if (gate) yield* Effect.promise(gate)
-            // Discord 投稿APIがメッセージIDを返したかを DB に残す。結果を残さないと、
-            // 投稿に失敗した通知を送信済みとして次のターンが進む。
             yield* mem.remember({
               source: "system",
-              content: { told: title, body, sent: Boolean(id) },
+              content: { told: title, body, queued: Boolean(outbound) },
               text: `${title}\n${body}`,
             })
-            return id
-              ? `送った: ${title}`
-              : "送れなかった(Discord の宛先が未設定か、届かない)。中身は記録に残したので、次の対話で伝える。"
+            return outbound
+              ? `送信待ちに入れた: ${title}`
+              : "送信待ちに入れられなかった(Discord の宛先が未設定)。中身は記録に残したので、次の対話で伝える。"
           }),
         ),
     }),
@@ -968,7 +969,9 @@ function buildTools(state: TurnState, gate: ToolGate) {
             const outcome = reviewOutcome(review.success.structured as Review | undefined, title, body)
             if (!outcome.post) return outcome.text
             if (gate) yield* Effect.promise(gate)
-            const id = yield* discord.post({
+            const outbound = yield* discord.enqueue({
+              purpose: "assistant-draft",
+              dedupeKey: digestOf({ title, body, basis }),
               text: `**${title}**\n\n${body}\n\n---\n根拠: ${basis}`,
               // 押してもらわないと外に出ない文なので、ミュートしてある場所でも呼ぶ。
               to: "draft",
@@ -983,15 +986,15 @@ function buildTools(state: TurnState, gate: ToolGate) {
             })
             if (gate) yield* Effect.promise(gate)
             // 出した事実は日付で持つ。1日1本の上限はここで数える(押されたかは関係ない)。
-            if (id) yield* db.setMeta("daily:draft", localDayRange(nowIso()).key)
+            if (outbound) yield* db.setMeta("daily:draft", localDayRange(nowIso()).key)
             yield* mem.remember({
               source: "system",
-              content: { drafted: title, body, basis, sent: Boolean(id) },
+              content: { drafted: title, body, basis, queued: Boolean(outbound) },
               text: `${title}\n${body}`,
             })
-            return id
-              ? `渡した: ${title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
-              : "Discord に出せなかった。本文は記録に残したので、次の対話で見せる。"
+            return outbound
+              ? `送信待ちに入れた: ${title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
+              : "Discord の送信待ちに入れられなかった。本文は記録に残したので、次の対話で見せる。"
           }),
         ),
     }),
