@@ -664,7 +664,8 @@ test("下書き生成条件は決めた時刻から1日1回だけ成立する", 
           yield* db.run(
             `INSERT INTO discord_outbound
               (id,purpose,dedupe_key,spec,spec_hash,state,created_at,updated_at)
-             VALUES ('draft-out','test','draft-out','{}','hash','sent','2026-08-09T09:00:00Z','2026-08-09T09:01:00Z')`,
+             VALUES ('draft-out','assistant-draft',?,'{}','hash','sent','2026-08-09T09:00:00Z','2026-08-09T09:01:00Z')`,
+            saved.first.id,
           )
           yield* db.run(
             `INSERT INTO discord_outbound_actions

@@ -255,7 +255,7 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
   wire(dc.url)
   try {
     await withHarness(async (h) => {
-      const { draftId, messageId } = await h.run(
+      const { draftId, messageId, outboundState, actionStates } = await h.run(
         Effect.gen(function* () {
           const drafts = yield* Drafts
           const discord = yield* Discord
@@ -272,12 +272,23 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
           const receipt = done?.actions.find((a) => a.kind === "message")?.receipt as
             | { messageId?: unknown }
             | undefined
-          return { draftId: draft.id, messageId: String(receipt?.messageId) }
+          return {
+            draftId: draft.id,
+            messageId: String(receipt?.messageId),
+            outboundState: done?.state,
+            actionStates: done?.actions.map((action) => action.state),
+          }
         }),
       )
 
+      assert.deepEqual(
+        { outboundState, actionStates },
+        { outboundState: "sent", actionStates: ["succeeded", "succeeded", "succeeded"] },
+      )
       const reaction = dc.msgs.find((x) => x.id === messageId)?.reactions?.[0]
       assert.ok(reaction)
+      const pendingTaps = await h.run(Effect.flatMap(Db, (db) => db.meta("discord:taps")))
+      assert.notEqual(pendingTaps, undefined, `reaction待ちが未登録: ${pendingTaps}`)
       reaction.count = 2
       assert.equal(await h.run(drainInbox), 1)
       assert.equal(await h.run(drainInbox), 0)
@@ -342,7 +353,25 @@ test("押されたリアクションも、記録し終えるまでは消えな�
       const first = await h.run(peek)
       assert.deepEqual([...first.items], [{ id: `${id}:✅`, text: "出していい" }])
       // 待ちリストから落ちるのも `seen` のとき。落ちる前に切られたら、次の回にもう一度返る。
-      assert.deepEqual(await h.run(pollInbound), [{ id: `${id}:✅`, text: "出していい" }])
+      const second = await h.run(peek)
+      assert.deepEqual([...second.items], [{ id: `${id}:✅`, text: "出していい" }])
+      await h.run(
+        Effect.gen(function* () {
+          const db = yield* Db
+          const current = JSON.parse((yield* db.meta("discord:taps")) ?? "{}") as Record<string, unknown>
+          yield* db.setMeta(
+            "discord:taps",
+            JSON.stringify({ ...current, "999": { "✅": { reply: "新着" } } }),
+          )
+          const discord = yield* Discord
+          yield* discord.commitInboundBatch(second)
+        }),
+      )
+      const left = JSON.parse(
+        (await h.run(Effect.flatMap(Db, (db) => db.meta("discord:taps")))) ?? "{}",
+      ) as Record<string, unknown>
+      assert.equal(id === undefined ? undefined : left[id], undefined)
+      assert.deepEqual(left["999"], { "✅": { reply: "新着" } }, "poll中に追加されたtap対応表は消さない")
       assert.deepEqual(await h.run(pollInbound), [])
     })
   } finally {
@@ -799,11 +828,11 @@ test("5xx は unknown で止まり、自動再送しない", async () => {
         ),
       )
       assert.ok(outbound)
-      await h.run(Effect.flatMap(Drafts, (drafts) => drafts.attachOutbound(draft.id, outbound.id)))
       const [done] = await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
       assert.equal(done?.state, "unknown")
       const failedDraft = await h.run(Effect.flatMap(Drafts, (drafts) => drafts.forDay()))
       assert.equal(failedDraft?.state, "delivery_failed")
+      assert.equal(failedDraft?.outbound_id, outbound.id, "attach前の終端もdedupe keyから紐付ける")
       const plan = await h.run(Effect.flatMap(Attention, (attention) => attention.planCycle()))
       assert.equal(plan.draftDue, false, "配送失敗だけで同じ日次処理を繰り返さない")
       await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))

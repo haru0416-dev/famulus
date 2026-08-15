@@ -107,8 +107,8 @@ export interface Batch {
   readonly items: readonly Inbound[]
   /** チャンネルごとの新しい cursor。`commitInboundBatch` を呼ぶまで DB には入らない。 */
   readonly marks: Readonly<Record<string, string>>
-  /** 処理済みリアクションを除外した後の、リアクション待ち一覧。 */
-  readonly taps: Pending
+  /** このbatchで押下を確認したmessage。commit時点の最新一覧からだけ削除する。 */
+  readonly consumedTapIds: readonly string[]
   /** 最後に自由文が来たチャンネル。返事はここへ出す。 */
   readonly heard?: string
 }
@@ -494,6 +494,10 @@ const makeDiscord = () =>
           const outbound = yield* getOutbound(id)
           if (!outbound) continue
           const receipts = new Map<number, Record<string, unknown>>()
+          const completedTaps: {
+            readonly messageId: string
+            readonly spec: Extract<ActionSpec, { kind: "reaction" }>
+          }[] = []
           let stopped = false
 
           for (const action of outbound.actions) {
@@ -643,39 +647,46 @@ const makeDiscord = () =>
                   "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:threads',?)",
                   JSON.stringify([...open, threadId].slice(-MAX_THREADS)),
                 )
-              } else if (spec.kind === "reaction" && messageId) {
-                const raw = tx.get("SELECT value FROM schema_meta WHERE key='discord:taps'")?.value
-                let pending: Pending = {}
-                try {
-                  pending = raw ? (JSON.parse(String(raw)) as Pending) : {}
-                } catch {
-                  pending = {}
-                }
+              }
+            })
+            receipts.set(action.ordinal, receipt)
+            if (spec.kind === "reaction" && messageId) completedTaps.push({ messageId, spec })
+          }
+
+          if (!stopped)
+            yield* db.withImmediateTransaction("complete Discord outbound", (tx) => {
+              const sent = tx.run(
+                `UPDATE discord_outbound SET state='sent',updated_at=?
+                  WHERE id=? AND state='sending'
+                    AND NOT EXISTS (
+                      SELECT 1 FROM discord_outbound_actions a
+                       WHERE a.outbound_id=discord_outbound.id AND a.state!='succeeded'
+                    )`,
+                nowIso(),
+                id,
+              )
+              // Bun reports trigger updates in `changes` too。0だけがclaimを失った場合。
+              if (sent.changes === 0) return
+
+              const raw = tx.get("SELECT value FROM schema_meta WHERE key='discord:taps'")?.value
+              let pending: Pending = {}
+              try {
+                pending = raw ? (JSON.parse(String(raw)) as Pending) : {}
+              } catch {
+                pending = {}
+              }
+              for (const { messageId, spec } of completedTaps) {
                 pending[messageId] = {
                   ...(pending[messageId] ?? {}),
                   [spec.emoji]: { reply: spec.reply, ...(spec.draft ? { draft: spec.draft } : {}) },
                 }
-                const kept = Object.entries(pending).slice(-MAX_PENDING)
-                tx.run(
-                  "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:taps',?)",
-                  JSON.stringify(Object.fromEntries(kept)),
-                )
               }
+              const kept = Object.entries(pending).slice(-MAX_PENDING)
+              tx.run(
+                "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:taps',?)",
+                JSON.stringify(Object.fromEntries(kept)),
+              )
             })
-            receipts.set(action.ordinal, receipt)
-          }
-
-          if (!stopped)
-            yield* db.run(
-              `UPDATE discord_outbound SET state='sent',updated_at=?
-                WHERE id=? AND state='sending'
-                  AND NOT EXISTS (
-                    SELECT 1 FROM discord_outbound_actions a
-                     WHERE a.outbound_id=discord_outbound.id AND a.state!='succeeded'
-                  )`,
-              nowIso(),
-              id,
-            )
           const result = yield* getOutbound(id)
           if (result) flushed.push(result)
         }
@@ -723,6 +734,7 @@ const makeDiscord = () =>
         const owner = ownerId()
         const pending = yield* meta<Pending>("discord:taps", {})
         const out: Inbound[] = []
+        const consumedTapIds: string[] = []
         const marks: Record<string, string> = {}
         let heard: string | undefined
         // 比較用に、`heard` を決めたときのメッセージ id を別に持つ。`heard` はチャンネル id なので、
@@ -770,6 +782,7 @@ const makeDiscord = () =>
                   ...(tap.draft ? { draft: tap.draft } : {}),
                 })
                 delete pending[m.id]
+                consumedTapIds.push(m.id)
                 break
               }
             }
@@ -782,7 +795,7 @@ const makeDiscord = () =>
           // チャンネルをまたいで snowflake の時刻順に並べる。同一ミリ秒内は id の数値順。
           items: out.sort((a, b) => (newer(a.id.split(":")[0] ?? "0", b.id.split(":")[0] ?? "0") ? 1 : -1)),
           marks,
-          taps: pending,
+          consumedTapIds,
           ...(heard === undefined ? {} : { heard }),
         } satisfies Batch
       })
@@ -795,7 +808,21 @@ const makeDiscord = () =>
       Effect.gen(function* () {
         for (const [ch, id] of Object.entries(b.marks)) yield* db.setMeta(`discord:last:${ch}`, id)
         if (b.heard !== undefined) yield* db.setMeta("discord:heard_in", b.heard)
-        yield* db.setMeta("discord:taps", JSON.stringify(b.taps))
+        if (b.consumedTapIds.length > 0)
+          yield* db.withImmediateTransaction("commit Discord taps", (tx) => {
+            const raw = tx.get("SELECT value FROM schema_meta WHERE key='discord:taps'")?.value
+            let pending: Pending = {}
+            try {
+              pending = raw ? (JSON.parse(String(raw)) as Pending) : {}
+            } catch {
+              pending = {}
+            }
+            for (const messageId of b.consumedTapIds) delete pending[messageId]
+            tx.run(
+              "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:taps',?)",
+              JSON.stringify(pending),
+            )
+          })
       })
 
     /** 出せるか。CLI の表示にだけ使う。 */

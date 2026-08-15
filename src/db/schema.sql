@@ -59,7 +59,8 @@ AFTER UPDATE OF state ON discord_outbound
 WHEN NEW.state != OLD.state AND NEW.state IN ('sent','failed','partial','unknown')
 BEGIN
   UPDATE drafts
-     SET state = CASE
+     SET outbound_id = COALESCE(outbound_id, NEW.id),
+         state = CASE
            WHEN NEW.state = 'sent' AND EXISTS (
              SELECT 1 FROM discord_outbound_actions
               WHERE outbound_id = NEW.id AND kind = 'message' AND state = 'succeeded' AND receipt IS NOT NULL
@@ -75,7 +76,8 @@ BEGIN
          END,
          review_feedback = CASE WHEN NEW.state = 'sent' THEN review_feedback ELSE NEW.error END,
          updated_at = NEW.updated_at
-   WHERE outbound_id = NEW.id AND state = 'delivery_pending';
+   WHERE state IN ('review_pending','delivery_pending')
+     AND (outbound_id = NEW.id OR (outbound_id IS NULL AND NEW.purpose = 'assistant-draft' AND id = NEW.dedupe_key));
 END;
 
 CREATE TABLE cycle_lease (

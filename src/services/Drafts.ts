@@ -124,8 +124,14 @@ const makeDrafts = () =>
 
     const attachOutbound = (id: string, outboundId: string, at: string = nowIso()) =>
       db.withImmediateTransaction("attach draft outbound", (tx) => {
-        const outbound = tx.get("SELECT state,error,updated_at FROM discord_outbound WHERE id=?", outboundId)
+        const outbound = tx.get(
+          "SELECT purpose,dedupe_key,state,error,updated_at FROM discord_outbound WHERE id=?",
+          outboundId,
+        )
         if (!outbound) throw new Error(`Discord outbound not found: ${outboundId}`)
+        if (outbound.purpose !== "assistant-draft" || outbound.dedupe_key !== id) {
+          throw new Error(`Discord outbound does not belong to draft: ${outboundId}`)
+        }
         const outboundState = String(outbound.state)
         const hasReceipt = Boolean(
           tx.get(
