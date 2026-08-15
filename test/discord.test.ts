@@ -266,10 +266,11 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
   wire(dc.url)
   try {
     await withHarness(async (h) => {
-      const { draftId, messageId, outboundState, actionStates } = await h.run(
+      const { draftId, messageId, outboundState, actionStates, health } = await h.run(
         Effect.gen(function* () {
           const drafts = yield* Drafts
           const discord = yield* Discord
+          const db = yield* Db
           const dossier = yield* terminalDossier("draft reaction")
           const draft = yield* drafts.materialize({ title: "題", body: "本文", dossierId: dossier.id })
           const outbound = yield* discord.enqueue({
@@ -289,9 +290,11 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
             messageId: String(receipt?.messageId),
             outboundState: done?.state,
             actionStates: done?.actions.map((action) => action.state),
+            health: yield* db.meta("health:draft:last_success"),
           }
         }),
       )
+      assert.ok(health)
 
       assert.deepEqual(
         { outboundState, actionStates },
@@ -851,6 +854,8 @@ test("5xx は unknown で止まり、自動再送しない", async () => {
       assert.equal(failedDraft?.outbound_id, outbound.id, "attach前の終端もdedupe keyから紐付ける")
       const plan = await h.run(Effect.flatMap(Attention, (attention) => attention.planCycle()))
       assert.equal(plan.draftDue, false, "配送失敗だけで同じ日次処理を繰り返さない")
+      const health = await h.run(Effect.flatMap(Db, (db) => db.meta("health:draft:last_failure")))
+      assert.match(health ?? "", /"stage":"delivery"/)
       await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
       assert.equal(messages, 1)
     })

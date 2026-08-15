@@ -344,6 +344,13 @@ BEGIN
          updated_at = NEW.updated_at
    WHERE state IN ('review_pending','delivery_pending')
      AND (outbound_id = NEW.id OR (outbound_id IS NULL AND NEW.purpose = 'assistant-draft' AND id = NEW.dedupe_key));
+  INSERT OR REPLACE INTO schema_meta(key,value)
+    SELECT 'health:draft:last_success',NEW.updated_at
+     WHERE EXISTS (SELECT 1 FROM drafts WHERE outbound_id=NEW.id AND state='delivered');
+  INSERT OR REPLACE INTO schema_meta(key,value)
+    SELECT 'health:draft:last_failure',json_object('at',NEW.updated_at,'stage','delivery','error',NEW.error)
+     WHERE NEW.state IN ('failed','partial','unknown')
+       AND EXISTS (SELECT 1 FROM drafts WHERE outbound_id=NEW.id AND state='delivery_failed');
 END;
 
 CREATE TABLE cycle_lease (

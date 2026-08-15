@@ -214,6 +214,10 @@ const program = (argv: readonly string[]) =>
         const backupPath = yield* db.meta("backup:last_path")
         const restoreAt = yield* db.meta("restore:last_verified_at")
         const restorePath = yield* db.meta("restore:last_verified_path")
+        const inboundOk = yield* db.meta("health:inbound:last_success")
+        const inboundFailed = yield* db.meta("health:inbound:last_failure")
+        const draftOk = yield* db.meta("health:draft:last_success")
+        const draftFailed = yield* db.meta("health:draft:last_failure")
         const lease = yield* (yield* CycleLease).status()
         // 記録が溜まっているか。仕組みがあることと中身があることは別で、
         // ここを出さないと「静かなのは用が無いからか、何も知らないからか」がユーザーに分からない。
@@ -239,6 +243,8 @@ const program = (argv: readonly string[]) =>
           restoreAt
             ? `復元検証: 最終 ${restoreAt} (${restorePath ?? "対象不明"})`
             : "復元検証: まだ無い — oz backup または oz restore --verify",
+          `受信health: 成功 ${inboundOk ?? "まだ無い"}${inboundFailed ? ` / 失敗 ${inboundFailed}` : ""}`,
+          `下書きhealth: 配送成功 ${draftOk ?? "まだ無い"}${draftFailed ? ` / 失敗 ${draftFailed}` : ""}`,
           lease.state === "held"
             ? `cycle lease: held fence=${lease.fence} ${lease.owner_hostname ?? "host不明"}:${lease.owner_pid ?? "pid不明"} expires=${new Date(lease.expires_at_ms as number).toISOString()}`
             : `cycle lease: ${lease.state} fence=${lease.fence}`,

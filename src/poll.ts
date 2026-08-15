@@ -71,6 +71,7 @@ async function poll(): Promise<string> {
       const cursor = Number((yield* db.meta("cycle:cursor")) ?? 0)
       const row = yield* db.get("SELECT COUNT(*)n FROM events WHERE rowid > ?AND source = 'owner'", cursor)
       const unread = Number(row?.n ?? 0)
+      yield* db.setMeta("health:inbound:last_success", nowIso())
       if (unread === 0) return { count: got, unread, wake: false }
 
       // 新しく届いたぶんは待たせない。
@@ -108,6 +109,15 @@ const main = async (): Promise<void> => {
   try {
     console.log(await poll())
   } catch (e) {
+    await run(
+      Effect.flatMap(Db, (db) =>
+        db.setMeta(
+          "health:inbound:last_failure",
+          JSON.stringify({ at: nowIso(), stage: "poll-inbox", error: String(e) }),
+        ),
+      ),
+      rt,
+    ).catch(() => {})
     console.log(`失敗: ${String(e)}`)
     process.exitCode = 1
   } finally {
