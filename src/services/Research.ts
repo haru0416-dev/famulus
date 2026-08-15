@@ -61,6 +61,15 @@ const requireOpen = (tx: DbTx, dossierId: string): void => {
   }
 }
 
+const INSERT_DOSSIER = "INSERT INTO research_dossiers(id,question,state,created_at) VALUES (?,?,'open',?)"
+const INSERT_SNAPSHOT = `INSERT INTO research_artifacts
+  (id,dossier_id,kind,media_type,content,sha256,source_ref,captured_at,provenance,supersedes_id,created_at)
+  VALUES (?,?,'source_snapshot',?,?,?,?,?,?,?,?)`
+const INSERT_CLAIM =
+  "INSERT INTO research_claims(id,dossier_id,statement,kind,state,created_at) VALUES (?,?,?,?,'open',?)"
+const INSERT_ARTIFACT_EVIDENCE = `INSERT INTO research_claim_evidence
+  (id,claim_id,artifact_id,polarity,quote,location,added_at) VALUES (?,?,?,?,?,?,?)`
+
 const makeResearch = () =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -68,12 +77,7 @@ const makeResearch = () =>
     const open = (question: string, at: string = nowIso()) =>
       db.withImmediateTransaction("open research dossier", (tx) => {
         const id = randomUUID()
-        tx.run(
-          "INSERT INTO research_dossiers(id,question,state,created_at) VALUES (?,?,'open',?)",
-          id,
-          question.trim(),
-          at,
-        )
+        tx.run(INSERT_DOSSIER, id, question.trim(), at)
         return cast<DossierRow>(tx.get("SELECT * FROM research_dossiers WHERE id=?", id) as Row)
       })
 
@@ -101,9 +105,7 @@ const makeResearch = () =>
         }
         const id = randomUUID()
         tx.run(
-          `INSERT INTO research_artifacts
-             (id,dossier_id,kind,media_type,content,sha256,source_ref,captured_at,provenance,supersedes_id,created_at)
-           VALUES (?,?,'source_snapshot',?,?,?,?,?,?,?,?)`,
+          INSERT_SNAPSHOT,
           id,
           dossierId,
           input.mediaType ?? "text/plain",
@@ -122,14 +124,7 @@ const makeResearch = () =>
       db.withImmediateTransaction("add research claim", (tx) => {
         requireOpen(tx, dossierId)
         const id = randomUUID()
-        tx.run(
-          "INSERT INTO research_claims(id,dossier_id,statement,kind,state,created_at) VALUES (?,?,?,?,'open',?)",
-          id,
-          dossierId,
-          statement.trim(),
-          kind,
-          at,
-        )
+        tx.run(INSERT_CLAIM, id, dossierId, statement.trim(), kind, at)
         return cast<ClaimRow>(tx.get("SELECT * FROM research_claims WHERE id=?", id) as Row)
       })
 
@@ -158,8 +153,7 @@ const makeResearch = () =>
         }
         const id = randomUUID()
         tx.run(
-          `INSERT INTO research_claim_evidence(id,claim_id,artifact_id,polarity,quote,location,added_at)
-           VALUES (?,?,?,?,?,?,?)`,
+          INSERT_ARTIFACT_EVIDENCE,
           id,
           claimId,
           artifactId,
@@ -398,12 +392,7 @@ const makeResearch = () =>
     ) =>
       db.withImmediateTransaction("record web research dossier", (tx) => {
         const dossierId = randomUUID()
-        tx.run(
-          "INSERT INTO research_dossiers(id,question,state,created_at) VALUES (?,?,'open',?)",
-          dossierId,
-          input.question.trim(),
-          at,
-        )
+        tx.run(INSERT_DOSSIER, dossierId, input.question.trim(), at)
         const artifacts = input.snapshots.map((snapshot) => {
           if (
             !Number.isInteger(snapshot.status) ||
@@ -415,16 +404,16 @@ const makeResearch = () =>
           }
           const id = randomUUID()
           tx.run(
-            `INSERT INTO research_artifacts
-               (id,dossier_id,kind,media_type,content,sha256,source_ref,captured_at,provenance,created_at)
-             VALUES (?,?,'source_snapshot','text/plain',?,?,?,?,?,?)`,
+            INSERT_SNAPSHOT,
             id,
             dossierId,
+            "text/plain",
             snapshot.content,
             sha256(snapshot.content),
             snapshot.url,
             at,
             JSON.stringify({ url: snapshot.url, status: snapshot.status }),
+            null,
             at,
           )
           return { ...snapshot, id }
@@ -433,14 +422,7 @@ const makeResearch = () =>
         for (const item of input.claims) {
           if (item.evidence.length === 0) throw new Error("Research claims require evidence")
           const claimId = randomUUID()
-          tx.run(
-            "INSERT INTO research_claims(id,dossier_id,statement,kind,state,created_at) VALUES (?,?,?,?,'open',?)",
-            claimId,
-            dossierId,
-            item.statement.trim(),
-            item.kind,
-            at,
-          )
+          tx.run(INSERT_CLAIM, claimId, dossierId, item.statement.trim(), item.kind, at)
           let support = 0
           let refute = 0
           for (const evidence of item.evidence) {
@@ -451,13 +433,13 @@ const makeResearch = () =>
             if (!artifact)
               throw new Error(`Research quote is not present in fetched snapshot: ${evidence.url}`)
             tx.run(
-              `INSERT INTO research_claim_evidence(id,claim_id,artifact_id,polarity,quote,added_at)
-               VALUES (?,?,?,?,?,?)`,
+              INSERT_ARTIFACT_EVIDENCE,
               randomUUID(),
               claimId,
               artifact.id,
               evidence.polarity,
               evidence.quote,
+              null,
               at,
             )
             if (evidence.polarity === "support") support += 1

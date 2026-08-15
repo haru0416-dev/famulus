@@ -343,3 +343,44 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
     assert.match(verdict.rendered, /command unavailable exit=127: docker run unavailable/)
     assert.match(verdict.rendered, /command timed_out exit=137: long-running-command/)
   }))
+
+test("Web一括記録はsnapshotとevidenceを保存してdossierを終端する", () =>
+  withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const research = yield* Research
+        const dossier = yield* research.recordWebDossier({
+          question: "現行版は何か",
+          limitations: "公開ページ1件だけを確認した",
+          snapshots: [
+            {
+              url: "https://example.com/version",
+              content: "Current version is 7.0.62.",
+              status: 200,
+            },
+          ],
+          claims: [
+            {
+              statement: "Current version is 7.0.62.",
+              kind: "conclusion",
+              evidence: [
+                {
+                  url: "https://example.com/version",
+                  quote: "Current version is 7.0.62.",
+                  polarity: "support",
+                },
+              ],
+            },
+          ],
+        })
+        return yield* research.bundle(dossier.id)
+      }),
+    )
+
+    assert.equal(out.dossier?.state, "concluded")
+    assert.equal(out.claims[0]?.state, "supported")
+    assert.equal(out.artifacts[0]?.media_type, "text/plain")
+    assert.equal(out.artifacts[0]?.supersedes_id, null)
+    assert.equal(out.evidence[0]?.quote, "Current version is 7.0.62.")
+    assert.equal(out.evidence[0]?.location, null)
+  }))
