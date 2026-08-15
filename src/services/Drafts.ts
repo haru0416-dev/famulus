@@ -125,6 +125,24 @@ const makeDrafts = () =>
         id,
       )
 
+    const failDelivery = (id: string, reason: string, at: string = nowIso()) =>
+      db.withImmediateTransaction("fail draft delivery", (tx) => {
+        tx.run(
+          `UPDATE drafts SET state='delivery_failed',review_feedback=?,updated_at=?
+            WHERE id=? AND state='review_pending'`,
+          reason,
+          at,
+          id,
+        )
+        tx.run(
+          "INSERT OR REPLACE INTO schema_meta(key,value) VALUES ('health:draft:last_failure',?)",
+          JSON.stringify({ at, stage: "delivery", error: reason }),
+        )
+        const draft = tx.get("SELECT * FROM drafts WHERE id=?", id)
+        if (!draft) throw new Error(`Draft not found: ${id}`)
+        return row(draft)
+      })
+
     const attachOutbound = (id: string, outboundId: string, at: string = nowIso()) =>
       db.withImmediateTransaction("attach draft outbound", (tx) => {
         const outbound = tx.get(
@@ -202,7 +220,15 @@ const makeDrafts = () =>
         return result.changes === 1
       })
 
-    return { forDay, pending, materialize, requestRevision, attachOutbound, applyDecision } as const
+    return {
+      forDay,
+      pending,
+      materialize,
+      requestRevision,
+      failDelivery,
+      attachOutbound,
+      applyDecision,
+    } as const
   })
 
 export class Drafts extends Context.Service<Drafts, Effect.Success<ReturnType<typeof makeDrafts>>>()(

@@ -867,6 +867,25 @@ test("5xx は unknown で止まり、自動再送しない", async () => {
   }
 })
 
+test("配送先が無ければdraftを失敗で終端化してhealthへ残す", async () => {
+  wire(undefined)
+  await withHarness(async (h) => {
+    const failed = await h.run(
+      Effect.gen(function* () {
+        const drafts = yield* Drafts
+        const dossier = yield* terminalDossier("missing destination")
+        const draft = yield* drafts.materialize({ title: "題", body: "本文", dossierId: dossier.id })
+        return yield* drafts.failDelivery(draft.id, "Discord destination is not configured")
+      }),
+    )
+    assert.equal(failed.state, "delivery_failed")
+    const plan = await h.run(Effect.flatMap(Attention, (attention) => attention.planCycle()))
+    assert.equal(plan.draftDue, false)
+    const health = await h.run(Effect.flatMap(Db, (db) => db.meta("health:draft:last_failure")))
+    assert.match(health ?? "", /Discord destination is not configured/)
+  })
+})
+
 test("受信GETの5xxを空受信にせず失敗として返す", async () => {
   const dc = await fakeDiscord([], (hit) =>
     hit.method === "GET" && hit.path.includes("/messages?") ? { status: 503 } : undefined,

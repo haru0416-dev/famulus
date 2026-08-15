@@ -85,6 +85,19 @@ test("belief eventは根拠event・引用・失効理由を正本に持つ", asy
   })
 })
 
+test("web eventをbeliefの根拠に昇格させない", async () => {
+  await withHarness(async (h) => {
+    const result = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const web = yield* mem.remember({ source: "web", content: "external claim" })
+        return yield* Effect.result(mem.recordBelief("public.external", "claim", { evidenceEventId: web }))
+      }),
+    )
+    assert.equal(result._tag, "Failure")
+  })
+})
+
 test("event追記が失敗したtransactionは巻き戻される", async () => {
   await withHarness(async (h) => {
     const failed = await h.fail(

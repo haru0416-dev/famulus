@@ -220,6 +220,16 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
           checkCommand: "verify-change",
         })
         yield* research.linkExperiment(hypothesis.id, unavailable.id, "context")
+        const timedOut = yield* research.recordExperiment({
+          hypothesisClaimId: hypothesis.id,
+          protocol: { acceptance: "finishes before deadline" },
+          environment: { runtime: "test" },
+          workspace: "research-test",
+          command: "long-running-command",
+          commandResult: { status: "timed_out", exitCode: 137, output: "timeout" },
+          checkCommand: "verify-change",
+        })
+        yield* research.linkExperiment(hypothesis.id, timedOut.id, "context")
         const verified = yield* research.recordExperiment({
           hypothesisClaimId: hypothesis.id,
           protocol: { acceptance: "check exits 0" },
@@ -296,6 +306,7 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
           verdict: run.verdict,
           emptyCheck,
           unavailableVerdict: unavailable.verdict,
+          timedOutVerdict: timedOut.verdict,
           failedArtifactSupport,
           fakeVerified,
           reusedArtifacts,
@@ -308,6 +319,7 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
     assert.equal(verdict.verdict, "failed")
     assert.equal(verdict.emptyCheck._tag, "Failure")
     assert.equal(verdict.unavailableVerdict, "inconclusive")
+    assert.equal(verdict.timedOutVerdict, "inconclusive")
     assert.equal(verdict.failedArtifactSupport._tag, "Failure")
     assert.equal(verdict.fakeVerified._tag, "Failure")
     assert.equal(verdict.reusedArtifacts._tag, "Failure")
@@ -316,4 +328,5 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
     assert.match(verdict.rendered, /command completed exit=1: apply-change sha256=[0-9a-f]{64}/)
     assert.match(verdict.rendered, /check completed exit=0: verify-change sha256=[0-9a-f]{64}/)
     assert.match(verdict.rendered, /command unavailable exit=127: docker run unavailable/)
+    assert.match(verdict.rendered, /command timed_out exit=137: long-running-command/)
   }))

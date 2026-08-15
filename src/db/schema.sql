@@ -333,7 +333,10 @@ CREATE TABLE drafts (
   decision_origin_id TEXT UNIQUE,
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL,
-  CHECK ((state IN ('delivery_pending','delivery_failed','delivered','accepted','revise_requested','discarded')) = (outbound_id IS NOT NULL)),
+  CHECK (
+    state = 'delivery_failed'
+    OR (state IN ('delivery_pending','delivered','accepted','revise_requested','discarded')) = (outbound_id IS NOT NULL)
+  ),
   CHECK ((delivered_at IS NOT NULL) = (state IN ('delivered','accepted','revise_requested','discarded')))
 ) STRICT;
 
@@ -492,6 +495,15 @@ CREATE TRIGGER events_web_never_belief
 BEFORE INSERT ON events WHEN NEW.kind = 'belief' AND NEW.source = 'web'
 BEGIN
   SELECT RAISE(ABORT, 'web claims cannot become beliefs');
+END;
+
+CREATE TRIGGER events_belief_evidence_owner
+BEFORE INSERT ON events
+WHEN NEW.kind = 'belief' AND NEW.evidence_event_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM events evidence WHERE evidence.id = NEW.evidence_event_id AND evidence.source = 'owner'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'belief evidence must be an owner event');
 END;
 
 CREATE TRIGGER events_immutable_except_redact

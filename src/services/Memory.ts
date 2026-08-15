@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { DbFailed } from "../core/errors.ts"
 import { localStamp, nowIso } from "../core/time.ts"
 import { Db, type Row } from "./Db.ts"
 
@@ -290,6 +291,14 @@ const makeMemory = () =>
         const exposure = opts?.exposure ?? "private"
         yield* db.run("BEGIN IMMEDIATE")
         return yield* Effect.gen(function* () {
+          if (opts?.evidenceEventId) {
+            const evidence = yield* db.get("SELECT source FROM events WHERE id=?", opts.evidenceEventId)
+            if (evidence?.source !== "owner") {
+              return yield* Effect.fail(
+                new DbFailed({ op: "record belief", message: "Belief evidence must be an owner event" }),
+              )
+            }
+          }
           const cur = yield* db.get(
             "SELECT resolved_from, valid_from FROM belief_slots WHERE slot = ?AND valid_until IS NULL",
             slot,

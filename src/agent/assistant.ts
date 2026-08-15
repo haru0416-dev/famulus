@@ -80,7 +80,7 @@ const experimentResult = (result: RunResult) => ({
     : result.exitCode === 127 && result.output.includes("[走らせられなかった]")
       ? ("unavailable" as const)
       : ("completed" as const),
-  ...(result.timedOut ? {} : { exitCode: result.exitCode }),
+  exitCode: result.exitCode,
   output: result.output,
 })
 
@@ -1188,7 +1188,9 @@ function buildTools(state: TurnState, gate: ToolGate) {
               ],
             })
             if (gate) yield* Effect.promise(gate)
-            const attached = outbound ? yield* drafts.attachOutbound(draft.id, outbound.id) : undefined
+            const attached = outbound
+              ? yield* drafts.attachOutbound(draft.id, outbound.id)
+              : yield* drafts.failDelivery(draft.id, "Discord destination is not configured")
             yield* mem.remember({
               source: "system",
               content: {
@@ -1199,13 +1201,11 @@ function buildTools(state: TurnState, gate: ToolGate) {
               },
               text: `${draft.title}\n${draft.body}`,
             })
-            return outbound
-              ? attached?.state === "delivered"
-                ? `送信済み: ${draft.title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
-                : attached?.state === "delivery_failed"
-                  ? `Discord配送が失敗した: ${attached.review_feedback ?? "理由不明"}`
-                  : `送信待ちに入れた: ${draft.title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
-              : "Discord の送信待ちに入れられなかった。本文は記録に残したので、次の対話で見せる。"
+            return attached?.state === "delivered"
+              ? `送信済み: ${draft.title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
+              : attached?.state === "delivery_failed"
+                ? `Discord配送が失敗した: ${attached.review_feedback ?? "理由不明"}`
+                : `送信待ちに入れた: ${draft.title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
           }),
         ),
     }),
