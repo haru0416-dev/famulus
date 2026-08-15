@@ -19,7 +19,7 @@ Discord only. Keep inbound polling behavior and its existing metadata. Add `disc
 - `failed`, `partial`, `unknown`, and `sent` are terminal. There are no automatic retries.
 - DM cache, thread cursors/list, and reaction lookup metadata update in the same SQLite transaction that records the corresponding successful action.
 - Cycle replies/logs and assistant `tell`/`draft` enqueue with stable content-derived dedupe keys. User-visible tool results say queued, not sent.
-- `poll.ts` flushes queued outbound before polling inbound.
+- The poll cycle flushes queued outbound at the start of `pollInbound()`.
 
 ## Verification
 
