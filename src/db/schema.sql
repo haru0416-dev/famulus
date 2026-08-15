@@ -99,11 +99,11 @@ CREATE TABLE research_experiment_runs (
   verdict             TEXT NOT NULL CHECK (verdict IN ('verified','failed','inconclusive')),
   started_at          TEXT NOT NULL,
   finished_at         TEXT NOT NULL,
-  CHECK ((command_status = 'completed') = (command_exit_code IS NOT NULL)),
+  CHECK (command_status != 'completed' OR command_exit_code IS NOT NULL),
   CHECK (
     (check_status IS NULL AND check_artifact_id IS NULL AND check_exit_code IS NULL)
     OR (check_status IS 'completed' AND check_artifact_id IS NOT NULL AND check_exit_code IS NOT NULL)
-    OR (check_status IN ('timed_out','unavailable') AND check_artifact_id IS NOT NULL AND check_exit_code IS NULL)
+    OR (check_status IN ('timed_out','unavailable') AND check_artifact_id IS NOT NULL)
   ),
   CHECK (
     (verdict = 'verified' AND check_status IS 'completed' AND check_exit_code IS 0)

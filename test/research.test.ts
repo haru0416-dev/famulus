@@ -210,6 +210,16 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
             checkResult: { status: "completed", exitCode: 0, output: "" },
           }),
         )
+        const unavailable = yield* research.recordExperiment({
+          hypothesisClaimId: hypothesis.id,
+          protocol: { acceptance: "runtime is available" },
+          environment: { runtime: "test" },
+          workspace: "research-test",
+          command: "docker run unavailable",
+          commandResult: { status: "unavailable", exitCode: 127, output: "docker unavailable" },
+          checkCommand: "verify-change",
+        })
+        yield* research.linkExperiment(hypothesis.id, unavailable.id, "context")
         const verified = yield* research.recordExperiment({
           hypothesisClaimId: hypothesis.id,
           protocol: { acceptance: "check exits 0" },
@@ -285,6 +295,7 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
         return {
           verdict: run.verdict,
           emptyCheck,
+          unavailableVerdict: unavailable.verdict,
           failedArtifactSupport,
           fakeVerified,
           reusedArtifacts,
@@ -296,6 +307,7 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
     )
     assert.equal(verdict.verdict, "failed")
     assert.equal(verdict.emptyCheck._tag, "Failure")
+    assert.equal(verdict.unavailableVerdict, "inconclusive")
     assert.equal(verdict.failedArtifactSupport._tag, "Failure")
     assert.equal(verdict.fakeVerified._tag, "Failure")
     assert.equal(verdict.reusedArtifacts._tag, "Failure")
@@ -303,4 +315,5 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
     assert.equal(verdict.foreignArtifacts._tag, "Failure")
     assert.match(verdict.rendered, /command completed exit=1: apply-change sha256=[0-9a-f]{64}/)
     assert.match(verdict.rendered, /check completed exit=0: verify-change sha256=[0-9a-f]{64}/)
+    assert.match(verdict.rendered, /command unavailable exit=127: docker run unavailable/)
   }))
