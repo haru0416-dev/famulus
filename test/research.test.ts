@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
+import { Db } from "../src/services/Db.ts"
 import { Research } from "../src/services/Research.ts"
 import { withHarness } from "./helpers.ts"
 
@@ -9,7 +10,17 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
     const result = await h.run(
       Effect.gen(function* () {
         const research = yield* Research
+        const db = yield* Db
         const dossier = yield* research.open("現行仕様は何か")
+        const unsupported = yield* Effect.result(
+          db.run(
+            `INSERT INTO research_claims(id,dossier_id,statement,kind,state,created_at,resolved_at)
+             VALUES ('unsupported',?,'根拠なし','conclusion','supported',?,?)`,
+            dossier.id,
+            dossier.created_at,
+            dossier.created_at,
+          ),
+        )
         const source = yield* research.addSnapshot(dossier.id, {
           sourceRef: "https://example.com/spec",
           content: "Current version is 7.0.62.",
@@ -36,7 +47,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
           }),
         )
         const dossiers = yield* research.list()
-        return { bundle, late, invalid, dossiers }
+        return { bundle, late, invalid, dossiers, unsupported }
       }),
     )
     assert.equal(result.bundle.dossier?.state, "concluded")
@@ -44,6 +55,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
     assert.equal(result.late._tag, "Failure")
     assert.equal(result.invalid._tag, "Failure")
     assert.equal(result.dossiers.length, 1)
+    assert.equal(result.unsupported._tag, "Failure")
   }))
 
 test("command成功ではなくcheck成功だけが実験をverifiedにする", () =>

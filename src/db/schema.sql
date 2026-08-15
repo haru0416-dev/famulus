@@ -155,6 +155,11 @@ WHEN NEW.id != OLD.id OR NEW.dossier_id != OLD.dossier_id OR NEW.statement != OL
 BEGIN
   SELECT RAISE(ABORT, 'research claim identity is immutable');
 END;
+CREATE TRIGGER research_claim_insert_open
+BEFORE INSERT ON research_claims WHEN NEW.state != 'open' OR NEW.resolved_at IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'research claims must be inserted open');
+END;
 CREATE TRIGGER research_claim_resolution_requires_evidence
 BEFORE UPDATE OF state ON research_claims
 WHEN NEW.state IN ('supported','refuted') AND NOT EXISTS (
