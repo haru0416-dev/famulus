@@ -504,10 +504,13 @@ const makeDiscord = () =>
             if (action.state !== "queued") continue
             const claimed = yield* db.withImmediateTransaction("claim Discord outbound action", (tx) => {
               const result = tx.run(
-                "UPDATE discord_outbound_actions SET state='sending',updated_at=? WHERE outbound_id=? AND ordinal=? AND state='queued'",
+                `UPDATE discord_outbound_actions SET state='sending',updated_at=?
+                  WHERE outbound_id=? AND ordinal=? AND state='queued'
+                    AND EXISTS (SELECT 1 FROM discord_outbound o WHERE o.id=? AND o.state='sending')`,
                 nowIso(),
                 id,
                 action.ordinal,
+                id,
               )
               if (result.changes !== 1) return false
               return true
@@ -616,14 +619,15 @@ const makeDiscord = () =>
               break
             }
 
-            yield* db.withImmediateTransaction("complete Discord outbound action", (tx) => {
-              tx.run(
+            const completed = yield* db.withImmediateTransaction("complete Discord outbound action", (tx) => {
+              const result = tx.run(
                 "UPDATE discord_outbound_actions SET state='succeeded',receipt=?,updated_at=? WHERE outbound_id=? AND ordinal=? AND state='sending'",
                 canonicalJson(receipt),
                 nowIso(),
                 id,
                 action.ordinal,
               )
+              if (result.changes !== 1) return false
               if (spec.kind === "open_dm") {
                 tx.run(
                   "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:dm',?)",
@@ -648,7 +652,12 @@ const makeDiscord = () =>
                   JSON.stringify([...open, threadId].slice(-MAX_THREADS)),
                 )
               }
+              return true
             })
+            if (!completed) {
+              stopped = true
+              break
+            }
             receipts.set(action.ordinal, receipt)
             if (spec.kind === "reaction" && messageId) completedTaps.push({ messageId, spec })
           }
