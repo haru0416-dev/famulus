@@ -410,12 +410,14 @@ test("自分の発言は拾わない — 出した文が次の cycle の入力�
   }
 })
 
-test("Discord が落ちていても空を返す — cycle は返事が読めないだけで止まらない", async () => {
+test("DM専用構成でDiscordが落ちたら空受信ではなく失敗する", async () => {
   // 1 番は特権ポートで、この環境では誰も listen していない(接続は即座に拒否される)。
   wire("http://127.0.0.1:1")
   try {
     await withHarness(async (h) => {
-      assert.deepEqual(await h.run(pollInbound), [])
+      const result = await h.run(Effect.result(peek))
+      assert.equal(result._tag, "Failure")
+      if (result._tag === "Failure") assert.equal(result.failure._tag, "ConnectorFailed")
       assert.equal(await h.run(post({ text: "本文" })), undefined)
     })
   } finally {

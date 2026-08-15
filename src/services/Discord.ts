@@ -789,6 +789,16 @@ const makeDiscord = () =>
         yield* ensureDmQueued()
         yield* flushQueued()
         const owner = ownerId()
+        const channels = yield* listening()
+        if (token() && owner && channels.length === 0) {
+          return yield* Effect.fail(
+            new ConnectorFailed({
+              connector: "Discord",
+              operation: "resolve inbound channels",
+              message: "no fixed channel or usable DM channel",
+            }),
+          )
+        }
         const pending = yield* meta<Pending>("discord:taps", {})
         const out: Inbound[] = []
         const consumedTapIds: string[] = []
@@ -803,7 +813,7 @@ const makeDiscord = () =>
         // 並列で 325〜932ms)。下のループは直列のまま — `pending` の消し込み、`heard`、`marks` の
         // 並びがチャンネルの順序に依存する。`Effect.all` は入力順で返す。
         const fetched = yield* Effect.all(
-          (yield* listening()).map((ch) =>
+          channels.map((ch) =>
             readJson<unknown>(`/channels/${ch}/messages?limit=50`).pipe(
               Effect.flatMap((msgs) =>
                 isRawMessages(msgs)

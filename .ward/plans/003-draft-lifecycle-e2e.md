@@ -20,7 +20,7 @@ Out of scope: publishing to Zenn, general Operation executor, research campaign 
 
 `drafts`: one row per local day with title, body, terminal research dossier ID, content hash, state, review feedback, delivery id, decision origin, and timestamps. The hash includes the dossier ID.
 
-State: `review_pending -> revision_needed | delivery_pending | delivery_failed -> delivered -> accepted | revise_requested | discarded`. Review failure remains `review_pending`. Discord marks `delivered` only from a sent receipt; ambiguous and rejected delivery stays explicit and is not retried automatically.
+State: `review_pending -> revision_needed | delivery_pending -> delivered -> accepted | revise_requested | discarded`. `delivery_failed` is terminal for the automatic path. Review failure remains `review_pending`. Discord marks `delivered` only from a sent receipt; ambiguous and rejected delivery stays explicit and is not retried automatically.
 
 ## Steps
 
