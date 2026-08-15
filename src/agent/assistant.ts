@@ -23,7 +23,7 @@ import { appConfig } from "../core/config.ts"
 import { remainingLabel, remainingMs } from "../core/deadline.ts"
 import { loadEnv } from "../core/env.ts"
 import { causeReason } from "../core/errors.ts"
-import { localDayRange, localStamp, nowIso } from "../core/time.ts"
+import { localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
 import { governedModel } from "../model/governed.ts"
 import { digestOf } from "../model/kernel-spec.ts"
@@ -35,6 +35,7 @@ import { Attention } from "../services/Attention.ts"
 import { CycleLease, type CycleLeaseToken } from "../services/CycleLease.ts"
 import { Db } from "../services/Db.ts"
 import { Discord } from "../services/Discord.ts"
+import { Drafts } from "../services/Drafts.ts"
 import { buildFencedPrompt, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { Memory, renderRecall } from "../services/Memory.ts"
@@ -887,14 +888,12 @@ function buildTools(state: TurnState, gate: ToolGate) {
         run(
           Effect.gen(function* () {
             const discord = yield* Discord
+            const drafts = yield* Drafts
             const mem = yield* Memory
             const db = yield* Db
             const runner = yield* Runner
-            // 1日1本はここで数える。説明文に書くだけでは通る(下の長さ検査と同じ理由)。
-            // `daily:draft` は起こす側(Attention)が読むフラグでもあるが、それは起きるかを決めるだけで、
-            // 別の理由で起きた回に書き足すのは止められない。実際に同じ題が23分で4本出た。
-            // 上限が制限するのは文の質ではなく通知回数なので、投稿後は同じ日に再投稿できない。
-            if ((yield* db.meta("daily:draft")) === localDayRange(nowIso()).key) {
+            const existing = (yield* drafts.pending()) ?? (yield* drafts.forDay())
+            if (existing?.delivered_at) {
               return (
                 "出していない。**今日ぶんは出してある。**1日1本まで。\n" +
                 "直せと言われたのなら、`draft` ではなく返事の本文に書き直したものをそのまま書く — " +
@@ -902,12 +901,20 @@ function buildTools(state: TurnState, gate: ToolGate) {
                 "そうでないなら明日に回す。本文は覚えておけば消えない。"
               )
             }
+            if (existing?.state === "delivery_pending") return `送信待ちに入っている: ${existing.title}`
+            if (existing?.state === "delivery_failed") {
+              return `出していない。Discord配送が失敗した: ${existing.review_feedback ?? "理由不明"}`
+            }
+            const candidate =
+              existing?.state === "review_pending"
+                ? { title: existing.title, body: existing.body, basis: existing.basis }
+                : { title, body, basis }
             // DB の実測から書くとユーザーの生活が混ざるので、非公開の確定値が本文に残っていないかを
             // 機械で確かめる(規律に書くだけでは通る)。過去の値も含める — 走行記録から引かれるのは
             // 履歴のほうで、書き換え前の日時や旧い連絡先は今の値と一致しないぶん検査を通りやすい。
             const secrets = yield* db.all("SELECT value FROM belief_slots WHERE exposure = 'private'")
             const leaks = findLeaks(
-              `${title}\n${body}`,
+              `${candidate.title}\n${candidate.body}`,
               secrets.map((r) => String((r as { value?: unknown }).value ?? "")),
             )
             if (leaks.length > 0) {
@@ -917,17 +924,22 @@ function buildTools(state: TurnState, gate: ToolGate) {
               )
             }
             // 長さも同じ。規律に「短く」と書くだけでは毎回2000字が出てくる。
-            if (body.length > DRAFT_MAX) {
+            if (candidate.body.length > DRAFT_MAX) {
               return (
-                `出していない。本文が ${body.length}字ある(上限 ${DRAFT_MAX}字)。\n` +
+                `出していない。本文が ${candidate.body.length}字ある(上限 ${DRAFT_MAX}字)。\n` +
                 "削るのではなく、**話を1つに絞り直す。** 見つけたことが複数あるなら、いちばん強い1つで" +
                 "書いて残りは次の日に回す。経緯・過程・網羅した限界の列挙は削除する — 読む側は求めていない。"
               )
             }
             // 太字と見出しの密度は、書き上がった形を決定的に数えられる。
-            const shape = findShape(body)
+            const shape = findShape(candidate.body)
             if (shape.length > 0) {
               return `出していない。**並べ方が読み手を疲れさせる形になっている**:\n${shape.map((s) => `- ${s}`).join("\n")}\n直してから、もう一度呼ぶ。`
+            }
+            // レビュー前に本文を確定する。中断・再起動後は同日の保存済み本文を使い、入力で上書きしない。
+            const draft = yield* drafts.materialize(candidate)
+            if (draft.state === "revision_needed") {
+              return `出していない。前回から本文が変わっていない。精査結果に沿って改稿する: ${draft.review_feedback ?? "指摘を確認する"}`
             }
             // ここから先は機械では見えない。上の検査は秘密値・長さ・密度のように決定的に判定できるものだけ。
             // 材料が自分の実測か、話が1つか、観測していない意味を足していないかは読み手が判断する。
@@ -949,7 +961,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
                 systemPrompt: REVIEW_SYSTEM,
                 // 本文は囲って渡す。子が外から拾ってきた材料が混ざっているので、指示と同じ平面に置かない。
                 prompt: buildFencedPrompt("この下書きを精査してください。", [
-                  { source: "draft", label: title, content: body },
+                  { source: "draft", label: draft.title, content: draft.body },
                 ]),
                 schema: REVIEW_SCHEMA,
                 signal: abortSignal
@@ -966,34 +978,61 @@ function buildTools(state: TurnState, gate: ToolGate) {
               return `出していない。精査役を呼べなかった(${causeReason(review.failure)})。本文は捨てずに、次の回でもう一度呼ぶ。`
             }
             // 精査役が「出す」と言ったときだけ出す。判断そのものは drafting.ts に置く。
-            const outcome = reviewOutcome(review.success.structured as Review | undefined, title, body)
-            if (!outcome.post) return outcome.text
+            const outcome = reviewOutcome(
+              review.success.structured as Review | undefined,
+              draft.title,
+              draft.body,
+            )
+            if (!outcome.post) {
+              yield* drafts.requestRevision(draft.id, outcome.text)
+              return outcome.text
+            }
             if (gate) yield* Effect.promise(gate)
             const outbound = yield* discord.enqueue({
               purpose: "assistant-draft",
-              dedupeKey: digestOf({ title, body, basis }),
-              text: `**${title}**\n\n${body}\n\n---\n根拠: ${basis}`,
+              dedupeKey: draft.id,
+              text: `**${draft.title}**\n\n${draft.body}\n\n---\n根拠: ${draft.basis}`,
               // 押してもらわないと外に出ない文なので、ミュートしてある場所でも呼ぶ。
               to: "draft",
               ping: true,
               // 「直す」はリアクションだけでは何を直すか言えない。スレッドを立てて、そこに書けるようにする。
-              thread: title,
+              thread: draft.title,
               taps: [
-                { emoji: "✅", emojiReply: "出していい" },
-                { emoji: "✏️", emojiReply: "直す" },
-                { emoji: "🛑", emojiReply: "捨てる" },
-              ].map((t) => ({ emoji: t.emoji, reply: `下書き「${title}」→ ${t.emojiReply}` })),
+                {
+                  emoji: "✅",
+                  reply: `下書き「${draft.title}」→ 出していい`,
+                  draft: { id: draft.id, decision: "accept" },
+                },
+                {
+                  emoji: "✏️",
+                  reply: `下書き「${draft.title}」→ 直す`,
+                  draft: { id: draft.id, decision: "revise" },
+                },
+                {
+                  emoji: "🛑",
+                  reply: `下書き「${draft.title}」→ 捨てる`,
+                  draft: { id: draft.id, decision: "discard" },
+                },
+              ],
             })
             if (gate) yield* Effect.promise(gate)
-            // 出した事実は日付で持つ。1日1本の上限はここで数える(押されたかは関係ない)。
-            if (outbound) yield* db.setMeta("daily:draft", localDayRange(nowIso()).key)
+            const attached = outbound ? yield* drafts.attachOutbound(draft.id, outbound.id) : undefined
             yield* mem.remember({
               source: "system",
-              content: { drafted: title, body, basis, queued: Boolean(outbound) },
-              text: `${title}\n${body}`,
+              content: {
+                drafted: draft.title,
+                body: draft.body,
+                basis: draft.basis,
+                queued: Boolean(outbound),
+              },
+              text: `${draft.title}\n${draft.body}`,
             })
             return outbound
-              ? `送信待ちに入れた: ${title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
+              ? attached?.state === "delivered"
+                ? `送信済み: ${draft.title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
+                : attached?.state === "delivery_failed"
+                  ? `Discord配送が失敗した: ${attached.review_feedback ?? "理由不明"}`
+                  : `送信待ちに入れた: ${draft.title}(✅ 出していい / ✏️ 直す / 🛑 捨てる。直す中身はスレッドに書ける)`
               : "Discord の送信待ちに入れられなかった。本文は記録に残したので、次の対話で見せる。"
           }),
         ),

@@ -14,6 +14,7 @@ import { Attention } from "./services/Attention.ts"
 import { CycleLease } from "./services/CycleLease.ts"
 import { type Db, DbLive } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
+import { Drafts } from "./services/Drafts.ts"
 import { ExecutionKernel } from "./services/ExecutionKernel.ts"
 import { Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
@@ -31,6 +32,7 @@ const services = Layer.mergeAll(
   CycleLease.layer,
   Intake.layer,
   Discord.layer,
+  Drafts.layer,
   ExecutionKernel.layer,
 )
 
@@ -83,6 +85,7 @@ export type AppServices =
   | CycleLease
   | Intake
   | Discord
+  | Drafts
   | ExecutionKernel
   | Runner
 

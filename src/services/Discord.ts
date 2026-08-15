@@ -20,6 +20,7 @@ import { Conflict, type DbFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { canonicalJson, digestOf } from "../model/kernel-spec.ts"
 import { Db } from "./Db.ts"
+import type { DraftDecision } from "./Drafts.ts"
 
 /** API の base URL。テストだけ差し替える。 */
 const api = (): string => process.env.OPEN_ZERO_DISCORD_API ?? "https://discord.com/api/v10"
@@ -38,6 +39,7 @@ export interface Tap {
   readonly emoji: string
   /** 押されたときにユーザーの発言として DB へ入る文。 */
   readonly reply: string
+  readonly draft?: { readonly id: string; readonly decision: DraftDecision }
 }
 
 /**
@@ -90,6 +92,7 @@ export interface Outbound {
 export interface Inbound {
   readonly id: string
   readonly text: string
+  readonly draft?: { readonly id: string; readonly decision: DraftDecision }
 }
 
 /**
@@ -105,7 +108,7 @@ export interface Batch {
   /** チャンネルごとの新しい cursor。`commitInboundBatch` を呼ぶまで DB には入らない。 */
   readonly marks: Readonly<Record<string, string>>
   /** 処理済みリアクションを除外した後の、リアクション待ち一覧。 */
-  readonly taps: Readonly<Record<string, Record<string, string>>>
+  readonly taps: Pending
   /** 最後に自由文が来たチャンネル。返事はここへ出す。 */
   readonly heard?: string
 }
@@ -126,7 +129,11 @@ const fixedChannel = (to: Desk): string | undefined => {
 }
 
 /** 待っているリアクション。`{ メッセージid: { 絵文字: 返る文 } }` を schema_meta に置く。 */
-type Pending = Record<string, Record<string, string>>
+interface PendingTap {
+  readonly reply: string
+  readonly draft?: { readonly id: string; readonly decision: DraftDecision }
+}
+type Pending = Record<string, Record<string, PendingTap>>
 
 /** 覚えておくリアクション待ちの数。押されないまま溜まった古いものから落とす。 */
 const MAX_PENDING = 20
@@ -143,6 +150,8 @@ const MAX_THREADS = 3
  * rate-limit bucket の分離は保証ではないため、ここでは並列数だけを8に制限する。
  */
 const FETCH_AT_ONCE = 8
+/** HTTP timeoutを超えて残ったclaimだけを中断扱いにする。並行flush中のactionは閉じない。 */
+const SENDING_STALE_MS = 30_000
 
 /** `GET /channels/{id}/messages` の応答のうち使うフィールド。 */
 interface RawMessage {
@@ -267,6 +276,7 @@ const makeDiscord = () =>
           readonly messageOrdinal: number
           readonly emoji: string
           readonly reply: string
+          readonly draft?: { readonly id: string; readonly decision: DraftDecision }
         }
 
     const parse = (raw: unknown): unknown => JSON.parse(String(raw)) as unknown
@@ -335,6 +345,7 @@ const makeDiscord = () =>
             messageOrdinal: lastMessage,
             emoji: tap.emoji,
             reply: tap.reply,
+            ...(tap.draft ? { draft: tap.draft } : {}),
           })
 
         const spec = canonicalJson({
@@ -443,17 +454,24 @@ const makeDiscord = () =>
 
     const flushQueued = (): Effect.Effect<readonly Outbound[], DbFailed> =>
       Effect.gen(function* () {
-        // ceiling: systemdの単一poll worker専用。複数worker化するときはclaim ownerを永続化する。
         const at = nowIso()
-        // 前回が HTTP の途中で止まった action は結果を判定できない。再送せず unknown で閉じる。
+        const staleAt = new Date(Date.now() - SENDING_STALE_MS).toISOString().replace(/\.\d{3}Z$/, "Z")
+        // HTTP timeoutを超えて残った action は結果を判定できない。再送せず unknown で閉じる。
         yield* db.withImmediateTransaction("close interrupted Discord outbound", (tx) => {
           tx.run(
-            "UPDATE discord_outbound_actions SET state='unknown',error='interrupted during HTTP',updated_at=? WHERE state='sending'",
+            "UPDATE discord_outbound_actions SET state='unknown',error='interrupted during HTTP',updated_at=? WHERE state='sending' AND updated_at<?",
             at,
+            staleAt,
           )
           tx.run(
-            "UPDATE discord_outbound SET state='unknown',error='interrupted during HTTP',updated_at=? WHERE state='sending'",
+            `UPDATE discord_outbound SET state='unknown',error='interrupted during HTTP',updated_at=?
+              WHERE state='sending' AND updated_at<?
+                AND NOT EXISTS (
+                  SELECT 1 FROM discord_outbound_actions a
+                   WHERE a.outbound_id=discord_outbound.id AND a.state='sending'
+                )`,
             at,
+            staleAt,
           )
         })
 
@@ -463,6 +481,16 @@ const makeDiscord = () =>
         const flushed: Outbound[] = []
         for (const row of queued) {
           const id = String(row.id)
+          const claimedOutbound = yield* db.withImmediateTransaction(
+            "claim Discord outbound",
+            (tx) =>
+              tx.run(
+                "UPDATE discord_outbound SET state='sending',updated_at=? WHERE id=? AND state='queued'",
+                nowIso(),
+                id,
+              ).changes === 1,
+          )
+          if (!claimedOutbound) continue
           const outbound = yield* getOutbound(id)
           if (!outbound) continue
           const receipts = new Map<number, Record<string, unknown>>()
@@ -478,11 +506,6 @@ const makeDiscord = () =>
                 action.ordinal,
               )
               if (result.changes !== 1) return false
-              tx.run(
-                "UPDATE discord_outbound SET state='sending',updated_at=? WHERE id=? AND state='queued'",
-                nowIso(),
-                id,
-              )
               return true
             })
             if (!claimed) {
@@ -628,7 +651,10 @@ const makeDiscord = () =>
                 } catch {
                   pending = {}
                 }
-                pending[messageId] = { ...(pending[messageId] ?? {}), [spec.emoji]: spec.reply }
+                pending[messageId] = {
+                  ...(pending[messageId] ?? {}),
+                  [spec.emoji]: { reply: spec.reply, ...(spec.draft ? { draft: spec.draft } : {}) },
+                }
                 const kept = Object.entries(pending).slice(-MAX_PENDING)
                 tx.run(
                   "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:taps',?)",
@@ -641,7 +667,12 @@ const makeDiscord = () =>
 
           if (!stopped)
             yield* db.run(
-              "UPDATE discord_outbound SET state='sent',updated_at=? WHERE id=? AND state='sending'",
+              `UPDATE discord_outbound SET state='sent',updated_at=?
+                WHERE id=? AND state='sending'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM discord_outbound_actions a
+                     WHERE a.outbound_id=discord_outbound.id AND a.state!='succeeded'
+                  )`,
               nowIso(),
               id,
             )
@@ -730,10 +761,14 @@ const makeDiscord = () =>
             const waiting = pending[m.id]
             if (!waiting) continue
             for (const r of m.reactions ?? []) {
-              const reply = waiting[r.emoji.name]
+              const tap = waiting[r.emoji.name]
               // 自分で付けたぶんを超えていれば、bot 以外の誰かが押している。
-              if (reply && r.count > (r.me ? 1 : 0)) {
-                out.push({ id: `${m.id}:${r.emoji.name}`, text: reply })
+              if (tap && r.count > (r.me ? 1 : 0)) {
+                out.push({
+                  id: `${m.id}:${r.emoji.name}`,
+                  text: tap.reply,
+                  ...(tap.draft ? { draft: tap.draft } : {}),
+                })
                 delete pending[m.id]
                 break
               }

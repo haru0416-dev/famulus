@@ -36,6 +36,48 @@ CREATE TABLE discord_outbound_actions (
 ) STRICT;
 CREATE INDEX idx_discord_outbound_state ON discord_outbound(state, created_at);
 
+CREATE TABLE drafts (
+  id                 TEXT PRIMARY KEY,
+  local_day          TEXT NOT NULL UNIQUE,
+  title              TEXT NOT NULL,
+  body               TEXT NOT NULL,
+  basis              TEXT NOT NULL,
+  content_hash       TEXT NOT NULL,
+  state              TEXT NOT NULL CHECK (state IN ('review_pending','revision_needed','delivery_pending','delivery_failed','delivered','accepted','revise_requested','discarded')),
+  review_feedback    TEXT,
+  outbound_id        TEXT UNIQUE REFERENCES discord_outbound(id),
+  delivered_at       TEXT,
+  decision_origin_id TEXT UNIQUE,
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  CHECK ((state IN ('delivery_pending','delivery_failed','delivered','accepted','revise_requested','discarded')) = (outbound_id IS NOT NULL)),
+  CHECK ((delivered_at IS NOT NULL) = (state IN ('delivered','accepted','revise_requested','discarded')))
+) STRICT;
+
+CREATE TRIGGER drafts_sync_delivery
+AFTER UPDATE OF state ON discord_outbound
+WHEN NEW.state != OLD.state AND NEW.state IN ('sent','failed','partial','unknown')
+BEGIN
+  UPDATE drafts
+     SET state = CASE
+           WHEN NEW.state = 'sent' AND EXISTS (
+             SELECT 1 FROM discord_outbound_actions
+              WHERE outbound_id = NEW.id AND kind = 'message' AND state = 'succeeded' AND receipt IS NOT NULL
+           ) THEN 'delivered'
+           ELSE 'delivery_failed'
+         END,
+         delivered_at = CASE
+           WHEN NEW.state = 'sent' AND EXISTS (
+             SELECT 1 FROM discord_outbound_actions
+              WHERE outbound_id = NEW.id AND kind = 'message' AND state = 'succeeded' AND receipt IS NOT NULL
+           ) THEN NEW.updated_at
+           ELSE NULL
+         END,
+         review_feedback = CASE WHEN NEW.state = 'sent' THEN review_feedback ELSE NEW.error END,
+         updated_at = NEW.updated_at
+   WHERE outbound_id = NEW.id AND state = 'delivery_pending';
+END;
+
 CREATE TABLE cycle_lease (
   lease_name          TEXT PRIMARY KEY CHECK (lease_name = 'cycle'),
   state               TEXT NOT NULL CHECK (state IN ('free','held','released')),

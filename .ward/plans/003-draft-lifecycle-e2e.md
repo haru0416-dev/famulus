@@ -2,6 +2,8 @@
 
 Planned at `2ce2a2a`.
 
+Implemented after `ffcdcb0`.
+
 Depends on plans 002 and 009.
 
 ## Why
@@ -10,35 +12,31 @@ Draft review can refuse because the cycle has insufficient time (`src/agent/assi
 
 ## Scope
 
-In scope: durable draft lifecycle, revision/decision linkage, delivery integration, black-box probes for inbound reply and daily draft, health status.
+In scope: durable draft lifecycle, revision/decision linkage, delivery integration, and focused end-to-end checks.
 
 Out of scope: publishing to Zenn, general Operation executor, research campaign state.
 
 ## Data model
 
-`drafts`: id, local day, title, current revision, state, source dossier refs, delivery id, timestamps.
+`drafts`: one row per local day with title, body, basis, content hash, state, review feedback, delivery id, decision origin, and timestamps.
 
-`draft_revisions`: immutable body, basis refs, content hash, review result, created_at; unique `(draft_id, revision)`.
-
-State: `materialized -> review_pending -> revision_needed | delivery_pending -> delivered -> accepted | revise_requested | discarded`. Review failure remains `review_pending`; transport failure remains `delivery_pending`.
+State: `review_pending -> revision_needed | delivery_pending | delivery_failed -> delivered -> accepted | revise_requested | discarded`. Review failure remains `review_pending`. Discord marks `delivered` only from a sent receipt; ambiguous and rejected delivery stays explicit and is not retried automatically.
 
 ## Steps
 
 1. Replace the daily meta flag with a unique draft day and explicit state.
 2. Persist the body before invoking reviewer so a later cycle resumes the same revision.
-3. Run review with AI SDK `Output.object` and persist only the validated complete result; never persist a partial structured stream as a decision.
-4. Pass evidence references, not free-form basis only, to reviewer and stored revision.
-5. Enqueue delivery through plan 002 and mark delivered only from its receipt.
-6. Attach Discord reactions and thread replies to draft/revision IDs.
-7. Add deterministic black-box probes using fake Discord and stub Runner for `poll -> inbox -> cycle -> delivery` and `due -> materialize -> review -> delivery -> reaction`.
-8. Record probe success time and failed stage; expose both in `oz status`.
+3. Keep the existing validated reviewer result boundary and persist reviewer feedback when revision is required.
+4. Enqueue delivery through plan 002 and mark delivered only from its receipt.
+5. Attach Discord reactions to draft IDs and apply each origin once.
+6. Cover saved-body resume and `delivery -> reaction -> inbox -> draft decision` in the existing focused tests.
 
 ## Verification
 
 ```sh
 git diff --stat 2ce2a2a..HEAD -- src/agent/assistant.ts src/cycle.ts src/services src/db src/cli.ts test oz-e2e-probe.ts
 bun run gate
-bun run test:e2e
+bunx --bun vitest run test/attention.test.ts test/discord.test.ts test/drafting.test.ts test/prompt-tools.test.ts
 ```
 
 ## Done criteria
@@ -47,4 +45,4 @@ bun run test:e2e
 - Restart resumes the same persisted revision.
 - Daily completion requires a delivered receipt.
 - Revision and discard reactions update the intended draft exactly once.
-- Both user-visible paths have repeatable black-box tests and health timestamps.
+- Saved-body resume and Discord delivery/reaction paths have repeatable focused tests.

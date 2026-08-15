@@ -190,9 +190,26 @@ function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Works
 
   // 下書きの規律は出す日にだけ載せる。毎回渡すと、書かない回にもコンテキスト容量を使う。
   if (d.draftDue) {
+    const pending = d.pendingDraft
     sections.push(
       [
         "## 今日ぶんの下書き",
+        ...(pending
+          ? [
+              pending.state === "review_pending"
+                ? "レビュー待ちの下書きがある。新しく書かず、次の本文を `draft` に渡して再開する。"
+                : pending.state === "revision_needed"
+                  ? "修正待ちの下書きがある。前回の精査に沿って本文を改稿してから `draft` に渡す。"
+                  : "下書きはDiscordの送信待ちに入っている。新しく書かない。",
+              ...(pending.reviewFeedback ? [`前回の結果: ${pending.reviewFeedback}`] : []),
+              "",
+              `題: ${pending.title}`,
+              `根拠: ${pending.basis}`,
+              "本文:",
+              pending.body,
+              "",
+            ]
+          : []),
         "1日に1本、外に出せる文を `draft` で置く。出す先は Zenn を想定した記事。",
         "",
         "**書き始める前に `recall` で自分の走行記録を引く。** 切られた自動処理、通らなかった経路、",
@@ -450,7 +467,6 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         yield* lease.assertCurrent(token)
         const mem = yield* Memory
         const att = yield* Attention
-        const db = yield* Db
         const discord = yield* Discord
         const deliveryKey = digestOf({
           reasonKey: d.reasonKey,
@@ -490,10 +506,6 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
           at: nowIso(),
         })
         yield* bumpCount("cycle:active_count")
-        // 書けたかどうかに関わらず、その日は1回で打ち切る。`draft` を呼ばなかった=材料が無かった
-        // ということで、同じ材料のまま15分ごとに書かせ直しても出てくるものは変わらない。
-        // ただし切られた回は数えない — 書かないと決めたのではなく、決める前に止められている。
-        if (d.draftDue && !cutOff) yield* db.setMeta("daily:draft", localDayRange(d.at).key)
         // active を立てるのはここだけ。次の cycle はこの時刻から冷却時間を数える。
         // reasonKey を渡すと、同じ組み合わせで起きるたびに次の冷却が倍になる(回し続けない)。
         // 進めるのは planCycle に載った行まで。走っている間に届いたぶんは未読のまま残り、

@@ -107,6 +107,14 @@ export interface CyclePlan {
   readonly cooldownHours: number
   /** 今日ぶんの下書きがまだ出ていない。cooldownを無視して実行条件になる(1日1回しか成立しない)。 */
   readonly draftDue: boolean
+  /** 今日の未配送draft。レビュー再開時は保存済み本文をそのまま渡す。 */
+  readonly pendingDraft?: {
+    readonly title: string
+    readonly body: string
+    readonly basis: string
+    readonly state: "review_pending" | "revision_needed" | "delivery_pending"
+    readonly reviewFeedback?: string
+  }
   readonly idle: boolean
 }
 
@@ -482,8 +490,24 @@ const makeAttention = () =>
 
         // cooldownの対象外にする。1日に1回しか成立しない条件で、抑えると夕方に別の理由で動いた日は
         // 下書きが生成されない。
+        const draftRow = yield* db.get(
+          `SELECT title,body,basis,state,review_feedback,delivered_at FROM drafts
+            WHERE delivered_at IS NULL AND state IN ('review_pending','revision_needed','delivery_pending')
+            ORDER BY local_day,created_at LIMIT 1`,
+        )
+        const day = localDayRange(at)
+        const deliveredToday = yield* db.get(
+          "SELECT 1 FROM drafts WHERE delivered_at>=? AND delivered_at<? LIMIT 1",
+          day.startIso,
+          day.endIso,
+        )
+        const failedToday = yield* db.get(
+          "SELECT 1 FROM drafts WHERE state='delivery_failed' AND updated_at>=? AND updated_at<? LIMIT 1",
+          day.startIso,
+          day.endIso,
+        )
         const draftDue =
-          localHour(at) >= dailyDraftHour() && (yield* db.meta("daily:draft")) !== localDayRange(at).key
+          Boolean(draftRow) || (localHour(at) >= dailyDraftHour() && !deliveredToday && !failedToday)
         if (draftDue) reasons.push("今日ぶんの下書きがまだ出ていない")
 
         return {
@@ -501,6 +525,17 @@ const makeAttention = () =>
           reasonKey: newEvents.length > 0 ? "" : reasonKey,
           cooldownHours,
           draftDue,
+          ...(draftRow && draftRow.delivered_at == null
+            ? {
+                pendingDraft: {
+                  title: String(draftRow.title),
+                  body: String(draftRow.body),
+                  basis: String(draftRow.basis),
+                  state: draftRow.state as "review_pending" | "revision_needed" | "delivery_pending",
+                  ...(draftRow.review_feedback ? { reviewFeedback: String(draftRow.review_feedback) } : {}),
+                },
+              }
+            : {}),
           idle: reasons.length === 0,
         } satisfies CyclePlan
       })

@@ -11,8 +11,11 @@ import { createServer, type IncomingMessage, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
+import { drainInbox } from "../src/inbox.ts"
+import { Attention } from "../src/services/Attention.ts"
 import { Db } from "../src/services/Db.ts"
 import { Discord, type Enqueue } from "../src/services/Discord.ts"
+import { Drafts } from "../src/services/Drafts.ts"
 import { withHarness } from "./helpers.ts"
 
 const OWNER = "1211509900937793597"
@@ -240,6 +243,48 @@ test("押されるまでは空。押されたら割り当てた文が返る", as
       assert.deepEqual(await h.run(pollInbound), [{ id: `${id}:🛑`, text: "やめて" }])
       // 二度は返らない。返ると同じ指示が cycle のたびに効き続ける。
       assert.deepEqual(await h.run(pollInbound), [])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("下書きのリアクションは対象draftへ一度だけ適用する", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url)
+  try {
+    await withHarness(async (h) => {
+      const { draftId, messageId } = await h.run(
+        Effect.gen(function* () {
+          const drafts = yield* Drafts
+          const discord = yield* Discord
+          const draft = yield* drafts.materialize({ title: "題", body: "本文", basis: "run 1" })
+          const outbound = yield* discord.enqueue({
+            purpose: "assistant-draft",
+            dedupeKey: draft.id,
+            text: "本文",
+            taps: [{ emoji: "✏️", reply: "直す", draft: { id: draft.id, decision: "revise" } }],
+          })
+          assert.ok(outbound)
+          yield* discord.flushQueued()
+          const done = yield* discord.getOutbound(outbound.id)
+          const receipt = done?.actions.find((a) => a.kind === "message")?.receipt as
+            | { messageId?: unknown }
+            | undefined
+          return { draftId: draft.id, messageId: String(receipt?.messageId) }
+        }),
+      )
+
+      const reaction = dc.msgs.find((x) => x.id === messageId)?.reactions?.[0]
+      assert.ok(reaction)
+      reaction.count = 2
+      assert.equal(await h.run(drainInbox), 1)
+      assert.equal(await h.run(drainInbox), 0)
+      const stored = await h.run(Effect.flatMap(Drafts, (drafts) => drafts.forDay()))
+      assert.equal(stored?.id, draftId)
+      assert.equal(stored?.state, "revise_requested")
+      assert.equal(stored?.decision_origin_id, `${messageId}:✏️`)
     })
   } finally {
     wire(undefined)
@@ -745,13 +790,61 @@ test("5xx は unknown で止まり、自動再送しない", async () => {
   wire(dc.url, { talk: TALK })
   try {
     await withHarness(async (h) => {
-      await h.run(
-        Effect.flatMap(Discord, (d) => d.enqueue({ purpose: "reply", dedupeKey: "unknown", text: "本文" })),
+      const draft = await h.run(
+        Effect.flatMap(Drafts, (drafts) => drafts.materialize({ title: "題", body: "本文", basis: "run" })),
       )
+      const outbound = await h.run(
+        Effect.flatMap(Discord, (d) =>
+          d.enqueue({ purpose: "assistant-draft", dedupeKey: draft.id, text: "本文" }),
+        ),
+      )
+      assert.ok(outbound)
+      await h.run(Effect.flatMap(Drafts, (drafts) => drafts.attachOutbound(draft.id, outbound.id)))
       const [done] = await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
       assert.equal(done?.state, "unknown")
+      const failedDraft = await h.run(Effect.flatMap(Drafts, (drafts) => drafts.forDay()))
+      assert.equal(failedDraft?.state, "delivery_failed")
+      const plan = await h.run(Effect.flatMap(Attention, (attention) => attention.planCycle()))
+      assert.equal(plan.draftDue, false, "配送失敗だけで同じ日次処理を繰り返さない")
       await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
       assert.equal(messages, 1)
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("別workerが送信中のactionをreceiptなしでsentにしない", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const outbound = await h.run(
+        Effect.flatMap(Discord, (d) =>
+          d.enqueue({ purpose: "reply", dedupeKey: "concurrent-sending", text: "本文" }),
+        ),
+      )
+      assert.ok(outbound)
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.withImmediateTransaction("simulate concurrent sender", (tx) => {
+            tx.run(
+              "UPDATE discord_outbound SET state='sending',updated_at='2099-01-01T00:00:00Z' WHERE id=?",
+              outbound.id,
+            )
+            tx.run(
+              "UPDATE discord_outbound_actions SET state='sending',updated_at='2099-01-01T00:00:00Z' WHERE outbound_id=?",
+              outbound.id,
+            )
+          }),
+        ),
+      )
+      await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      const stillSending = await h.run(Effect.flatMap(Discord, (d) => d.getOutbound(outbound.id)))
+      assert.equal(stillSending?.state, "sending")
+      assert.equal(stillSending?.actions[0]?.state, "sending")
+      assert.equal(dc.hits.length, 0)
     })
   } finally {
     wire(undefined)

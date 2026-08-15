@@ -18,6 +18,7 @@ import {
   STALLED_SHOW_MAX,
 } from "../src/services/Attention.ts"
 import { Db } from "../src/services/Db.ts"
+import { Drafts } from "../src/services/Drafts.ts"
 import { Memory } from "../src/services/Memory.ts"
 import { Proposals } from "../src/services/Proposals.ts"
 import { withHarness } from "./helpers.ts"
@@ -618,17 +619,66 @@ test("下書き生成条件は決めた時刻から1日1回だけ成立する", 
       assert.equal(due.draftDue, true, "時刻を過ぎたらcooldown中でも成立する")
       assert.match(due.reasons.join(), /下書き/)
 
+      const saved = await h.run(
+        Effect.gen(function* () {
+          const drafts = yield* Drafts
+          const first = yield* drafts.materialize(
+            { title: "元の題", body: "元の本文", basis: "run 1" },
+            "2026-08-08T09:30:00Z",
+          )
+          const resumed = yield* drafts.materialize(
+            { title: "別の題", body: "別の本文", basis: "run 2" },
+            "2026-08-08T10:00:00Z",
+          )
+          return { first, resumed }
+        }),
+      )
+      assert.equal(saved.resumed.id, saved.first.id)
+      assert.equal(saved.resumed.body, "元の本文", "レビュー待ちの本文は再開時の入力で上書きしない")
+      const pending = await h.run(planAt(T0 + hours(1)))
+      assert.equal(pending.draftDue, true, "保存やレビュー待ちだけでは日次完了にしない")
+      assert.equal(pending.pendingDraft?.body, "元の本文")
+      const revised = await h.run(
+        Effect.gen(function* () {
+          const drafts = yield* Drafts
+          yield* drafts.requestRevision(saved.first.id, "本文を直す")
+          const basisOnly = yield* drafts.materialize(
+            { title: "元の題", body: "元の本文", basis: "根拠だけ変更" },
+            "2026-08-08T10:10:00Z",
+          )
+          const changed = yield* drafts.materialize(
+            { title: "元の題", body: "改稿本文", basis: "run 2" },
+            "2026-08-08T10:20:00Z",
+          )
+          return { basisOnly, changed }
+        }),
+      )
+      assert.equal(revised.basisOnly.state, "revision_needed", "レビュー対象の本文が同じなら再レビューしない")
+      assert.equal(revised.changed.state, "review_pending")
+      const crossDay = await h.run(planAt(T0 + hours(23)))
+      assert.equal(crossDay.pendingDraft?.body, "改稿本文", "日付をまたいでも未完了の同じ本文を再開する")
+
       await h.run(
         Effect.gen(function* () {
           const db = yield* Db
-          yield* db.setMeta("daily:draft", "2026-08-08")
+          yield* db.run(
+            `INSERT INTO discord_outbound
+              (id,purpose,dedupe_key,spec,spec_hash,state,created_at,updated_at)
+             VALUES ('draft-out','test','draft-out','{}','hash','sent','2026-08-09T09:00:00Z','2026-08-09T09:01:00Z')`,
+          )
+          yield* db.run(
+            `INSERT INTO discord_outbound_actions
+              (outbound_id,ordinal,kind,spec,spec_hash,state,receipt,updated_at)
+             VALUES ('draft-out',0,'message','{}','hash','succeeded','{"messageId":"1"}','2026-08-09T09:01:00Z')`,
+          )
+          const drafts = yield* Drafts
+          yield* drafts.attachOutbound(saved.first.id, "draft-out")
         }),
       )
-      const done = await h.run(planAt(T0 + hours(1)))
-      assert.equal(done.draftDue, false, "その日ぶんが済んでいれば二度は成立しない")
-      assert.equal(done.idle, true)
+      const done = await h.run(planAt(T0 + hours(24)))
+      assert.equal(done.draftDue, false, "持越しdraftもDiscord実送信した日の完了に数える")
 
-      const nextDay = await h.run(planAt(T0 + hours(23)))
+      const nextDay = await h.run(planAt(T0 + hours(47)))
       assert.equal(nextDay.draftDue, true, "日が変われば再び成立する")
     })
   } finally {
