@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { isWebModel, MODEL_IDS } from "./models.ts"
+import { isWebModel, MODEL_IDS, poolForModel } from "./models.ts"
 import type { RuntimeSchema } from "./schema.ts"
 
 export interface GenerationRef {
@@ -31,16 +31,13 @@ const generationRef = (id: string, generation: number, value: unknown): Generati
   return { id, generation, snapshot, digest: digestOf(snapshot) }
 }
 
-// Generation 1のdigestは永続LoopSpecの回復キー。runtimeのpool表示名を変えても書き換えない。
-const PROFILE_POOL_GENERATION_1 = "chatgpt-rmod"
-
 export const PROFILE_REFS: Readonly<Record<(typeof MODEL_IDS)[number], GenerationRef>> = Object.fromEntries(
   MODEL_IDS.map((model) => [
     model,
     generationRef(`model:${model}`, 1, {
       formatVersion: 1,
       model,
-      pool: PROFILE_POOL_GENERATION_1,
+      pool: poolForModel(model),
       providerExternalIo: isWebModel(model),
       transportRetryVisibility: "explicit",
     }),

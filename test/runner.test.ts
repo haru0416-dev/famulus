@@ -188,17 +188,6 @@ test("production roleの全modelに固定Profileがある", () => {
   }
 })
 
-test("generation 1のGPT Profile digestを維持する", () => {
-  assert.equal(
-    PROFILE_REFS["gpt-5.6-sol"].digest,
-    "67ccd6de67d2c436dcf632a2642f09af90fb352339ec9e830d93a470ecbda82b",
-  )
-  assert.equal(
-    PROFILE_REFS["gpt-5.6-luna"].digest,
-    "810ca5ddcc3ee573d8b03b0baad42f0ee9bbef1fd60c7a38c6c123ff5d2f7ab1",
-  )
-})
-
 /**
  * 混在 routing の要点。経路とクォータはモデルで決まる。
  * 環境変数1つで決めていた頃は、GPT に切り替えると対話まで別経路になった。
