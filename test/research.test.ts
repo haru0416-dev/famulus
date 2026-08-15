@@ -30,6 +30,15 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
             dossier.created_at,
           ),
         )
+        const webBelief = yield* Effect.result(
+          db.run(
+            `INSERT INTO events
+              (id,at,kind,source,taint,exposure,provenance,content,search_text,belief_slot,valid_from)
+             VALUES ('web-belief',?,'belief','web',1,'public','[]','42','fact','public.fact',?)`,
+            dossier.created_at,
+            dossier.created_at,
+          ),
+        )
         const source = yield* research.addSnapshot(dossier.id, {
           sourceRef: "https://example.com/spec",
           content: "Current version is 7.0.62.",
@@ -139,6 +148,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
           dossiers,
           unsupported,
           directConclusion,
+          webBelief,
           crossDossier,
           crossSupersedes,
           replaceEvidence,
@@ -159,6 +169,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
     assert.equal(result.dossiers.length, 2)
     assert.equal(result.unsupported._tag, "Failure")
     assert.equal(result.directConclusion._tag, "Failure")
+    assert.equal(result.webBelief._tag, "Failure")
     assert.equal(result.crossDossier._tag, "Failure")
     assert.equal(result.crossSupersedes._tag, "Failure")
     assert.equal(result.replaceEvidence._tag, "Failure")
@@ -187,6 +198,18 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
           checkCommand: "verify-change",
           checkResult: { status: "completed", exitCode: 1, output: "failed" },
         })
+        const emptyCheck = yield* Effect.result(
+          research.recordExperiment({
+            hypothesisClaimId: hypothesis.id,
+            protocol: { acceptance: "empty is invalid" },
+            environment: { runtime: "test" },
+            workspace: "research-test",
+            command: "apply-change",
+            commandResult: { status: "completed", exitCode: 0, output: "changed" },
+            checkCommand: " ",
+            checkResult: { status: "completed", exitCode: 0, output: "" },
+          }),
+        )
         const verified = yield* research.recordExperiment({
           hypothesisClaimId: hypothesis.id,
           protocol: { acceptance: "check exits 0" },
@@ -261,6 +284,7 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
         )
         return {
           verdict: run.verdict,
+          emptyCheck,
           failedArtifactSupport,
           fakeVerified,
           reusedArtifacts,
@@ -271,11 +295,12 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
       }),
     )
     assert.equal(verdict.verdict, "failed")
+    assert.equal(verdict.emptyCheck._tag, "Failure")
     assert.equal(verdict.failedArtifactSupport._tag, "Failure")
     assert.equal(verdict.fakeVerified._tag, "Failure")
     assert.equal(verdict.reusedArtifacts._tag, "Failure")
     assert.equal(verdict.crossExperiment._tag, "Failure")
     assert.equal(verdict.foreignArtifacts._tag, "Failure")
-    assert.match(verdict.rendered, /apply-change sha256=[0-9a-f]{64}/)
-    assert.match(verdict.rendered, /check verify-change sha256=[0-9a-f]{64}/)
+    assert.match(verdict.rendered, /command completed exit=1: apply-change sha256=[0-9a-f]{64}/)
+    assert.match(verdict.rendered, /check completed exit=0: verify-change sha256=[0-9a-f]{64}/)
   }))

@@ -109,7 +109,8 @@ CREATE TABLE research_experiment_runs (
     (verdict = 'verified' AND check_status IS 'completed' AND check_exit_code IS 0)
     OR (verdict = 'failed' AND check_status IS 'completed' AND check_exit_code IS NOT 0)
     OR (verdict = 'inconclusive' AND (check_status IS NULL OR check_status IN ('timed_out','unavailable')))
-  )
+  ),
+  CHECK (length(trim(command)) > 0 AND length(trim(check_command)) > 0)
 ) STRICT;
 CREATE INDEX idx_research_runs_claim ON research_experiment_runs(hypothesis_claim_id, started_at);
 
@@ -485,6 +486,12 @@ CREATE TRIGGER events_no_delete
 BEFORE DELETE ON events
 BEGIN
   SELECT RAISE(ABORT, 'events is append-only: DELETE forbidden');
+END;
+
+CREATE TRIGGER events_web_never_belief
+BEFORE INSERT ON events WHEN NEW.kind = 'belief' AND NEW.source = 'web'
+BEGIN
+  SELECT RAISE(ABORT, 'web claims cannot become beliefs');
 END;
 
 CREATE TRIGGER events_immutable_except_redact

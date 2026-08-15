@@ -200,6 +200,9 @@ const makeResearch = () =>
         if (!claim) throw new Error(`Hypothesis claim not found: ${input.hypothesisClaimId}`)
         const dossierId = String(claim.dossier_id)
         requireOpen(tx, dossierId)
+        if (!input.command.trim() || !input.checkCommand.trim()) {
+          throw new Error("Research experiment command and check command must not be empty")
+        }
         const artifact = (content: string): string => {
           const id = randomUUID()
           tx.run(
@@ -312,7 +315,8 @@ const makeResearch = () =>
         ),
         evidence: db.all(
           `SELECT e.*,a.kind artifact_kind,a.source_ref,a.sha256,a.captured_at,
-                  r.verdict,r.command,r.check_command,
+                  r.verdict,r.command,r.command_status,r.command_exit_code,
+                  r.check_command,r.check_status,r.check_exit_code,
                   command_artifact.sha256 command_sha256,check_artifact.sha256 check_sha256
              FROM research_claim_evidence e
              JOIN research_claims c ON c.id=e.claim_id
@@ -364,8 +368,9 @@ const makeResearch = () =>
                     )
                   } else {
                     lines.push(
-                      `- ${edge.polarity}: experiment ${edge.verdict} / ${edge.command} sha256=${edge.command_sha256}` +
-                        ` / check ${edge.check_command} ${edge.check_sha256 ? `sha256=${edge.check_sha256}` : "not-run"}`,
+                      `- ${edge.polarity}: experiment ${edge.verdict}` +
+                        ` / command ${edge.command_status}${edge.command_exit_code === null ? "" : ` exit=${edge.command_exit_code}`}: ${edge.command} sha256=${edge.command_sha256}` +
+                        ` / check ${edge.check_status ?? "not-run"}${edge.check_exit_code === null ? "" : ` exit=${edge.check_exit_code}`}: ${edge.check_command} ${edge.check_sha256 ? `sha256=${edge.check_sha256}` : "not-run"}`,
                     )
                   }
                 }
