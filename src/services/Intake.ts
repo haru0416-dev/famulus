@@ -140,6 +140,37 @@ function plainText(content: unknown): string {
     .join("\n")
 }
 
+const parseRecord = (line: string): Record<string, unknown> | undefined => {
+  try {
+    const value: unknown = JSON.parse(line)
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+interface TypedOwnerRecord {
+  readonly text: string
+  readonly sessionId: unknown
+  readonly cwd: unknown
+  readonly timestamp: unknown
+}
+
+/** Claude Code の1行から、実際に入力された owner 発話だけを取り出す。 */
+function typedOwnerFromRecord(record: Record<string, unknown>): TypedOwnerRecord | undefined {
+  if (record.isSidechain === true || record.type !== "user" || record.promptSource !== TYPED) return undefined
+  const text = plainText((record.message as { content?: unknown } | undefined)?.content)
+  if (text.trim().length === 0) return undefined
+  return {
+    text,
+    sessionId: record.sessionId,
+    cwd: record.cwd,
+    timestamp: record.timestamp,
+  }
+}
+
 /** JSONL を1本読んで、人の発話とエージェントの地の文だけに落とす。道具の入出力はここで消える。 */
 function readSession(path: string): { ref: SessionRef; turns: Turn[]; rawBytes: number } | undefined {
   // 全文パースは高いので、人が打った跡が無いファイルはここで捨てる。
@@ -153,24 +184,17 @@ function readSession(path: string): { ref: SessionRef; turns: Turn[]; rawBytes: 
 
   for (const line of raw.split("\n")) {
     if (line.length === 0) continue
-    let j: Record<string, unknown>
-    try {
-      j = JSON.parse(line)
-    } catch {
-      continue
-    }
-    // サブエージェントの往復はユーザーの判断ではない。丸ごと落とす。
-    if (j.isSidechain === true) continue
-    const msg = j.message as { content?: unknown } | undefined
-    const text = plainText(msg?.content)
-
-    if (j.type === "user" && j.promptSource === TYPED) {
+    const record = parseRecord(line)
+    if (!record) continue
+    const owner = typedOwnerFromRecord(record)
+    if (owner) {
+      sessionId ||= String(owner.sessionId ?? "")
+      cwd ||= String(owner.cwd ?? "")
+      at ||= String(owner.timestamp ?? nowIso())
+      turns.push({ who: "owner", text: owner.text })
+    } else if (record.isSidechain !== true && record.type === "assistant") {
+      const text = plainText((record.message as { content?: unknown } | undefined)?.content)
       if (text.trim().length === 0) continue
-      sessionId ||= String(j.sessionId ?? "")
-      cwd ||= String(j.cwd ?? "")
-      at ||= String(j.timestamp ?? nowIso())
-      turns.push({ who: "owner", text })
-    } else if (j.type === "assistant" && text.trim().length > 0) {
       turns.push({ who: "agent", text })
     }
   }
@@ -202,17 +226,12 @@ function readSessionRef(path: string): SessionRef | undefined {
   let owner = 0
   for (const line of raw.split("\n")) {
     if (!line.includes(TYPED_MARK)) continue
-    let j: Record<string, unknown>
-    try {
-      j = JSON.parse(line)
-    } catch {
-      continue
-    }
-    if (j.isSidechain === true || j.type !== "user" || j.promptSource !== TYPED) continue
-    if (plainText((j.message as { content?: unknown } | undefined)?.content).trim().length === 0) continue
-    sessionId ||= String(j.sessionId ?? "")
-    cwd ||= String(j.cwd ?? "")
-    at ||= String(j.timestamp ?? nowIso())
+    const parsed = parseRecord(line)
+    const typedOwner = parsed && typedOwnerFromRecord(parsed)
+    if (!typedOwner) continue
+    sessionId ||= String(typedOwner.sessionId ?? "")
+    cwd ||= String(typedOwner.cwd ?? "")
+    at ||= String(typedOwner.timestamp ?? nowIso())
     owner += 1
   }
 

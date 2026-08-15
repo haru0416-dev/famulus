@@ -89,6 +89,8 @@ beforeAll(() => {
       typed("s1", "/home/haru/Project/demo", "2026-08-01T09:00:00.000Z", LONG_ASK),
       usedTool(50_000),
       usedTool(50_000),
+      "null", // 有効な JSON でも record でなければ入力行として扱わない。
+      JSON.stringify([{ promptSource: "typed" }]), // 高速走査の目印を含む配列も record ではない。
       said("調べています。まず現在の予約を確認します。"),
       said("水曜18時で押さえました。金曜への振り替えは来週ぶんだけ別に入れます。"),
       sidechain("s1", "サブエージェントへの指示。これはユーザーの言葉ではない。"),
@@ -347,15 +349,18 @@ test("英語だけの覚え書きには日本語の見出しが付く — 本文
 
 test("選別は道具の入出力を捨て、ユーザーの発話は1文字も削らない", async () => {
   await withHarness(async (h) => {
-    const m = await h.run(
+    const out = await h.run(
       Effect.gen(function* () {
         const intake = yield* Intake
         const refs = yield* intake.scan(10)
         assert.equal(refs.length, 1, "人が打っていないログは候補に上がらない")
-        return yield* intake.material(only(refs))
+        const ref = only(refs)
+        return { ref, material: yield* intake.material(ref) }
       }),
     )
+    const m = out.material
     assert.ok(m)
+    assert.deepEqual(m.ref, out.ref, "高速走査と全文選別で同じセッション情報を返す")
     // 道具の payload が素材の予算を消費すると、後続の owner 発話が落ちうる。
     assert.ok(m.rawBytes > 100_000, `元の JSONL ログは 100KB 超のはず: ${m.rawBytes}`)
     assert.ok(m.keptBytes < 2_000, `残すのは 2KB 未満のはず: ${m.keptBytes}`)
