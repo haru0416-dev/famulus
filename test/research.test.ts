@@ -20,12 +20,30 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
         yield* research.conclude(dossier.id, conclusion.id, "取得時点の公開ページだけを確認した。")
         const bundle = yield* research.bundle(dossier.id)
         const late = yield* Effect.result(research.addClaim(dossier.id, "late", "observation"))
-        return { bundle, late }
+        const invalid = yield* Effect.result(
+          research.recordWebDossier({
+            question: "引用が無い場合",
+            summary: "保存しない",
+            limitations: "引用不一致",
+            snapshots: [{ url: "https://example.com", content: "actual", status: 200 }],
+            claims: [
+              {
+                statement: "missing",
+                kind: "conclusion",
+                evidence: [{ url: "https://example.com", quote: "missing", polarity: "support" }],
+              },
+            ],
+          }),
+        )
+        const dossiers = yield* research.list()
+        return { bundle, late, invalid, dossiers }
       }),
     )
     assert.equal(result.bundle.dossier?.state, "concluded")
     assert.equal(result.bundle.evidence.length, 1)
     assert.equal(result.late._tag, "Failure")
+    assert.equal(result.invalid._tag, "Failure")
+    assert.equal(result.dossiers.length, 1)
   }))
 
 test("command成功ではなくcheck成功だけが実験をverifiedにする", () =>

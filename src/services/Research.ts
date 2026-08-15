@@ -305,6 +305,101 @@ const makeResearch = () =>
     const list = (limit = 20) =>
       db.all("SELECT * FROM research_dossiers ORDER BY created_at DESC,id DESC LIMIT ?", limit)
 
+    const recordWebDossier = (
+      input: {
+        question: string
+        summary: string
+        limitations: string
+        snapshots: readonly { url: string; content: string; status: number }[]
+        claims: readonly {
+          statement: string
+          kind: ClaimKind
+          evidence: readonly { url: string; quote: string; polarity: EvidencePolarity }[]
+        }[]
+      },
+      at: string = nowIso(),
+    ) =>
+      db.withImmediateTransaction("record web research dossier", (tx) => {
+        const dossierId = randomUUID()
+        tx.run(
+          "INSERT INTO research_dossiers(id,question,state,created_at) VALUES (?,?,'open',?)",
+          dossierId,
+          input.question.trim(),
+          at,
+        )
+        const artifacts = input.snapshots.map((snapshot) => {
+          const id = randomUUID()
+          tx.run(
+            `INSERT INTO research_artifacts
+               (id,dossier_id,kind,media_type,content,sha256,source_ref,captured_at,provenance,created_at)
+             VALUES (?,?,'source_snapshot','text/plain',?,?,?,?,?,?)`,
+            id,
+            dossierId,
+            snapshot.content,
+            sha256(snapshot.content),
+            snapshot.url,
+            at,
+            JSON.stringify({ url: snapshot.url, status: snapshot.status }),
+            at,
+          )
+          return { ...snapshot, id }
+        })
+        let conclusionId: string | undefined
+        for (const item of input.claims) {
+          const claimId = randomUUID()
+          tx.run(
+            "INSERT INTO research_claims(id,dossier_id,statement,kind,state,created_at) VALUES (?,?,?,?,'open',?)",
+            claimId,
+            dossierId,
+            item.statement.trim(),
+            item.kind,
+            at,
+          )
+          let support = 0
+          let refute = 0
+          for (const evidence of item.evidence) {
+            const artifact = artifacts.find(
+              (candidate) => candidate.url === evidence.url && candidate.content.includes(evidence.quote),
+            )
+            if (!artifact)
+              throw new Error(`Research quote is not present in fetched snapshot: ${evidence.url}`)
+            tx.run(
+              `INSERT INTO research_claim_evidence(id,claim_id,artifact_id,polarity,quote,added_at)
+               VALUES (?,?,?,?,?,?)`,
+              randomUUID(),
+              claimId,
+              artifact.id,
+              evidence.polarity,
+              evidence.quote,
+              at,
+            )
+            if (evidence.polarity === "support") support += 1
+            if (evidence.polarity === "refute") refute += 1
+          }
+          const state: Exclude<ClaimState, "open"> =
+            support > 0 && refute === 0
+              ? "supported"
+              : refute > 0 && support === 0
+                ? "refuted"
+                : "inconclusive"
+          tx.run("UPDATE research_claims SET state=?,resolved_at=? WHERE id=?", state, at, claimId)
+          if (item.kind === "conclusion" && state === "supported") {
+            if (conclusionId) throw new Error("Research dossier must have at most one supported conclusion")
+            conclusionId = claimId
+          }
+        }
+        tx.run(
+          conclusionId
+            ? `UPDATE research_dossiers SET state='concluded',conclusion_claim_id=?,limitations=?,concluded_at=? WHERE id=?`
+            : `UPDATE research_dossiers SET state='inconclusive',conclusion_claim_id=?,limitations=?,concluded_at=? WHERE id=?`,
+          conclusionId ?? null,
+          input.limitations.trim(),
+          at,
+          dossierId,
+        )
+        return { id: dossierId, summary: input.summary }
+      })
+
     return {
       open,
       addSnapshot,
@@ -317,6 +412,7 @@ const makeResearch = () =>
       inconclusive,
       bundle,
       list,
+      recordWebDossier,
     } as const
   })
 
