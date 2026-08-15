@@ -321,6 +321,8 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
       // 言われた」ことが実行条件になる。ここが後だと、返事は次回まで読まれない。
       // poll が先に取り込んでいれば0件で通り、DB に残っているぶんが planCycle に出る。
       const arrived = yield* drainInbox
+      const db = yield* Db
+      yield* db.setMeta("health:inbound:last_success", nowIso())
       if (arrived > 0) log(`受信箱から ${arrived} 件`)
       const att = yield* Attention
       return yield* att.planCycle()

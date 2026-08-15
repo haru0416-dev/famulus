@@ -293,7 +293,6 @@ const fetchTool = (fetched?: FetchedEvidence[]) =>
 
 const RESEARCH_SCHEMA = rs(
   v.object({
-    summary: v.string(),
     limitations: v.string(),
     claims: v.array(
       v.object({
@@ -410,7 +409,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
         "出典 URL 付きで返る。答えの末尾に『開いたページ』の1行が付く — そこが『無し』なら、" +
         "中の数字は検索の索引を写しただけで**確かめていない**。そのまま断定して返さず、" +
         "『未確認』と添えるか、URL を名指しでもう一度依頼する。" +
-        "DB には触らないので、覚えるかどうかは戻ってきてから決める。" +
+        "結果は引用付きresearch dossierとして固定し、その正本を返す。" +
         "会話は見えないので、何を知りたいかを一件で分かるように書く。",
       inputSchema: vs(
         v.object({
@@ -426,7 +425,6 @@ function buildTools(state: TurnState, gate: ToolGate) {
           output: Output.object({
             schema: vs(
               v.object({
-                summary: v.string(),
                 limitations: v.string(),
                 claims: v.array(
                   v.object({
@@ -455,12 +453,11 @@ function buildTools(state: TurnState, gate: ToolGate) {
             const research = yield* Research
             const dossier = yield* research.recordWebDossier({
               question: task,
-              summary: parsed.value.summary,
               limitations: parsed.value.limitations,
               snapshots: fetched,
               claims: parsed.value.claims,
             })
-            return `[dossier:${dossier.id}] ${dossier.summary}\n限界: ${parsed.value.limitations}`
+            return yield* research.render(dossier.id)
           }),
         )
       },

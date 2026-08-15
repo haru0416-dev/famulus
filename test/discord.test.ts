@@ -25,7 +25,6 @@ const terminalDossier = (question: string) =>
   Effect.flatMap(Research, (research) =>
     research.recordWebDossier({
       question,
-      summary: "test",
       limitations: "test fixture",
       snapshots: [],
       claims: [],

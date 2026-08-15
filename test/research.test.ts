@@ -99,7 +99,6 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
         const invalid = yield* Effect.result(
           research.recordWebDossier({
             question: "引用が無い場合",
-            summary: "保存しない",
             limitations: "引用不一致",
             snapshots: [{ url: "https://example.com", content: "actual", status: 200 }],
             claims: [
@@ -115,7 +114,6 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
         const emptySnapshot = yield* Effect.result(
           research.recordWebDossier({
             question: "取得失敗",
-            summary: "保存しない",
             limitations: "本文なし",
             snapshots: [{ url: "https://x.com/example", content: "", status: 0 }],
             claims: [],
@@ -124,7 +122,6 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
         const nanStatus = yield* Effect.result(
           research.recordWebDossier({
             question: "不正status",
-            summary: "保存しない",
             limitations: "NaN",
             snapshots: [{ url: "https://example.com/nan", content: "body", status: Number.NaN }],
             claims: [],

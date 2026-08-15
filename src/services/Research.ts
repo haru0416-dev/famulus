@@ -386,7 +386,6 @@ const makeResearch = () =>
     const recordWebDossier = (
       input: {
         question: string
-        summary: string
         limitations: string
         snapshots: readonly { url: string; content: string; status: number }[]
         claims: readonly {
@@ -484,7 +483,7 @@ const makeResearch = () =>
           at,
           dossierId,
         )
-        return { id: dossierId, summary: input.summary }
+        return { id: dossierId }
       })
 
     return {
