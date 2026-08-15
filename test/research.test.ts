@@ -187,6 +187,9 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
           checkResult: { status: "completed", exitCode: 0, output: "verified" },
         })
         const conclusion = yield* research.addClaim(dossier.id, "検査条件を満たした", "conclusion")
+        const failedArtifactSupport = yield* Effect.result(
+          research.linkArtifact(conclusion.id, run.commandArtifactId, "support", "changed"),
+        )
         yield* research.linkExperiment(conclusion.id, verified.id, "support")
         yield* research.resolveClaim(conclusion.id, "supported")
         yield* research.conclude(dossier.id, conclusion.id, "test environment only")
@@ -232,10 +235,18 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
             dossier.created_at,
           ),
         )
-        return { verdict: run.verdict, fakeVerified, crossExperiment, foreignArtifacts, rendered }
+        return {
+          verdict: run.verdict,
+          failedArtifactSupport,
+          fakeVerified,
+          crossExperiment,
+          foreignArtifacts,
+          rendered,
+        }
       }),
     )
     assert.equal(verdict.verdict, "failed")
+    assert.equal(verdict.failedArtifactSupport._tag, "Failure")
     assert.equal(verdict.fakeVerified._tag, "Failure")
     assert.equal(verdict.crossExperiment._tag, "Failure")
     assert.equal(verdict.foreignArtifacts._tag, "Failure")

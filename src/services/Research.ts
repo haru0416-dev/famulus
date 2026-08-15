@@ -143,9 +143,15 @@ const makeResearch = () =>
     ) =>
       db.withImmediateTransaction("link research artifact", (tx) => {
         const claim = tx.get("SELECT dossier_id FROM research_claims WHERE id=?", claimId)
-        const artifact = tx.get("SELECT dossier_id,content FROM research_artifacts WHERE id=?", artifactId)
+        const artifact = tx.get(
+          "SELECT dossier_id,kind,content FROM research_artifacts WHERE id=?",
+          artifactId,
+        )
         if (!claim || !artifact || claim.dossier_id !== artifact.dossier_id) {
           throw new Error("Research evidence must belong to the same dossier")
+        }
+        if (polarity !== "context" && artifact.kind !== "source_snapshot") {
+          throw new Error("Only source snapshots can directly support or refute research claims")
         }
         if (quote && typeof artifact.content === "string" && !artifact.content.includes(quote)) {
           throw new Error("Research evidence quote is not present in the source snapshot")

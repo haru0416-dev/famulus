@@ -184,6 +184,14 @@ WHEN NEW.experiment_run_id IS NOT NULL AND NEW.polarity != 'context'
 BEGIN
   SELECT RAISE(ABORT, 'only verified experiment runs can support or refute claims');
 END;
+CREATE TRIGGER research_evidence_source_artifact_only
+BEFORE INSERT ON research_claim_evidence
+WHEN NEW.artifact_id IS NOT NULL AND NEW.polarity != 'context' AND NOT EXISTS (
+  SELECT 1 FROM research_artifacts WHERE id = NEW.artifact_id AND kind = 'source_snapshot'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'only source snapshots can directly support or refute claims');
+END;
 CREATE TRIGGER research_evidence_same_dossier
 BEFORE INSERT ON research_claim_evidence
 WHEN NEW.artifact_id IS NOT NULL AND NOT EXISTS (
