@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite"
 import { readFileSync } from "node:fs"
 
 export type Sqlite = Database
-export const SCHEMA_VERSION = "5"
+export const SCHEMA_VERSION = "6"
 export const SCHEMA_SQL = readFileSync(new URL("./schema.sql", import.meta.url), "utf8")
 
 interface Migration {
@@ -24,6 +24,73 @@ const MIGRATIONS: readonly Migration[] = [
       name TEXT NOT NULL UNIQUE,
       applied_at TEXT NOT NULL
     ) STRICT;`,
+  },
+  {
+    from: "5",
+    to: "6",
+    name: "cycle-lease",
+    sql: `CREATE TABLE cycle_lease (
+      lease_name TEXT PRIMARY KEY CHECK (lease_name = 'cycle'),
+      state TEXT NOT NULL CHECK (state IN ('free','held','released')),
+      fence INTEGER NOT NULL CHECK (fence BETWEEN 0 AND 9007199254740991),
+      owner_id TEXT,
+      owner_host_id TEXT,
+      owner_boot_id TEXT,
+      owner_pid_namespace TEXT,
+      owner_pid INTEGER,
+      owner_start_ticks TEXT,
+      owner_hostname TEXT,
+      acquired_at_ms INTEGER,
+      heartbeat_at_ms INTEGER,
+      expires_at_ms INTEGER,
+      released_at_ms INTEGER,
+      CHECK (
+        (state = 'held'
+          AND owner_id IS NOT NULL AND owner_host_id IS NOT NULL AND owner_boot_id IS NOT NULL
+          AND owner_pid_namespace IS NOT NULL AND owner_pid > 0 AND owner_start_ticks IS NOT NULL
+          AND acquired_at_ms IS NOT NULL AND heartbeat_at_ms >= acquired_at_ms
+          AND expires_at_ms > heartbeat_at_ms AND released_at_ms IS NULL)
+        OR
+        (state = 'free' AND owner_id IS NULL AND owner_host_id IS NULL AND owner_boot_id IS NULL
+          AND owner_pid_namespace IS NULL AND owner_pid IS NULL AND owner_start_ticks IS NULL
+          AND owner_hostname IS NULL AND acquired_at_ms IS NULL AND heartbeat_at_ms IS NULL
+          AND expires_at_ms IS NULL AND released_at_ms IS NULL)
+        OR
+        (state = 'released' AND owner_id IS NULL AND owner_host_id IS NULL AND owner_boot_id IS NULL
+          AND owner_pid_namespace IS NULL AND owner_pid IS NULL AND owner_start_ticks IS NULL
+          AND owner_hostname IS NULL AND acquired_at_ms IS NULL AND heartbeat_at_ms IS NULL
+          AND expires_at_ms IS NULL AND released_at_ms IS NOT NULL)
+      )
+    ) STRICT;
+    INSERT INTO cycle_lease (lease_name, state, fence) VALUES ('cycle', 'free', 0);
+    CREATE TRIGGER cycle_lease_no_delete
+    BEFORE DELETE ON cycle_lease
+    BEGIN
+      SELECT RAISE(ABORT, 'cycle lease cannot be deleted');
+    END;
+    CREATE TRIGGER cycle_lease_no_reinsert
+    BEFORE INSERT ON cycle_lease WHEN EXISTS (SELECT 1 FROM cycle_lease)
+    BEGIN
+      SELECT RAISE(ABORT, 'cycle lease singleton cannot be replaced');
+    END;
+    CREATE TRIGGER cycle_lease_fence_monotonic
+    BEFORE UPDATE ON cycle_lease WHEN NEW.fence < OLD.fence
+    BEGIN
+      SELECT RAISE(ABORT, 'cycle lease fence cannot decrease');
+    END;
+    CREATE TRIGGER cycle_lease_owner_requires_fence
+    BEFORE UPDATE ON cycle_lease
+    WHEN NEW.state = 'held'
+     AND (
+       OLD.state != 'held' OR NEW.owner_id IS NOT OLD.owner_id
+       OR NEW.owner_host_id IS NOT OLD.owner_host_id OR NEW.owner_boot_id IS NOT OLD.owner_boot_id
+       OR NEW.owner_pid_namespace IS NOT OLD.owner_pid_namespace OR NEW.owner_pid IS NOT OLD.owner_pid
+       OR NEW.owner_start_ticks IS NOT OLD.owner_start_ticks
+     )
+     AND NEW.fence <= OLD.fence
+    BEGIN
+      SELECT RAISE(ABORT, 'cycle lease owner change requires a higher fence');
+    END;`,
   },
 ]
 
@@ -104,6 +171,10 @@ export const assertCurrentSchema = (db: Sqlite, path: string): void => {
       `Invalid version ${SCHEMA_VERSION} database shape: path=${path} objects=${[...wrong].sort().join(",")}`,
     )
   }
+  const leases = db.prepare("SELECT count(*) AS n FROM cycle_lease WHERE lease_name='cycle'").get() as {
+    n: number
+  }
+  if (leases.n !== 1) throw new Error(`Invalid version ${SCHEMA_VERSION} cycle lease singleton: path=${path}`)
 }
 
 export const migrateToCurrent = (db: Sqlite, path: string): void => {

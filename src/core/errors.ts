@@ -72,6 +72,27 @@ export class DbFailed extends Data.TaggedError("DbFailed")<{
   readonly message: string
 }> {}
 
+export class ProcessIdentityUnavailable extends Data.TaggedError("ProcessIdentityUnavailable")<{
+  readonly reason: string
+}> {}
+
+export class CycleLeaseHeld extends Data.TaggedError("CycleLeaseHeld")<{
+  readonly ownerId: string
+  readonly fence: number
+  readonly expiresAtMs: number
+}> {}
+
+export class CycleLeaseRecoveryUncertain extends Data.TaggedError("CycleLeaseRecoveryUncertain")<{
+  readonly ownerId: string
+  readonly fence: number
+  readonly reason: string
+}> {}
+
+export class CycleLeaseLost extends Data.TaggedError("CycleLeaseLost")<{
+  readonly ownerId: string
+  readonly fence: number
+}> {}
+
 /** governance が出しうる拒否の総和。ツール実行前・送信前のゲートはこれを返す。 */
 export type Refusal = Halt | QuotaCooldown | DailyRunLimit | DeliveryRejected
 

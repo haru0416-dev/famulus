@@ -24,10 +24,56 @@ import {
   openDb,
   SCHEMA_SQL,
   SCHEMA_VERSION,
+  type Sqlite,
 } from "../db/sqlite.ts"
 export interface Row {
   readonly [k: string]: unknown
 }
+
+export interface DbRunResult {
+  readonly changes: number
+  readonly lastInsertRowid: number | bigint
+}
+
+export interface DbTx {
+  readonly all: (sql: string, ...params: readonly unknown[]) => Row[]
+  readonly get: (sql: string, ...params: readonly unknown[]) => Row | undefined
+  readonly run: (sql: string, ...params: readonly unknown[]) => DbRunResult
+}
+
+type SyncResult<A> = A extends PromiseLike<unknown> ? never : A
+
+export const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+  (typeof value === "object" || typeof value === "function") &&
+  value !== null &&
+  "then" in value &&
+  typeof value.then === "function"
+
+const firstSqlKeyword = (sql: string): string => {
+  let rest = sql
+  while (true) {
+    rest = rest.trimStart()
+    if (rest.startsWith(";")) {
+      rest = rest.slice(1)
+      continue
+    }
+    if (rest.startsWith("--")) {
+      const newline = rest.indexOf("\n")
+      rest = newline < 0 ? "" : rest.slice(newline + 1)
+      continue
+    }
+    if (rest.startsWith("/*")) {
+      const close = rest.indexOf("*/", 2)
+      if (close < 0) return ""
+      rest = rest.slice(close + 2)
+      continue
+    }
+    return /^[a-z]+/i.exec(rest)?.[0]?.toLowerCase() ?? ""
+  }
+}
+
+const TRANSACTION_SQL = new Set(["begin", "commit", "end", "rollback", "savepoint", "release"])
+const TRANSACTION_DML = new Set(["select", "with", "insert", "update", "delete"])
 
 export interface DbApi {
   readonly all: (sql: string, ...params: readonly unknown[]) => Effect.Effect<Row[], DbFailed>
@@ -35,6 +81,10 @@ export interface DbApi {
   readonly run: (sql: string, ...params: readonly unknown[]) => Effect.Effect<unknown, DbFailed>
   readonly meta: (key: string) => Effect.Effect<string | undefined, DbFailed>
   readonly setMeta: (key: string, value: string) => Effect.Effect<unknown, DbFailed>
+  readonly withImmediateTransaction: <A>(
+    op: string,
+    body: (tx: DbTx) => SyncResult<A>,
+  ) => Effect.Effect<SyncResult<A>, DbFailed>
 }
 
 export class Db extends Context.Service<Db, DbApi>()("Db") {}
@@ -115,9 +165,17 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
         (d) => Effect.sync(() => d.close()),
       )
 
+      let transactionActive = false
+      const assertPublicAccess = () => {
+        if (transactionActive) throw new Error("public DB API cannot run inside withImmediateTransaction")
+      }
+
       const all = (sql: string, ...params: readonly unknown[]) =>
         Effect.try({
-          try: () => db.prepare(sql).all(...(params as never[])) as Row[],
+          try: () => {
+            assertPublicAccess()
+            return db.prepare(sql).all(...(params as never[])) as Row[]
+          },
           catch: (e) => new DbFailed({ op: sql.slice(0, 40), message: String(e) }),
         })
 
@@ -126,7 +184,10 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
 
       const run = (sql: string, ...params: readonly unknown[]) =>
         Effect.try({
-          try: () => db.prepare(sql).run(...(params as never[])) as unknown,
+          try: () => {
+            assertPublicAccess()
+            return db.prepare(sql).run(...(params as never[])) as unknown
+          },
           catch: (e) => new DbFailed({ op: sql.slice(0, 40), message: String(e) }),
         })
 
@@ -139,6 +200,41 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
       const setMeta = (key: string, value: string) =>
         run("INSERT OR REPLACE INTO schema_meta (key, value)VALUES (?, ?)", key, value)
 
-      return { all, get, run, meta, setMeta } satisfies DbApi
+      const withImmediateTransaction = <A>(op: string, body: (tx: DbTx) => SyncResult<A>) =>
+        Effect.try({
+          try: () => {
+            assertPublicAccess()
+            return db
+              .transaction(() => {
+                transactionActive = true
+                let active = true
+                const prepare = (sql: string): ReturnType<Sqlite["prepare"]> => {
+                  if (!active) throw new Error("transaction handle is no longer active")
+                  const keyword = firstSqlKeyword(sql)
+                  if (TRANSACTION_SQL.has(keyword)) throw new Error("transaction control SQL is not allowed")
+                  if (!TRANSACTION_DML.has(keyword))
+                    throw new Error(`${keyword || "unknown"} SQL is not allowed`)
+                  return db.prepare(sql)
+                }
+                const tx: DbTx = {
+                  all: (sql, ...params) => prepare(sql).all(...(params as never[])) as Row[],
+                  get: (sql, ...params) => prepare(sql).get(...(params as never[])) as Row | undefined,
+                  run: (sql, ...params) => prepare(sql).run(...(params as never[])) as DbRunResult,
+                }
+                try {
+                  const result = body(tx)
+                  if (isThenable(result)) throw new Error("transaction callback must be synchronous")
+                  return result
+                } finally {
+                  active = false
+                  transactionActive = false
+                }
+              })
+              .immediate()
+          },
+          catch: (e) => new DbFailed({ op, message: String(e) }),
+        })
+
+      return { all, get, run, meta, setMeta, withImmediateTransaction } satisfies DbApi
     }),
   )

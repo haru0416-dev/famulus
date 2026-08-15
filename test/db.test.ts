@@ -4,12 +4,15 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import * as Effect from "effect/Effect"
 import { afterAll, beforeAll, test } from "vitest"
-import { assertCurrentSchema, openDb, SCHEMA_SQL, schemaVersion } from "../src/db/sqlite.ts"
+import { assertCurrentSchema, openDb, SCHEMA_SQL, SCHEMA_VERSION, schemaVersion } from "../src/db/sqlite.ts"
 import { RunnerStub } from "../src/model/Runner.ts"
 import { makeRuntime } from "../src/runtime.ts"
 import { Db, DbLive } from "../src/services/Db.ts"
 
 let root = ""
+const makeV4 = (db: ReturnType<typeof openDb>): void => {
+  db.exec("DROP TABLE cycle_lease; DROP TABLE schema_migrations")
+}
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "oz-db-"))
 })
@@ -46,8 +49,8 @@ test("移行経路のない旧versionのDBは変更せず拒否する", async ()
 test("同じversionでも定義の違うDBは拒否する", () => {
   const db = openDb(":memory:")
   db.exec(SCHEMA_SQL)
-  db.exec(`INSERT INTO schema_meta VALUES ('version','5');
-    INSERT INTO schema_migrations VALUES (5,'baseline','2026-08-15T00:00:00.000Z');
+  db.exec(`INSERT INTO schema_meta VALUES ('version','${SCHEMA_VERSION}');
+    INSERT INTO schema_migrations VALUES (${SCHEMA_VERSION},'baseline','2026-08-15T00:00:00.000Z');
     DROP INDEX idx_events_origin;
     CREATE INDEX idx_events_origin ON events(origin_id);
     CREATE INDEX idx_extra ON proposals(summary) WHERE summary='O''Reilly'`)
@@ -116,10 +119,21 @@ test("SQLite内部テーブルが残る既存DBは初期化しない", async () 
 test("現行DBに余分なSQLite内部テーブルがあれば拒否する", () => {
   const db = openDb(":memory:")
   db.exec(SCHEMA_SQL)
-  db.exec(`INSERT INTO schema_meta VALUES ('version','5');
+  db.exec(`INSERT INTO schema_meta VALUES ('version','${SCHEMA_VERSION}');
     CREATE TABLE temporary(id INTEGER PRIMARY KEY AUTOINCREMENT);
     DROP TABLE temporary`)
   assert.throws(() => assertCurrentSchema(db, ":memory:"), /sqlite_sequence/)
+  db.close()
+})
+
+test("lease singletonはREPLACEでも差し替えられない", () => {
+  const db = openDb(":memory:")
+  db.exec(SCHEMA_SQL)
+  assert.throws(
+    () => db.exec("INSERT OR REPLACE INTO cycle_lease(lease_name,state,fence)VALUES('cycle','free',0)"),
+    /cannot be replaced/,
+  )
+  assert.deepEqual(db.prepare("SELECT state,fence FROM cycle_lease").get(), { state: "free", fence: 0 })
   db.close()
 })
 
@@ -132,7 +146,7 @@ test("空DBは現行版で作られ再オープンできる", async () => {
         return yield* (yield* Db).meta("version")
       }),
     ),
-    "5",
+    SCHEMA_VERSION,
   )
   await rt.dispose()
   const db = openDb(path)
@@ -153,18 +167,51 @@ test("空DBを2接続が同時に開いても同じschemaを受理する", async
         ),
       ),
     )
-    assert.deepEqual(versions, ["5", "5"])
+    assert.deepEqual(versions, [SCHEMA_VERSION, SCHEMA_VERSION])
   } finally {
     await Promise.all(runtimes.map((rt) => rt.dispose()))
   }
 })
 
-test("v4をv5へ一度だけ移行し既存データを保持する", async () => {
+test("v5をv6へ移行してlease singletonを作る", async () => {
+  const path = join(root, "migrate-v5.db")
+  const db = openDb(path)
+  db.exec(SCHEMA_SQL)
+  db.exec(`DROP TABLE cycle_lease;
+    INSERT INTO schema_meta VALUES ('version','5'), ('sentinel-v5','keep');
+    INSERT INTO schema_migrations VALUES (5,'baseline','2026-08-15T00:00:00.000Z')`)
+  db.close()
+
+  const rt = makeRuntime(DbLive(path), RunnerStub([{ text: "ok" }]).layer)
+  const state = await rt.runPromise(
+    Effect.gen(function* () {
+      const live = yield* Db
+      return {
+        version: yield* live.meta("version"),
+        sentinel: yield* live.meta("sentinel-v5"),
+        lease: yield* live.get("SELECT state,fence FROM cycle_lease WHERE lease_name='cycle'"),
+        migrations: yield* live.all("SELECT version,name FROM schema_migrations ORDER BY version"),
+      }
+    }),
+  )
+  await rt.dispose()
+  assert.deepEqual(state, {
+    version: SCHEMA_VERSION,
+    sentinel: "keep",
+    lease: { state: "free", fence: 0 },
+    migrations: [
+      { version: 5, name: "baseline" },
+      { version: 6, name: "cycle-lease" },
+    ],
+  })
+})
+
+test("v4を現行版へ一度だけ移行し既存データを保持する", async () => {
   const path = join(root, "migrate-v4.db")
   const db = openDb(path)
   db.exec(SCHEMA_SQL)
-  db.exec(`DROP TABLE schema_migrations;
-    INSERT INTO schema_meta VALUES ('version','4'), ('sentinel','keep');
+  makeV4(db)
+  db.exec(`INSERT INTO schema_meta VALUES ('version','4'), ('sentinel','keep');
     ANALYZE`)
   db.close()
 
@@ -182,9 +229,12 @@ test("v4をv5へ一度だけ移行し既存データを保持する", async () =
     )
     await rt.dispose()
     assert.deepEqual(state, {
-      version: "5",
+      version: SCHEMA_VERSION,
       sentinel: "keep",
-      migrations: [{ version: 5, name: "schema-migrations" }],
+      migrations: [
+        { version: 5, name: "schema-migrations" },
+        { version: 6, name: "cycle-lease" },
+      ],
     })
   }
 })
@@ -193,9 +243,8 @@ test("形状が壊れたv4はmigrationをrollbackして元の版を保つ", asyn
   const path = join(root, "broken-v4.db")
   const db = openDb(path)
   db.exec(SCHEMA_SQL)
-  db.exec(
-    "DROP TABLE schema_migrations; DROP INDEX idx_events_origin; INSERT INTO schema_meta VALUES ('version','4')",
-  )
+  makeV4(db)
+  db.exec("DROP INDEX idx_events_origin; INSERT INTO schema_meta VALUES ('version','4')")
   db.close()
 
   const rt = makeRuntime(DbLive(path), RunnerStub([{ text: "ok" }]).layer)
@@ -228,7 +277,7 @@ test("現行schema受理後に旧tick状態をcycleへ一度だけ移す", async
   const db = openDb(path)
   db.exec(SCHEMA_SQL)
   db.exec(`INSERT INTO schema_meta VALUES
-    ('version','5'),
+    ('version','${SCHEMA_VERSION}'),
     ('migration-test','keep'),
     ('tick:cursor','12'),
     ('tick:last','old'),

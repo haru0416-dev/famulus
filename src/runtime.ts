@@ -11,6 +11,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime"
 import { type DbFailed, describeRefusal, type Refusal } from "./core/errors.ts"
 import { type Runner, RunnerLive } from "./model/Runner.ts"
 import { Attention } from "./services/Attention.ts"
+import { CycleLease } from "./services/CycleLease.ts"
 import { type Db, DbLive } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
 import { Governance } from "./services/Governance.ts"
@@ -26,6 +27,7 @@ const services = Layer.mergeAll(
   Ledger.layer,
   Proposals.layer,
   Attention.layer,
+  CycleLease.layer,
   Intake.layer,
   Discord.layer,
 )
@@ -76,6 +78,7 @@ export type AppServices =
   | Ledger
   | Proposals
   | Attention
+  | CycleLease
   | Intake
   | Discord
   | Runner
