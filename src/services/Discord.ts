@@ -158,7 +158,7 @@ interface RawMessage {
   readonly id: string
   readonly content: string
   readonly author: { id: string }
-  readonly reactions?: { emoji: { name: string }; count: number; me: boolean }[]
+  readonly reactions?: { emoji: { name: string | null }; count: number; me: boolean }[]
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -169,7 +169,7 @@ const isRawReaction = (value: unknown): boolean =>
   typeof value.count === "number" &&
   typeof value.me === "boolean" &&
   isRecord(value.emoji) &&
-  typeof value.emoji.name === "string"
+  (typeof value.emoji.name === "string" || value.emoji.name === null)
 
 const isRawMessages = (value: unknown): value is RawMessage[] =>
   Array.isArray(value) &&
@@ -850,11 +850,13 @@ const makeDiscord = () =>
             const waiting = pending[m.id]
             if (!waiting) continue
             for (const r of m.reactions ?? []) {
-              const tap = waiting[r.emoji.name]
+              const name = r.emoji.name
+              if (name === null) continue
+              const tap = waiting[name]
               // 自分で付けたぶんを超えていれば、bot 以外の誰かが押している。
               if (tap && r.count > (r.me ? 1 : 0)) {
                 out.push({
-                  id: `${m.id}:${r.emoji.name}`,
+                  id: `${m.id}:${name}`,
                   text: tap.reply,
                   ...(tap.draft ? { draft: tap.draft } : {}),
                 })

@@ -42,7 +42,7 @@ interface Msg {
   id: string
   content: string
   author: { id: string }
-  reactions?: { emoji: { name: string }; count: number; me: boolean }[]
+  reactions?: { emoji: { name: string | null }; count: number; me: boolean }[]
 }
 
 /**
@@ -886,6 +886,24 @@ test("配送先が無ければdraftを失敗で終端化してhealthへ残す", 
   })
 })
 
+test("修正待ちへ変わったdraftを配送失敗で上書きしない", async () => {
+  wire(undefined)
+  await withHarness(async (h) => {
+    const result = await h.run(
+      Effect.gen(function* () {
+        const drafts = yield* Drafts
+        const dossier = yield* terminalDossier("concurrent revision")
+        const draft = yield* drafts.materialize({ title: "題", body: "本文", dossierId: dossier.id })
+        yield* drafts.requestRevision(draft.id, "直す")
+        return yield* Effect.result(drafts.failDelivery(draft.id, "destination missing"))
+      }),
+    )
+    assert.equal(result._tag, "Failure")
+    const health = await h.run(Effect.flatMap(Db, (db) => db.meta("health:draft:last_failure")))
+    assert.equal(health, undefined)
+  })
+})
+
 test("受信GETの5xxを空受信にせず失敗として返す", async () => {
   const dc = await fakeDiscord([], (hit) =>
     hit.method === "GET" && hit.path.includes("/messages?") ? { status: 503 } : undefined,
@@ -915,6 +933,27 @@ test("受信GETの不正な200応答を空受信にせず失敗として返す",
       const result = await h.run(Effect.result(Effect.flatMap(Discord, (d) => d.pollInbound())))
       assert.equal(result._tag, "Failure")
       if (result._tag === "Failure") assert.equal(result.failure._tag, "ConnectorFailed")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("削除済みcustom emojiのname=nullは受信障害にしない", async () => {
+  const dc = await fakeDiscord([
+    {
+      id: "90",
+      content: "old",
+      author: { id: "bot" },
+      reactions: [{ emoji: { name: null }, count: 1, me: false }],
+    },
+  ])
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const result = await h.run(Effect.result(peek))
+      assert.equal(result._tag, "Success")
     })
   } finally {
     wire(undefined)

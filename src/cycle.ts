@@ -25,7 +25,7 @@ import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
 import { appConfig } from "./core/config.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
-import { causeReason, describeRefusal } from "./core/errors.ts"
+import { ConnectorFailed, causeReason, describeRefusal } from "./core/errors.ts"
 import { localDayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
@@ -599,6 +599,17 @@ const main = async (): Promise<void> => {
     // 既読位置を進めないので、窓が開いた次の cycle が同じ入力をもう一度見る。
     const cause = e instanceof Error && "cause" in e ? (e as { cause?: unknown }).cause : undefined
     const inner = isRefusal(cause) ? cause : e
+    if (inner instanceof ConnectorFailed) {
+      await run(
+        Effect.flatMap(Db, (db) =>
+          db.setMeta(
+            "health:inbound:last_failure",
+            JSON.stringify({ at: nowIso(), stage: "cycle-inbox", error: String(inner) }),
+          ),
+        ),
+        rt,
+      ).catch(() => {})
+    }
     console.log(isRefusal(inner) ? `見送った: ${describeRefusal(inner)}` : `落ちた: ${String(inner)}`)
     if (!isRefusal(inner)) process.exitCode = 1
   } finally {

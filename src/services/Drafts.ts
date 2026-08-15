@@ -127,13 +127,14 @@ const makeDrafts = () =>
 
     const failDelivery = (id: string, reason: string, at: string = nowIso()) =>
       db.withImmediateTransaction("fail draft delivery", (tx) => {
-        tx.run(
+        const changed = tx.run(
           `UPDATE drafts SET state='delivery_failed',review_feedback=?,updated_at=?
             WHERE id=? AND state='review_pending'`,
           reason,
           at,
           id,
         )
+        if (changed.changes !== 1) throw new Error(`Draft is no longer awaiting delivery: ${id}`)
         tx.run(
           "INSERT OR REPLACE INTO schema_meta(key,value) VALUES ('health:draft:last_failure',?)",
           JSON.stringify({ at, stage: "delivery", error: reason }),
