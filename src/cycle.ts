@@ -372,7 +372,7 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
   log("実行条件:", d.reasons.join(" / "), spokenTo ? "(返信)" : "")
 
   // 自律実行区分であることを、エージェントを組み立てる前に設定する。
-  // lane() は呼び出し時評価なのでこれだけで足りるが、モデル id は createAssistant() の
+  // lane判定は呼び出し時評価なのでこれだけで足りるが、モデル id は createAssistant() の
   // 時点で確定するので、差し替えるならこの順序でなければ反映されない。
   process.env.OPEN_ZERO_LANE = "autonomous"
   // 道具一式を読み込むのは、モデル実行が必要と決まってから。idle の回(定期実行の大半)は

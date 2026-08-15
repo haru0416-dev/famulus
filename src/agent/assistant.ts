@@ -25,7 +25,7 @@ import { loadEnv } from "../core/env.ts"
 import { causeReason } from "../core/errors.ts"
 import { localDayRange, localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
-import { governedModel, lane } from "../model/governed.ts"
+import { governedModel } from "../model/governed.ts"
 import { CODEX_POOL } from "../model/models.ts"
 import { Runner } from "../model/Runner.ts"
 import { vs } from "../model/schema.ts"
@@ -34,7 +34,7 @@ import { Attention } from "../services/Attention.ts"
 import { CycleLease, type CycleLeaseToken } from "../services/CycleLease.ts"
 import { Db } from "../services/Db.ts"
 import { Discord } from "../services/Discord.ts"
-import { buildFencedPrompt, Governance } from "../services/Governance.ts"
+import { buildFencedPrompt, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { Memory, renderRecall } from "../services/Memory.ts"
 import { Proposals } from "../services/Proposals.ts"
@@ -1090,7 +1090,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
    */
   const observe = async (text: string): Promise<string | undefined> => {
     if (!text) return undefined
-    const own = lane() === "autonomous"
+    const own = currentLane() === "autonomous"
     return await run(
       Effect.gen(function* () {
         const mem = yield* Memory

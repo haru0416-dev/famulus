@@ -12,7 +12,7 @@ import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown } from "../core/error
 import { RunnerFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { ExecutionKernel, type KernelLoopContext } from "../services/ExecutionKernel.ts"
-import { Governance } from "../services/Governance.ts"
+import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { callCodex } from "./codex-responses.ts"
 import { digestOf, profileRefForModel } from "./kernel-spec.ts"
@@ -155,7 +155,7 @@ const makeRunner = (
           }
         } else {
           // ゲート。失敗チャネルに拒否が載るので、ここを通らずに下へは行けない。
-          yield* gov.precheck({ pool: p.pool, at, nowMs: Date.now() })
+          yield* gov.precheck({ pool: p.pool, at, nowMs: Date.now(), lane: currentLane() })
 
           const attempt = req.execution
             ? yield* kernel.startModelAttempt(req.execution, requestDigest)
@@ -168,13 +168,13 @@ const makeRunner = (
                 ? gov.noteQuota({ pool: p.pool, window: "unknown", exhausted: true }, at, Date.now())
                 : Effect.void,
             ),
-            Effect.tapError(() =>
+            Effect.tapError((error) =>
               attempt
                 ? kernel.finishModelAttempt(attempt, {
                     outcome: "unknown",
                     ledger: {
                       kind: req.kind,
-                      role: req.role,
+                      role: accountingRole(req.role),
                       model: p.model,
                       inTok: 0,
                       outTok: 0,
@@ -184,7 +184,15 @@ const makeRunner = (
                       at,
                     },
                   })
-                : Effect.void,
+                : ledger.record({
+                    kind: "model-failed",
+                    role: accountingRole(req.role),
+                    model: p.model,
+                    usage: { inTok: 0, outTok: 0, cacheRead: 0, cacheWrite: 0 },
+                    summary: traceOf(error.message),
+                    provenance: { pool: p.pool, outcome: "failed" },
+                    at,
+                  }),
             ),
           )
 
@@ -196,7 +204,7 @@ const makeRunner = (
               response: { ...out, model: p.model },
               ledger: {
                 kind: req.kind,
-                role: req.role,
+                role: accountingRole(req.role),
                 model: p.model,
                 inTok: out.usage.inTok,
                 outTok: out.usage.outTok,
@@ -217,7 +225,7 @@ const makeRunner = (
         if (!req.execution)
           yield* ledger.record({
             kind: req.kind,
-            role: req.role, // role を入れないと日次 run 数の上限を適用できない
+            role: accountingRole(req.role), // role を入れないと日次 run 数の上限を適用できない
             model: p.model,
             usage: {
               inTok: out.usage.inTok,

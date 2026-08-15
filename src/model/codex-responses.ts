@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { createOpenAI } from "@ai-sdk/openai"
@@ -41,7 +41,6 @@ import {
 } from "./models.ts"
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
-const OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 
 /** `providerMetadata` の鍵。統治の middleware がここからクォータシグナルを読む。 */
 export const CODEX_PROVIDER_META = "codex-oauth"
@@ -59,24 +58,9 @@ const authPath = (): string =>
 interface CodexAuth {
   readonly accessToken: string
   readonly accountId?: string
-  readonly refreshToken?: string
-  /** OAuth の client id。欄としては保存されておらず、id_token の `aud` にだけ入っている。 */
-  readonly clientId?: string
 }
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v : undefined)
-
-/** JWT の payload を検証せずに読む。公開クレーム(`aud`)を1つ取るだけ。 */
-function jwtAud(token: string | undefined): string | undefined {
-  const part = token?.split(".")[1]
-  if (!part) return undefined
-  try {
-    const payload = JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as { aud?: unknown }
-    return Array.isArray(payload.aud) ? str(payload.aud[0]) : str(payload.aud)
-  } catch {
-    return undefined
-  }
-}
 
 export function parseCodexAuth(contents: string): CodexAuth {
   let root: Record<string, unknown>
@@ -92,13 +76,9 @@ export function parseCodexAuth(contents: string): CodexAuth {
     throw new ModelCallError("~/.codex/auth.json に ChatGPT のトークンが無い(`codex login` を通す)")
   }
   const accountId = str(tokens.account_id)
-  const refreshToken = str(tokens.refresh_token)
-  const clientId = jwtAud(str(tokens.id_token))
   return {
     accessToken,
     ...(accountId ? { accountId } : {}),
-    ...(refreshToken ? { refreshToken } : {}),
-    ...(clientId ? { clientId } : {}),
   }
 }
 
@@ -108,70 +88,6 @@ function readAuth(): CodexAuth {
     throw new ModelCallError(`${p} が無い(\`codex login\` を通す)`)
   }
   return parseCodexAuth(readFileSync(p, "utf8"))
-}
-
-/**
- * 更新したトークンを `~/.codex/auth.json` へ書き戻す。
- * 書かないと、次に起動したプロセスが古いトークンで 401 を受け直す。cycle は15分ごとに
- * 別プロセスとして起動するので、書かない場合は毎回1往復ぶん余分に掛かる。
- * 他の欄(`OPENAI_API_KEY` など)は読み込んだまま残す — この経路が管理する値ではない。
- */
-function persistTokens(next: { accessToken: string; idToken?: string; refreshToken?: string }): void {
-  const p = authPath()
-  try {
-    const root = JSON.parse(existsSync(p) ? readFileSync(p, "utf8") : "{}") as Record<string, unknown>
-    const tokens = ((root.tokens as Record<string, unknown>) ?? {}) as Record<string, unknown>
-    tokens.access_token = next.accessToken
-    if (next.idToken) tokens.id_token = next.idToken
-    if (next.refreshToken) tokens.refresh_token = next.refreshToken
-    root.tokens = tokens
-    root.last_refresh = new Date().toISOString()
-    writeFileSync(p, `${JSON.stringify(root, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
-  } catch {
-    // 書けなくても今回の呼び出しは成立する。次のプロセスが 401 を1回受けるだけ。
-  }
-}
-
-/** 同じプロセスで 401 が同時に起きたときに、更新要求を1回にまとめる。 */
-let refreshInFlight: Promise<string> | undefined
-
-async function refreshAccessToken(auth: CodexAuth): Promise<string> {
-  if (!auth.refreshToken || !auth.clientId) {
-    throw new ModelCallError(
-      "Codex のトークンが期限切れで、更新に要る refresh_token が無い(`codex login` を通す)",
-    )
-  }
-  refreshInFlight ??= (async () => {
-    const res = await fetch(OAUTH_TOKEN_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        grant_type: "refresh_token",
-        refresh_token: auth.refreshToken,
-        client_id: auth.clientId,
-      }),
-    })
-    const body = await res.text()
-    if (!res.ok) {
-      throw new ModelCallError(`Codex のトークン更新が ${res.status} で失敗: ${body.slice(0, 200)}`)
-    }
-    const parsed = JSON.parse(body) as Record<string, unknown>
-    const accessToken = str(parsed.access_token) ?? str(parsed.id_token)
-    if (!accessToken) {
-      throw new ModelCallError("Codex のトークン更新の応答に access_token が無い")
-    }
-    const idToken = str(parsed.id_token)
-    const nextRefresh = str(parsed.refresh_token)
-    persistTokens({
-      accessToken,
-      ...(idToken ? { idToken } : {}),
-      ...(nextRefresh ? { refreshToken: nextRefresh } : {}),
-    })
-    return accessToken
-  })().finally(() => {
-    refreshInFlight = undefined
-  })
-  return refreshInFlight
 }
 
 /**
@@ -305,7 +221,7 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
   /** 呼び出しごとに生成する。トークンを毎回読み直し、応答ヘッダをこの呼び出し専用の変数へ記録するため。 */
   const build = (): { model: LanguageModelV4; quota: () => QuotaSignal | undefined } => {
     const headers: Record<string, string | undefined> = {}
-    let auth = readAuth()
+    const auth = readAuth()
     const sessionId = randomUUID()
 
     const provider = createOpenAI({
@@ -322,17 +238,9 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
       // 型は `typeof fetch` で、関数の実装だけでは一致しない(Bun の fetch は `preconnect` を持つ)。
       // 使われるのは呼び出しの部分だけなので、そこだけ一致させて渡す。
       fetch: (async (input: Request | URL | string, init?: RequestInit): Promise<Response> => {
-        const send = async (token: string): Promise<Response> => {
-          const h = new Headers(init?.headers)
-          h.set("authorization", `Bearer ${token}`)
-          return fetch(input, { ...init, headers: h })
-        }
-        let res = await send(auth.accessToken)
-        if (res.status === 401 && auth.refreshToken) {
-          const token = await refreshAccessToken(auth)
-          auth = { ...auth, accessToken: token }
-          res = await send(token)
-        }
+        const h = new Headers(init?.headers)
+        h.set("authorization", `Bearer ${auth.accessToken}`)
+        const res = await fetch(input, { ...init, headers: h })
         res.headers.forEach((v, k) => {
           if (k.startsWith("x-codex-")) headers[k] = v
         })

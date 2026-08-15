@@ -21,7 +21,7 @@ import * as Effect from "effect/Effect"
 import { describeRefusal } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { isRefusal, run } from "../runtime.ts"
-import { AUTONOMOUS_ROLE, Governance, type Lane } from "../services/Governance.ts"
+import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { CODEX_PROVIDER_META, codexResponsesModel } from "./codex-responses.ts"
 import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal } from "./models.ts"
@@ -35,11 +35,6 @@ import { traceOf } from "./trace.ts"
  * 読み込み時ではなく呼び出し時に見る。const にすると import の順序が意味を持ってしまい、
  * 「cycle.ts が env を設定する前に評価されていたので対話用クォータを消費していた」が起きる。
  */
-export const lane = (): Lane => (process.env.OPEN_ZERO_LANE === "autonomous" ? "autonomous" : "interactive")
-
-/** この経路の ledger.role。`role IS NOT NULL` が日次 run 数の数え上げ対象なので必ず入れる。 */
-const laneRole = (): string => (lane() === "autonomous" ? AUTONOMOUS_ROLE : "dialogue")
-
 /** 呼ぶ前の検査。拒否は Error にして投げる — 道具ループの外まで理由付きで出る。 */
 async function gate(model: string): Promise<void> {
   const refusal = await run(
@@ -50,7 +45,7 @@ async function gate(model: string): Promise<void> {
         pool: poolForModel(model),
         at: nowIso(),
         nowMs: Date.now(),
-        lane: lane(),
+        lane: currentLane(),
       })
       return undefined
     }).pipe(Effect.catch((e) => Effect.succeed(e))),
@@ -78,7 +73,7 @@ function readQuota(meta: unknown): QuotaSignal | undefined {
 /**
  * 会計とクォータ状態の更新。この経路と Runner 経路が同じ DB に載るようにしてある。
  * ここを飛ばすと ledger が空のままになり、日次 run 数の上限(ledger を数える)を適用できない。
- * 記録の失敗で応答そのものを失敗させるのは割に合わないので、記録失敗は応答へ波及させない。
+ * 記録できない応答を成功扱いにすると上限と監査が欠けるため、記録失敗は呼び出し失敗にする。
  */
 async function account(
   model: string,
@@ -95,27 +90,35 @@ async function account(
       if (quota) yield* gov.noteQuota(quota, at, Date.now())
       yield* ledger.record({
         kind: "turn",
-        role: laneRole(),
+        role: accountingRole("dialogue"),
         model,
         usage,
         summary: traceOf(text),
         provenance: { pool: poolForModel(model), notionalUsd, via: "agent" },
         at,
       })
-    }).pipe(Effect.catch(() => Effect.void)),
+    }),
   )
 }
 
 /** 失敗してもクォータシグナルが取れていれば、リセット時刻まで再実行を抑止する。 */
-async function noteFailure(e: unknown): Promise<void> {
-  if (!(e instanceof ModelCallError) || !e.quota) return
-  const quota = e.quota
+async function noteFailure(model: string, e: unknown): Promise<void> {
   const at = nowIso()
   await run(
     Effect.gen(function* () {
       const gov = yield* Governance
-      yield* gov.noteQuota(quota, at, Date.now())
-    }).pipe(Effect.catch(() => Effect.void)),
+      const ledger = yield* Ledger
+      if (e instanceof ModelCallError && e.quota) yield* gov.noteQuota(e.quota, at, Date.now())
+      yield* ledger.record({
+        kind: "model-failed",
+        role: accountingRole("dialogue"),
+        model,
+        usage: { inTok: 0, outTok: 0, cacheRead: 0, cacheWrite: 0 },
+        summary: traceOf(e instanceof Error ? e.message : String(e)),
+        provenance: { pool: poolForModel(model), outcome: "failed", via: "agent" },
+        at,
+      })
+    }),
   )
 }
 
@@ -129,7 +132,7 @@ export function governance(): LanguageModelV4Middleware {
       try {
         result = await doGenerate()
       } catch (e) {
-        await noteFailure(e)
+        await noteFailure(model.modelId, e)
         throw e
       }
       // 2つの経路が別の鍵で載せる。どちらも「クォータと従量課金換算額」の欄で、読む側は同じ。

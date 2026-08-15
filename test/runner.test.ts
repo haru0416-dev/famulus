@@ -217,18 +217,14 @@ test("知らないモデル id は経路を選ぶ前に失敗させる", async (
  * Codex の資格情報。API キーは受け付けない — 受け付けると定額クォータのつもりで従量課金になる。
  */
 test("auth.json から ChatGPT の OAuth トークンだけを読む", () => {
-  const id = `x.${Buffer.from(JSON.stringify({ aud: "app_ABC" })).toString("base64url")}.y`
   const auth = parseCodexAuth(
     JSON.stringify({
       OPENAI_API_KEY: "sk-should-be-ignored",
-      tokens: { access_token: "at", id_token: id, refresh_token: "rt", account_id: "acc" },
+      tokens: { access_token: "at", refresh_token: "rt", account_id: "acc" },
     }),
   )
   assert.equal(auth.accessToken, "at")
   assert.equal(auth.accountId, "acc")
-  assert.equal(auth.refreshToken, "rt")
-  // client_id は欄として保存されていない。id_token の aud にだけ含まれる。
-  assert.equal(auth.clientId, "app_ABC")
 
   assert.throws(() => parseCodexAuth(JSON.stringify({ OPENAI_API_KEY: "sk-x" })), /codex login/)
   assert.throws(() => parseCodexAuth("{"), /JSON/)

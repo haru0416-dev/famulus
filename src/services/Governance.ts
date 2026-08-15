@@ -66,6 +66,12 @@ export type Lane = "interactive" | "autonomous"
 /** 自走 run の記録 role。日次の自走上限はこの role の行を数える。 */
 export const AUTONOMOUS_ROLE = "autonomous"
 
+export const currentLane = (): Lane =>
+  process.env.OPEN_ZERO_LANE === "autonomous" ? "autonomous" : "interactive"
+
+export const accountingRole = (role: string): string =>
+  currentLane() === "autonomous" ? AUTONOMOUS_ROLE : role
+
 /** 使用率がこれ以上なら再実行を抑止する。期限はシグナルのリセット時刻、取得できなければ1時間後。 */
 export const QUOTA_WARN_PERCENT = 97
 
