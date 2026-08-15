@@ -298,12 +298,15 @@ const RESEARCH_SCHEMA = rs(
       v.object({
         statement: v.string(),
         kind: v.picklist(["observation", "hypothesis", "conclusion"]),
-        evidence: v.array(
-          v.object({
-            url: v.string(),
-            quote: v.string(),
-            polarity: v.picklist(["support", "refute", "context"]),
-          }),
+        evidence: v.pipe(
+          v.array(
+            v.object({
+              url: v.string(),
+              quote: v.string(),
+              polarity: v.picklist(["support", "refute", "context"]),
+            }),
+          ),
+          v.minLength(1),
         ),
       }),
     ),
@@ -430,12 +433,15 @@ function buildTools(state: TurnState, gate: ToolGate) {
                   v.object({
                     statement: v.string(),
                     kind: v.picklist(["observation", "hypothesis", "conclusion"]),
-                    evidence: v.array(
-                      v.object({
-                        url: v.string(),
-                        quote: v.string(),
-                        polarity: v.picklist(["support", "refute", "context"]),
-                      }),
+                    evidence: v.pipe(
+                      v.array(
+                        v.object({
+                          url: v.string(),
+                          quote: v.string(),
+                          polarity: v.picklist(["support", "refute", "context"]),
+                        }),
+                      ),
+                      v.minLength(1),
                     ),
                   }),
                 ),

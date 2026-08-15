@@ -431,6 +431,7 @@ const makeResearch = () =>
         })
         let conclusionId: string | undefined
         for (const item of input.claims) {
+          if (item.evidence.length === 0) throw new Error("Research claims require evidence")
           const claimId = randomUUID()
           tx.run(
             "INSERT INTO research_claims(id,dossier_id,statement,kind,state,created_at) VALUES (?,?,?,?,'open',?)",

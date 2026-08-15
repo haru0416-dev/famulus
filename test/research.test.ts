@@ -110,6 +110,20 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
             ],
           }),
         )
+        const unsupportedNumeric = yield* Effect.result(
+          research.recordWebDossier({
+            question: "根拠なし数値",
+            limitations: "source missing",
+            snapshots: [],
+            claims: [
+              {
+                statement: "Current version is 7.0.62",
+                kind: "observation",
+                evidence: [],
+              },
+            ],
+          }),
+        )
         const dossiers = yield* research.list()
         const emptySnapshot = yield* Effect.result(
           research.recordWebDossier({
@@ -142,6 +156,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
           rendered,
           late,
           invalid,
+          unsupportedNumeric,
           dossiers,
           unsupported,
           directConclusion,
@@ -163,6 +178,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
     assert.match(result.rendered, /sha256=[0-9a-f]{64}/)
     assert.equal(result.late._tag, "Failure")
     assert.equal(result.invalid._tag, "Failure")
+    assert.equal(result.unsupportedNumeric._tag, "Failure")
     assert.equal(result.dossiers.length, 2)
     assert.equal(result.unsupported._tag, "Failure")
     assert.equal(result.directConclusion._tag, "Failure")
