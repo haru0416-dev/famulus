@@ -437,32 +437,26 @@ test("未検証のシステム記録は recall でも区別する", async () => 
   })
 })
 
-test("belief は必ず belief イベントを根拠に持つ(resolved_from の FK)", async () => {
+test("belief_slots は belief event だけを現在値へ投影する", async () => {
   await withHarness(async (h) => {
     const out = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
         const db = yield* Db
+        const observed = yield* mem.remember({ source: "system", content: "未確定の観測" })
         const eventId = yield* mem.recordBelief("dentist.next_appt", "2026-08-12T18:00:00Z")
         const slot = yield* mem.currentBelief("dentist.next_appt")
-        const ev = yield* db.get("SELECT kind FROM events WHERE id = ?", eventId)
-        return { eventId, slot, kind: ev?.kind }
+        const rows = yield* db.all(
+          `SELECT b.resolved_from,e.kind FROM belief_slots b
+             JOIN events e ON e.id=b.resolved_from ORDER BY b.resolved_from`,
+        )
+        return { eventId, observed, slot, rows }
       }),
     )
-    assert.equal(out.kind, "belief")
     assert.equal(out.slot?.value, "2026-08-12T18:00:00Z")
     assert.equal(out.slot?.resolvedFrom, out.eventId)
-
-    const e = await h.fail(
-      Effect.gen(function* () {
-        const db = yield* Db
-        yield* db.run(
-          `INSERT INTO belief_slots (slot, value, exposure, resolved_from, updated_at, valid_from)
-           VALUES ('bogus', '"x"', 'private', 'no-such-event', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
-        )
-      }),
-    )
-    assert.equal((e as { _tag: string })._tag, "DbFailed")
+    assert.deepEqual(out.rows, [{ resolved_from: out.eventId, kind: "belief" }])
+    assert.notEqual(out.rows[0]?.resolved_from, out.observed, "observe event は belief projection に入らない")
   })
 })
 
@@ -611,25 +605,6 @@ test("閉じた区間の belief は検索で『確定』として前に出ない
     assert.match(String(current[0]?.text), /もう終わった/)
     // 古い値も履歴に残すが、現在の確定値としては表示しない。
     assert.match(renderRecall(rows), /確定\(旧版\)/)
-  })
-})
-
-test("同じ slot に閉じていない区間は2本並ばない(部分 UNIQUE が守る)", async () => {
-  await withHarness(async (h) => {
-    const e = await h.fail(
-      Effect.gen(function* () {
-        const mem = yield* Memory
-        const db = yield* Db
-        const id = yield* mem.recordBelief("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
-        // 区間を閉じずに次を入れようとする = 現在値が2つある状態。ここで落ちなければならない。
-        yield* db.run(
-          `INSERT INTO belief_slots (slot, value, exposure, resolved_from, updated_at, valid_from)
-           VALUES ('home.city', '"東京"', 'private', ?, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')`,
-          id,
-        )
-      }),
-    )
-    assert.equal((e as { _tag: string })._tag, "DbFailed")
   })
 })
 

@@ -5,13 +5,23 @@
 
 import assert from "node:assert/strict"
 import fc from "fast-check"
-import { test } from "vitest"
+import { test, vi } from "vitest"
 
-process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
-const { TZ, localDayRange, localMonthRange, localStamp } = await import("../src/core/time.ts")
+const { localDayRange, localMonthRange, localStamp } = await import("../src/core/time.ts")
 
-test("TZ は OPEN_ZERO_TZ で差せる", () => {
-  assert.equal(TZ, "Asia/Tokyo")
+test("OPEN_ZERO_TZ で既定と異なるtimezoneへ差し替えられる", async () => {
+  const previous = process.env.OPEN_ZERO_TZ
+  process.env.OPEN_ZERO_TZ = "UTC"
+  vi.resetModules()
+  try {
+    const utc = await import("../src/core/time.ts")
+    assert.equal(utc.TZ, "UTC")
+    assert.equal(utc.localDayRange("2026-08-07T16:55:00Z").key, "2026-08-07")
+  } finally {
+    if (previous === undefined) delete process.env.OPEN_ZERO_TZ
+    else process.env.OPEN_ZERO_TZ = previous
+    vi.resetModules()
+  }
 })
 
 test("UTC の日ではなくローカルの日で切る", () => {

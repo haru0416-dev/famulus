@@ -136,24 +136,21 @@ test("利用可能なクォータシグナルは再実行抑止を残さない",
   )
 })
 
-test("役割→モデルは静的表。role 名でなければモデル id そのものとして読む", async () => {
+test("全roleを静的表でモデルへ解決し、生のmodel idも受け付ける", async () => {
   await withHarness(async (h) => {
-    const plans = await h.run(
+    await h.run(
       Effect.gen(function* () {
         const runner = yield* Runner
-        return {
-          dialogue: runner.plan("gpt-5.6-sol"),
-          scout: runner.plan("scout"),
-          raw: runner.plan("gpt-5.6-sol"),
+        for (const [role, model] of Object.entries(ROLE_MODEL)) {
+          const plan = runner.plan(role)
+          assert.equal(plan.model, model, role)
+          assert.equal(plan.pool, poolForModel(model), role)
         }
+        const raw = runner.plan("gpt-5.6-sol")
+        assert.equal(raw.model, "gpt-5.6-sol")
+        assert.equal(raw.pool, "chatgpt-oauth")
       }),
     )
-    assert.equal(plans.dialogue.model, "gpt-5.6-sol")
-    assert.equal(plans.scout.model, "gpt-5.6-luna")
-    assert.equal(plans.raw.model, "gpt-5.6-sol")
-    // modelは役割で分けるが、クォータは同じChatGPT OAuth枠に載る。
-    assert.equal(plans.dialogue.pool, "chatgpt-oauth")
-    assert.equal(plans.scout.pool, "chatgpt-oauth")
   })
 })
 
@@ -268,29 +265,4 @@ test("Codex の応答ヘッダから使用率の高い窓を読む", () => {
 
   // ヘッダが無い応答では undefined を返す(前の状態を上書きしない)。
   assert.equal(quotaFromHeaders({}, now), undefined)
-})
-
-/**
- * ネイティブ呼び出しが拒否された回だけ取り直す。
- * 文面では判定しない — 「ツールが使えない」と書いてあるかどうかで決めると、
- * 呼ぶ必要が無くてそう書いた回までやり直すことになる。見るのは CLI の tool_use_error だけ。
- */
-/**
- * 精査役は書いた側と別の系列に置く。同じモデルの2回目は同じ死角を持つ。
- * クォータも分かれていること(CODEX_POOL)まで確認する — 同じ pool に記録すると、精査1回ぶん対話用クォータが減る。
- */
-test("精査役は実測済みのsolに固定する", async () => {
-  await withHarness(
-    async (h) => {
-      const out = await h.run(
-        Effect.gen(function* () {
-          const runner = yield* Runner
-          return runner.plan("reviewer")
-        }),
-      )
-      assert.equal(out.model, "gpt-5.6-sol")
-      assert.equal(out.pool, poolForModel(ROLE_MODEL.reviewer))
-    },
-    [{ text: "" }],
-  )
 })
