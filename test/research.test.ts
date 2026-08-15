@@ -21,6 +21,15 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
             dossier.created_at,
           ),
         )
+        const directConclusion = yield* Effect.result(
+          db.run(
+            `INSERT INTO research_dossiers
+              (id,question,state,conclusion_claim_id,limitations,created_at,concluded_at)
+             VALUES ('direct-conclusion','bypass','concluded','missing','none',?,?)`,
+            dossier.created_at,
+            dossier.created_at,
+          ),
+        )
         const source = yield* research.addSnapshot(dossier.id, {
           sourceRef: "https://example.com/spec",
           content: "Current version is 7.0.62.",
@@ -129,6 +138,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
           invalid,
           dossiers,
           unsupported,
+          directConclusion,
           crossDossier,
           crossSupersedes,
           replaceEvidence,
@@ -148,6 +158,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
     assert.equal(result.invalid._tag, "Failure")
     assert.equal(result.dossiers.length, 2)
     assert.equal(result.unsupported._tag, "Failure")
+    assert.equal(result.directConclusion._tag, "Failure")
     assert.equal(result.crossDossier._tag, "Failure")
     assert.equal(result.crossSupersedes._tag, "Failure")
     assert.equal(result.replaceEvidence._tag, "Failure")

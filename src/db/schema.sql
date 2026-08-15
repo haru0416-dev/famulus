@@ -267,6 +267,11 @@ WHEN NEW.state = 'concluded' AND NOT EXISTS (
 BEGIN
   SELECT RAISE(ABORT, 'dossier conclusion must be a supported conclusion claim');
 END;
+CREATE TRIGGER research_dossier_insert_open
+BEFORE INSERT ON research_dossiers WHEN NEW.state != 'open'
+BEGIN
+  SELECT RAISE(ABORT, 'research dossiers must be inserted open');
+END;
 CREATE TRIGGER research_dossier_terminal_immutable
 BEFORE UPDATE ON research_dossiers WHEN OLD.state != 'open'
 BEGIN
