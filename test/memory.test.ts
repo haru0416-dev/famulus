@@ -85,16 +85,37 @@ test("belief eventは根拠event・引用・失効理由を正本に持つ", asy
   })
 })
 
-test("web eventをbeliefの根拠に昇格させない", async () => {
+test("公開APIはweb eventをbeliefの根拠に昇格させない", async () => {
   await withHarness(async (h) => {
-    const result = await h.run(
+    const web = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
-        const web = yield* mem.remember({ source: "web", content: "external claim" })
-        return yield* Effect.result(mem.recordBelief("public.external", "claim", { evidenceEventId: web }))
+        return yield* mem.remember({ source: "web", content: "external claim" })
       }),
     )
-    assert.equal(result._tag, "Failure")
+    const error = await h.fail(
+      Effect.flatMap(Memory, (mem) => mem.recordBelief("public.external", "claim", { evidenceEventId: web })),
+    )
+    assert.equal((error as { _tag?: unknown })._tag, "DbFailed")
+    assert.match(String((error as { message?: unknown }).message), /Belief evidence must be an owner event/)
+  })
+})
+
+test("DBへ直接書いてもweb eventをbeliefとして保存できない", async () => {
+  await withHarness(async (h) => {
+    const error = await h.fail(
+      Effect.flatMap(Db, (db) =>
+        db.run(
+          `INSERT INTO events
+            (id,at,kind,source,taint,exposure,provenance,content,search_text,belief_slot,valid_from)
+           VALUES ('web-belief',?,'belief','web',1,'public','[]','42','fact','public.fact',?)`,
+          "2026-08-16T00:00:00.000Z",
+          "2026-08-16T00:00:00.000Z",
+        ),
+      ),
+    )
+    assert.equal((error as { _tag?: unknown })._tag, "DbFailed")
+    assert.match(String((error as { message?: unknown }).message), /web claims cannot become beliefs/)
   })
 })
 
