@@ -17,7 +17,7 @@
  */
 
 import { basename } from "node:path"
-import { Experimental_Agent as Agent, type ModelMessage, stepCountIs, tool } from "ai"
+import { type ModelMessage, stepCountIs, ToolLoopAgent, tool } from "ai"
 import * as Effect from "effect/Effect"
 import * as v from "valibot"
 import { remainingLabel, remainingMs } from "../core/deadline.ts"
@@ -388,7 +388,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
       ),
       execute: async ({ task }, { abortSignal }) =>
         delegate(
-          new Agent({
+          new ToolLoopAgent({
             model: claudeMax(researchModel()),
             instructions: RESEARCHER,
             tools: gateTools({ search: searchTool, fetch: fetchTool }, gate),
@@ -413,7 +413,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
       ),
       execute: async ({ task }, { abortSignal }) =>
         delegate(
-          new Agent({
+          new ToolLoopAgent({
             model: claudeMax(workModel()),
             instructions: DIGGER,
             tools: gateTools({ recall: recallTool(state) }, gate),
@@ -1084,7 +1084,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
         }
       }
     : undefined
-  const agent = new Agent({
+  const agent = new ToolLoopAgent({
     model: claudeMax(modelId),
     instructions: soulInstruction(),
     tools: buildTools(state, gate),
