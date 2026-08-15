@@ -21,6 +21,7 @@ import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
 import { Memory } from "./services/Memory.ts"
 import { Proposals } from "./services/Proposals.ts"
+import { Research } from "./services/Research.ts"
 
 /** Db の上に載る素のサービス群。 */
 const services = Layer.mergeAll(
@@ -34,6 +35,7 @@ const services = Layer.mergeAll(
   Discord.layer,
   Drafts.layer,
   ExecutionKernel.layer,
+  Research.layer,
 )
 
 /**
@@ -87,6 +89,7 @@ export type AppServices =
   | Discord
   | Drafts
   | ExecutionKernel
+  | Research
   | Runner
 
 export function run<A, E>(effect: Effect.Effect<A, E, AppServices>, rt: AppRuntime = runtime()): Promise<A> {

@@ -36,6 +36,187 @@ CREATE TABLE discord_outbound_actions (
 ) STRICT;
 CREATE INDEX idx_discord_outbound_state ON discord_outbound(state, created_at);
 
+CREATE TABLE research_dossiers (
+  id                  TEXT PRIMARY KEY,
+  question            TEXT NOT NULL,
+  state               TEXT NOT NULL CHECK (state IN ('open','concluded','inconclusive')),
+  conclusion_claim_id TEXT,
+  limitations         TEXT,
+  created_at          TEXT NOT NULL,
+  concluded_at        TEXT,
+  CHECK (
+    (state = 'open' AND conclusion_claim_id IS NULL AND limitations IS NULL AND concluded_at IS NULL)
+    OR (state = 'concluded' AND conclusion_claim_id IS NOT NULL AND length(trim(limitations)) > 0 AND concluded_at IS NOT NULL)
+    OR (state = 'inconclusive' AND conclusion_claim_id IS NULL AND length(trim(limitations)) > 0 AND concluded_at IS NOT NULL)
+  )
+) STRICT;
+
+CREATE TABLE research_claims (
+  id          TEXT PRIMARY KEY,
+  dossier_id  TEXT NOT NULL REFERENCES research_dossiers(id),
+  statement   TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('observation','hypothesis','conclusion')),
+  state       TEXT NOT NULL CHECK (state IN ('open','supported','refuted','inconclusive')),
+  created_at  TEXT NOT NULL,
+  resolved_at TEXT,
+  UNIQUE (id, dossier_id),
+  CHECK ((state = 'open') = (resolved_at IS NULL))
+) STRICT;
+CREATE INDEX idx_research_claims_dossier ON research_claims(dossier_id, created_at);
+
+CREATE TABLE research_artifacts (
+  id            TEXT PRIMARY KEY,
+  dossier_id    TEXT NOT NULL REFERENCES research_dossiers(id),
+  kind          TEXT NOT NULL CHECK (kind IN ('source_snapshot','sandbox_output')),
+  media_type    TEXT NOT NULL,
+  content       TEXT,
+  uri           TEXT,
+  sha256        TEXT NOT NULL CHECK (length(sha256) = 64),
+  source_ref    TEXT,
+  captured_at   TEXT NOT NULL,
+  provenance    TEXT NOT NULL CHECK (json_valid(provenance)),
+  supersedes_id TEXT REFERENCES research_artifacts(id),
+  created_at    TEXT NOT NULL,
+  CHECK ((content IS NULL) != (uri IS NULL)),
+  CHECK (kind != 'source_snapshot' OR (content IS NOT NULL AND source_ref IS NOT NULL))
+) STRICT;
+CREATE INDEX idx_research_artifacts_dossier ON research_artifacts(dossier_id, created_at);
+
+CREATE TABLE research_experiment_runs (
+  id                  TEXT PRIMARY KEY,
+  hypothesis_claim_id TEXT NOT NULL REFERENCES research_claims(id),
+  protocol            TEXT NOT NULL CHECK (json_valid(protocol)),
+  environment         TEXT NOT NULL CHECK (json_valid(environment)),
+  workspace           TEXT NOT NULL,
+  command             TEXT NOT NULL,
+  command_artifact_id TEXT NOT NULL REFERENCES research_artifacts(id),
+  command_status      TEXT NOT NULL CHECK (command_status IN ('completed','timed_out','unavailable')),
+  command_exit_code   INTEGER,
+  check_command       TEXT NOT NULL,
+  check_artifact_id   TEXT REFERENCES research_artifacts(id),
+  check_status        TEXT CHECK (check_status IN ('completed','timed_out','unavailable')),
+  check_exit_code     INTEGER,
+  verdict             TEXT NOT NULL CHECK (verdict IN ('verified','failed','inconclusive')),
+  started_at          TEXT NOT NULL,
+  finished_at         TEXT NOT NULL,
+  CHECK ((command_status = 'completed') = (command_exit_code IS NOT NULL)),
+  CHECK ((check_status IS NULL) = (check_artifact_id IS NULL)),
+  CHECK ((check_status = 'completed') = (check_exit_code IS NOT NULL)),
+  CHECK (
+    (verdict = 'verified' AND check_status = 'completed' AND check_exit_code = 0)
+    OR (verdict = 'failed' AND check_status = 'completed' AND check_exit_code != 0)
+    OR (verdict = 'inconclusive' AND (check_status IS NULL OR check_status != 'completed'))
+  )
+) STRICT;
+CREATE INDEX idx_research_runs_claim ON research_experiment_runs(hypothesis_claim_id, started_at);
+
+CREATE TABLE research_claim_evidence (
+  id                TEXT PRIMARY KEY,
+  claim_id          TEXT NOT NULL REFERENCES research_claims(id),
+  artifact_id       TEXT REFERENCES research_artifacts(id),
+  experiment_run_id TEXT REFERENCES research_experiment_runs(id),
+  polarity          TEXT NOT NULL CHECK (polarity IN ('support','refute','context')),
+  quote             TEXT,
+  location          TEXT,
+  added_at          TEXT NOT NULL,
+  CHECK ((artifact_id IS NULL) != (experiment_run_id IS NULL)),
+  CHECK (artifact_id IS NULL OR polarity = 'context' OR length(trim(quote)) > 0)
+) STRICT;
+CREATE INDEX idx_research_evidence_claim ON research_claim_evidence(claim_id, added_at);
+
+CREATE TRIGGER research_artifacts_immutable
+BEFORE UPDATE ON research_artifacts BEGIN
+  SELECT RAISE(ABORT, 'research artifacts are immutable');
+END;
+CREATE TRIGGER research_artifacts_no_delete
+BEFORE DELETE ON research_artifacts BEGIN
+  SELECT RAISE(ABORT, 'research artifacts are immutable');
+END;
+CREATE TRIGGER research_runs_immutable
+BEFORE UPDATE ON research_experiment_runs BEGIN
+  SELECT RAISE(ABORT, 'research experiment runs are immutable');
+END;
+CREATE TRIGGER research_runs_no_delete
+BEFORE DELETE ON research_experiment_runs BEGIN
+  SELECT RAISE(ABORT, 'research experiment runs are immutable');
+END;
+CREATE TRIGGER research_evidence_immutable
+BEFORE UPDATE ON research_claim_evidence BEGIN
+  SELECT RAISE(ABORT, 'research evidence is immutable');
+END;
+CREATE TRIGGER research_evidence_no_delete
+BEFORE DELETE ON research_claim_evidence BEGIN
+  SELECT RAISE(ABORT, 'research evidence is immutable');
+END;
+CREATE TRIGGER research_claim_identity_immutable
+BEFORE UPDATE ON research_claims
+WHEN NEW.id != OLD.id OR NEW.dossier_id != OLD.dossier_id OR NEW.statement != OLD.statement
+  OR NEW.kind != OLD.kind OR NEW.created_at != OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'research claim identity is immutable');
+END;
+CREATE TRIGGER research_claim_resolution_requires_evidence
+BEFORE UPDATE OF state ON research_claims
+WHEN NEW.state IN ('supported','refuted') AND NOT EXISTS (
+  SELECT 1 FROM research_claim_evidence
+   WHERE claim_id = NEW.id AND polarity = CASE NEW.state WHEN 'supported' THEN 'support' ELSE 'refute' END
+)
+BEGIN
+  SELECT RAISE(ABORT, 'resolved research claim requires matching evidence');
+END;
+CREATE TRIGGER research_evidence_verified_run
+BEFORE INSERT ON research_claim_evidence
+WHEN NEW.experiment_run_id IS NOT NULL AND NEW.polarity != 'context'
+ AND NOT EXISTS (SELECT 1 FROM research_experiment_runs WHERE id = NEW.experiment_run_id AND verdict = 'verified')
+BEGIN
+  SELECT RAISE(ABORT, 'only verified experiment runs can support or refute claims');
+END;
+CREATE TRIGGER research_dossier_conclusion_valid
+BEFORE UPDATE OF state ON research_dossiers
+WHEN NEW.state = 'concluded' AND NOT EXISTS (
+  SELECT 1 FROM research_claims
+   WHERE id = NEW.conclusion_claim_id AND dossier_id = NEW.id AND kind = 'conclusion' AND state = 'supported'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'dossier conclusion must be a supported conclusion claim');
+END;
+CREATE TRIGGER research_dossier_terminal_immutable
+BEFORE UPDATE ON research_dossiers WHEN OLD.state != 'open'
+BEGIN
+  SELECT RAISE(ABORT, 'terminal research dossier is immutable');
+END;
+CREATE TRIGGER research_dossier_no_delete
+BEFORE DELETE ON research_dossiers BEGIN
+  SELECT RAISE(ABORT, 'research dossier cannot be deleted');
+END;
+CREATE TRIGGER research_claim_open_dossier_insert
+BEFORE INSERT ON research_claims
+WHEN NOT EXISTS (SELECT 1 FROM research_dossiers WHERE id = NEW.dossier_id AND state = 'open')
+BEGIN
+  SELECT RAISE(ABORT, 'research claims require an open dossier');
+END;
+CREATE TRIGGER research_claim_open_dossier_update
+BEFORE UPDATE ON research_claims
+WHEN NOT EXISTS (SELECT 1 FROM research_dossiers WHERE id = NEW.dossier_id AND state = 'open')
+BEGIN
+  SELECT RAISE(ABORT, 'terminal dossier claims are immutable');
+END;
+CREATE TRIGGER research_artifact_open_dossier
+BEFORE INSERT ON research_artifacts
+WHEN NOT EXISTS (SELECT 1 FROM research_dossiers WHERE id = NEW.dossier_id AND state = 'open')
+BEGIN
+  SELECT RAISE(ABORT, 'research artifacts require an open dossier');
+END;
+CREATE TRIGGER research_evidence_open_dossier
+BEFORE INSERT ON research_claim_evidence
+WHEN NOT EXISTS (
+  SELECT 1 FROM research_claims c JOIN research_dossiers d ON d.id = c.dossier_id
+   WHERE c.id = NEW.claim_id AND d.state = 'open'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'research evidence requires an open dossier');
+END;
+
 CREATE TABLE drafts (
   id                 TEXT PRIMARY KEY,
   local_day          TEXT NOT NULL UNIQUE,
