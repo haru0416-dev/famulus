@@ -72,6 +72,13 @@ export class DbFailed extends Data.TaggedError("DbFailed")<{
   readonly message: string
 }> {}
 
+/** 外部connectorへの通信・応答解釈に失敗した。空の正常応答とは区別する。 */
+export class ConnectorFailed extends Data.TaggedError("ConnectorFailed")<{
+  readonly connector: string
+  readonly operation: string
+  readonly message: string
+}> {}
+
 export class ProcessIdentityUnavailable extends Data.TaggedError("ProcessIdentityUnavailable")<{
   readonly reason: string
 }> {}

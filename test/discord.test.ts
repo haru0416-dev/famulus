@@ -853,11 +853,28 @@ test("5xx は unknown で止まり、自動再送しない", async () => {
       assert.equal(failedDraft?.state, "delivery_failed")
       assert.equal(failedDraft?.outbound_id, outbound.id, "attach前の終端もdedupe keyから紐付ける")
       const plan = await h.run(Effect.flatMap(Attention, (attention) => attention.planCycle()))
-      assert.equal(plan.draftDue, false, "配送失敗だけで同じ日次処理を繰り返さない")
+      assert.equal(plan.draftDue, false, "配送失敗はhealthに残し、同じ日次処理を自動再送しない")
       const health = await h.run(Effect.flatMap(Db, (db) => db.meta("health:draft:last_failure")))
       assert.match(health ?? "", /"stage":"delivery"/)
       await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
       assert.equal(messages, 1)
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("受信GETの5xxを空受信にせず失敗として返す", async () => {
+  const dc = await fakeDiscord([], (hit) =>
+    hit.method === "GET" && hit.path.includes("/messages?") ? { status: 503 } : undefined,
+  )
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const result = await h.run(Effect.result(Effect.flatMap(Discord, (d) => d.pollInbound())))
+      assert.equal(result._tag, "Failure")
+      if (result._tag === "Failure") assert.equal(result.failure._tag, "ConnectorFailed")
     })
   } finally {
     wire(undefined)

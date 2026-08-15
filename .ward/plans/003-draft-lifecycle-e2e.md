@@ -44,7 +44,7 @@ bunx --bun vitest run test/attention.test.ts test/discord.test.ts test/drafting.
 
 - Insufficient review time does not lose or complete the draft.
 - Restart resumes the same persisted revision.
-- Daily completion requires a delivered receipt.
+- Delivery success requires a sent receipt; delivery failure remains explicit and is not retried automatically.
 - Revision and discard reactions update the intended draft exactly once.
 - Saved-body resume and Discord delivery/reaction paths have repeatable focused tests.
 - `oz status` shows the last inbound success/failure and draft delivery success/failure.

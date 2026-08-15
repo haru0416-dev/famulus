@@ -8,15 +8,15 @@
  * owner にはならない。
  */
 import * as Effect from "effect/Effect"
-import type { DbFailed } from "./core/errors.ts"
+import type { ConnectorFailed, DbFailed } from "./core/errors.ts"
 import { nowIso } from "./core/time.ts"
 import { Discord } from "./services/Discord.ts"
 import { Drafts } from "./services/Drafts.ts"
 import { Memory } from "./services/Memory.ts"
 
 /** この呼び出しで DB へ移した件数。 */
-export const drainInbox: Effect.Effect<number, DbFailed, Discord | Drafts | Memory> = Effect.gen(
-  function* () {
+export const drainInbox: Effect.Effect<number, DbFailed | ConnectorFailed, Discord | Drafts | Memory> =
+  Effect.gen(function* () {
     const discord = yield* Discord
     const drafts = yield* Drafts
     const mem = yield* Memory
@@ -34,5 +34,4 @@ export const drainInbox: Effect.Effect<number, DbFailed, Discord | Drafts | Memo
     // 残って二度と読まれない。この順なら最悪でも二重に記録するだけ。
     yield* discord.commitInboundBatch(batch)
     return batch.items.length
-  },
-)
+  })

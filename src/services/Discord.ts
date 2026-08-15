@@ -16,7 +16,7 @@
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { Conflict, type DbFailed } from "../core/errors.ts"
+import { Conflict, ConnectorFailed, type DbFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { canonicalJson, digestOf } from "../model/kernel-spec.ts"
 import { Db } from "./Db.ts"
@@ -213,12 +213,36 @@ const makeDiscord = () =>
         }),
       )
 
-    const readJson = <T>(path: string): Effect.Effect<T | undefined> =>
+    const readJson = <T>(path: string): Effect.Effect<T, ConnectorFailed> =>
       call(path).pipe(
         Effect.flatMap((r) =>
-          r.ok ? Effect.tryPromise(() => r.json() as Promise<T>) : Effect.succeed(undefined),
+          r.ok
+            ? Effect.tryPromise({
+                try: () => r.json() as Promise<T>,
+                catch: (error) =>
+                  new ConnectorFailed({
+                    connector: "Discord",
+                    operation: `GET ${path}`,
+                    message: `invalid JSON: ${String(error)}`,
+                  }),
+              })
+            : Effect.fail(
+                new ConnectorFailed({
+                  connector: "Discord",
+                  operation: `GET ${path}`,
+                  message: `HTTP ${r.status}`,
+                }),
+              ),
         ),
-        Effect.catch(() => Effect.succeed(undefined)),
+        Effect.mapError((error) =>
+          error instanceof ConnectorFailed
+            ? error
+            : new ConnectorFailed({
+                connector: "Discord",
+                operation: `GET ${path}`,
+                message: String(error),
+              }),
+        ),
       )
 
     const meta = <T>(key: string, fallback: T): Effect.Effect<T, DbFailed> =>
@@ -734,9 +758,9 @@ const makeDiscord = () =>
      * 残っていて、cursor なしで引くと去年の発言が今日の入力になる。リアクションは対象外
      * (自分が出したメッセージにしか登録されていない)。
      *
-     * 取れなければ空を返す。呼ぶ側は「届いていない」と「Discord が落ちている」を区別しない。
+     * 取得失敗は失敗として返す。空配列だけを「届いていない」と扱う。
      */
-    const pollInbound = (): Effect.Effect<Batch, DbFailed> =>
+    const pollInbound = (): Effect.Effect<Batch, DbFailed | ConnectorFailed> =>
       Effect.gen(function* () {
         yield* ensureDmQueued()
         yield* flushQueued()
