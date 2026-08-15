@@ -12,7 +12,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { DbFailed } from "../core/errors.ts"
 import { localStamp, nowIso } from "../core/time.ts"
-import { Db, type Row } from "./Db.ts"
+import { Db, type DbTx, type Row } from "./Db.ts"
 
 export type EventKind = "observe" | "belief" | "redact" | "import"
 export type EventSource = "owner" | "calendar" | "gmail" | "web" | "system"
@@ -202,51 +202,50 @@ const makeMemory = () =>
   Effect.gen(function* () {
     const db = yield* Db
 
-    const append = (input: RememberInput, id: string, at: string, meta: AppendMeta) =>
-      Effect.gen(function* () {
-        if (meta.originKind !== null) {
-          const existing = yield* db.get(
-            "SELECT id FROM events WHERE origin_kind = ?AND origin_id = ?AND content IS NOT NULL",
-            meta.originKind,
-            meta.originId,
-          )
-          if (existing) return String(existing.id)
-        }
-        const source = input.source ?? "owner"
-        const kind = input.kind ?? "observe"
-        // gmail/web は既定で taint。明示指定があればそれを優先する。
-        const taint = input.taint ?? (source === "gmail" || source === "web")
-        const provenance = JSON.stringify(input.provenance ?? [{ kind: source, at }])
-        const content = JSON.stringify(input.content ?? null)
-        const text = input.text ?? deriveText(input.content)
-
-        yield* db.run(
-          `INSERT INTO events
-             (id, at, kind, source, taint, exposure, supersedes, provenance, content, search_text,
-              origin_kind, origin_id, belief_slot, valid_from, invalidated_reason,
-              evidence_event_id, evidence_quote)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          id,
-          at,
-          kind,
-          source,
-          taint ? 1 : 0,
-          input.exposure ?? "private",
-          input.supersedes ?? null,
-          provenance,
-          content,
-          text.length > 0 ? text : null,
+    const append = (tx: DbTx, input: RememberInput, id: string, at: string, meta: AppendMeta): string => {
+      if (meta.originKind !== null) {
+        const existing = tx.get(
+          "SELECT id FROM events WHERE origin_kind = ?AND origin_id = ?AND content IS NOT NULL",
           meta.originKind,
           meta.originId,
-          meta.beliefSlot,
-          meta.validFrom,
-          meta.invalidatedReason,
-          meta.evidenceEventId,
-          meta.evidenceQuote,
         )
-        if (text.length > 0) yield* db.run("INSERT INTO events_fts (event_id, text)VALUES (?, ?)", id, text)
-        return id
-      })
+        if (existing) return String(existing.id)
+      }
+      const source = input.source ?? "owner"
+      const kind = input.kind ?? "observe"
+      // gmail/web は既定で taint。明示指定があればそれを優先する。
+      const taint = input.taint ?? (source === "gmail" || source === "web")
+      const provenance = JSON.stringify(input.provenance ?? [{ kind: source, at }])
+      const content = JSON.stringify(input.content ?? null)
+      const text = input.text ?? deriveText(input.content)
+
+      tx.run(
+        `INSERT INTO events
+           (id, at, kind, source, taint, exposure, supersedes, provenance, content, search_text,
+            origin_kind, origin_id, belief_slot, valid_from, invalidated_reason,
+            evidence_event_id, evidence_quote)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        at,
+        kind,
+        source,
+        taint ? 1 : 0,
+        input.exposure ?? "private",
+        input.supersedes ?? null,
+        provenance,
+        content,
+        text.length > 0 ? text : null,
+        meta.originKind,
+        meta.originId,
+        meta.beliefSlot,
+        meta.validFrom,
+        meta.invalidatedReason,
+        meta.evidenceEventId,
+        meta.evidenceQuote,
+      )
+      if (text.length > 0) tx.run("INSERT INTO events_fts (event_id, text)VALUES (?, ?)", id, text)
+      return id
+    }
 
     /** イベントとFTS projectionを同じtransactionで追記する。 */
     const remember = (input: RememberInput) =>
@@ -256,10 +255,7 @@ const makeMemory = () =>
         const meta = input.origin
           ? { ...EMPTY_META, originKind: input.origin.kind, originId: input.origin.id }
           : EMPTY_META
-        yield* db.run("BEGIN IMMEDIATE")
-        return yield* append(input, id, at, meta)
-          .pipe(Effect.tap(() => db.run("COMMIT")))
-          .pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
+        return yield* db.withImmediateTransaction("remember event", (tx) => append(tx, input, id, at, meta))
       })
 
     /**
@@ -289,17 +285,14 @@ const makeMemory = () =>
       Effect.gen(function* () {
         const at = nowIso()
         const exposure = opts?.exposure ?? "private"
-        yield* db.run("BEGIN IMMEDIATE")
-        return yield* Effect.gen(function* () {
+        return yield* db.withImmediateTransaction<string, DbFailed>("record belief", (tx, abort) => {
           if (opts?.evidenceEventId) {
-            const evidence = yield* db.get("SELECT source FROM events WHERE id=?", opts.evidenceEventId)
+            const evidence = tx.get("SELECT source FROM events WHERE id=?", opts.evidenceEventId)
             if (evidence?.source !== "owner") {
-              return yield* Effect.fail(
-                new DbFailed({ op: "record belief", message: "Belief evidence must be an owner event" }),
-              )
+              abort(new DbFailed({ op: "record belief", message: "Belief evidence must be an owner event" }))
             }
           }
-          const cur = yield* db.get(
+          const cur = tx.get(
             "SELECT resolved_from, valid_from FROM belief_slots WHERE slot = ?AND valid_until IS NULL",
             slot,
           )
@@ -308,7 +301,8 @@ const makeMemory = () =>
           const asked = opts?.validFrom ?? at
           const validFrom = prevFrom !== undefined && asked < prevFrom ? prevFrom : asked
           const eventId = randomUUID()
-          yield* append(
+          append(
+            tx,
             {
               kind: "belief",
               source: "system",
@@ -332,9 +326,8 @@ const makeMemory = () =>
               evidenceQuote: opts?.evidenceQuote ?? null,
             },
           )
-          yield* db.run("COMMIT")
           return eventId
-        }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
+        })
       })
 
     const view = (slot: string, r: Row | undefined) =>
@@ -499,23 +492,23 @@ const makeMemory = () =>
       Effect.gen(function* () {
         const id = randomUUID()
         const at = nowIso()
-        yield* db.run("BEGIN IMMEDIATE")
-        yield* db.run("UPDATE events SET content = NULL, search_text = NULL WHERE id = ?", eventId)
-        yield* db.run("DELETE FROM events_fts WHERE event_id = ?", eventId)
-        return yield* append(
-          {
-            kind: "redact",
-            source: "system",
-            content: { redacted: eventId, reason },
-            supersedes: eventId,
-            text: "",
-          },
-          id,
-          at,
-          EMPTY_META,
-        )
-          .pipe(Effect.tap(() => db.run("COMMIT")))
-          .pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
+        return yield* db.withImmediateTransaction("redact event", (tx) => {
+          tx.run("UPDATE events SET content = NULL, search_text = NULL WHERE id = ?", eventId)
+          tx.run("DELETE FROM events_fts WHERE event_id = ?", eventId)
+          return append(
+            tx,
+            {
+              kind: "redact",
+              source: "system",
+              content: { redacted: eventId, reason },
+              supersedes: eventId,
+              text: "",
+            },
+            id,
+            at,
+            EMPTY_META,
+          )
+        })
       })
 
     const count = db.get("SELECT COUNT(*)n FROM events").pipe(Effect.map((r) => Number(r?.n ?? 0)))

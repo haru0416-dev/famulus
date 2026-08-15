@@ -24,7 +24,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { Conflict, NotFound } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
-import { Db } from "./Db.ts"
+import { Db, type Row } from "./Db.ts"
 
 /**
  * 提案の状態。実行の3つ(`executing` `executed` `failed`)は落とした。
@@ -83,6 +83,39 @@ const plusDays = (at: string, days: number) =>
 export const payloadHash = (payload: string): string => createHash("sha256").update(payload).digest("hex")
 
 const DECIDABLE: readonly ProposalStatus[] = ["proposed"]
+const FIND_PROPOSAL =
+  "SELECT * FROM proposals WHERE id = ?OR id LIKE ? || '%' ORDER BY created_at DESC LIMIT 5"
+
+const resolveProposal = (
+  rows: readonly Row[],
+  idOrPrefix: string,
+):
+  | { readonly found: true; readonly value: ProposalRow }
+  | { readonly found: false; readonly error: NotFound | Conflict } => {
+  const exact = rows.find((r) => r.id === idOrPrefix)
+  if (exact) return { found: true, value: exact as unknown as ProposalRow }
+  if (rows.length === 0) return { found: false, error: new NotFound({ what: "提案", id: idOrPrefix }) }
+  if (rows.length > 1) {
+    return {
+      found: false,
+      error: new Conflict({
+        what: "提案",
+        id: idOrPrefix,
+        reason: `前方一致が ${rows.length} 件ある: ${rows.map((r) => String(r.id).slice(0, 8)).join(", ")}`,
+      }),
+    }
+  }
+  return { found: true, value: rows[0] as unknown as ProposalRow }
+}
+
+const decisionConflict = (proposal: ProposalRow): Conflict | undefined =>
+  DECIDABLE.includes(proposal.status)
+    ? undefined
+    : new Conflict({
+        what: "提案",
+        id: proposal.id,
+        reason: `承認できる状態ではない(status=${proposal.status})`,
+      })
 
 const makeProposals = () =>
   Effect.gen(function* () {
@@ -123,52 +156,29 @@ const makeProposals = () =>
      */
     const get = (idOrPrefix: string) =>
       Effect.gen(function* () {
-        const rows = yield* db.all(
-          "SELECT * FROM proposals WHERE id = ?OR id LIKE ? || '%' ORDER BY created_at DESC LIMIT 5",
-          idOrPrefix,
-          idOrPrefix,
-        )
-        const exact = rows.find((r) => r.id === idOrPrefix)
-        if (exact) return exact as unknown as ProposalRow
-        if (rows.length === 0) return yield* Effect.fail(new NotFound({ what: "提案", id: idOrPrefix }))
-        if (rows.length > 1) {
-          return yield* Effect.fail(
-            new Conflict({
-              what: "提案",
-              id: idOrPrefix,
-              reason: `前方一致が ${rows.length} 件ある: ${rows.map((r) => String(r.id).slice(0, 8)).join(", ")}`,
-            }),
-          )
-        }
-        return rows[0] as unknown as ProposalRow
+        const resolved = resolveProposal(yield* db.all(FIND_PROPOSAL, idOrPrefix, idOrPrefix), idOrPrefix)
+        return resolved.found ? resolved.value : yield* Effect.fail(resolved.error)
       })
 
     /** 期限切れを expired に落とす。承認待ちの一覧が実態とずれないよう list の前に呼ぶ。 */
     const expireDue = (at: string = nowIso()) =>
-      Effect.gen(function* () {
-        yield* db.run("BEGIN IMMEDIATE")
-        return yield* Effect.gen(function* () {
-          const due = yield* db.all(
-            "SELECT id, created_at FROM proposals WHERE status='proposed' AND expires_at < ?",
-            at,
-          )
-          for (const p of due) {
-            yield* db.run(
-              `INSERT INTO proposal_actions
+      db.withImmediateTransaction("expire proposals", (tx) => {
+        const due = tx.all(
+          "SELECT id, created_at FROM proposals WHERE status='proposed' AND expires_at < ?",
+          at,
+        )
+        for (const p of due) {
+          tx.run(
+            `INSERT INTO proposal_actions
                  (id, proposal_id, at, action, actor, latency_ms)
                VALUES (?, ?, ?, 'expire', 'system', ?)`,
-              randomUUID(),
-              p.id,
-              at,
-              Math.max(0, Date.parse(at) - Date.parse(String(p.created_at))),
-            )
-          }
-          yield* db.run(
-            "UPDATE proposals SET status='expired' WHERE status='proposed' AND expires_at < ?",
+            randomUUID(),
+            p.id,
             at,
+            Math.max(0, Date.parse(at) - Date.parse(String(p.created_at))),
           )
-          yield* db.run("COMMIT")
-        }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
+        }
+        tx.run("UPDATE proposals SET status='expired' WHERE status='proposed' AND expires_at < ?", at)
       })
 
     const list = (status: ProposalStatus | "all" = "proposed", limit = 20) =>
@@ -185,13 +195,6 @@ const makeProposals = () =>
         return rows as unknown as ProposalRow[]
       })
 
-    const ensureDecidable = (p: ProposalRow) =>
-      DECIDABLE.includes(p.status)
-        ? Effect.void
-        : Effect.fail(
-            new Conflict({ what: "提案", id: p.id, reason: `承認できる状態ではない(status=${p.status})` }),
-          )
-
     /**
      * 承認actionの追記とstatus遷移を同一トランザクションで行う
      * (承認記録の無い approved を作らない = 後で照合する相手を必ず残す)。
@@ -199,12 +202,17 @@ const makeProposals = () =>
     const approve = (idOrPrefix: string, opts?: { approverRef?: string; at?: string }) =>
       Effect.gen(function* () {
         const at = opts?.at ?? nowIso()
-        yield* db.run("BEGIN IMMEDIATE")
-        return yield* Effect.gen(function* () {
-          const p = yield* get(idOrPrefix)
-          yield* ensureDecidable(p)
+        return yield* db.withImmediateTransaction<
+          { readonly id: string; readonly payloadHash: string; readonly at: string },
+          NotFound | Conflict
+        >("approve proposal", (tx, abort) => {
+          const resolved = resolveProposal(tx.all(FIND_PROPOSAL, idOrPrefix, idOrPrefix), idOrPrefix)
+          if (!resolved.found) return abort(resolved.error)
+          const p = resolved.value
+          const conflict = decisionConflict(p)
+          if (conflict) return abort(conflict)
           const hash = payloadHash(p.payload)
-          yield* db.run(
+          tx.run(
             `INSERT INTO proposal_actions
                (id, proposal_id, at, action, actor, actor_ref, payload_hash, latency_ms)
              VALUES (?, ?, ?, 'approve', 'owner', ?, ?, ?)`,
@@ -215,21 +223,25 @@ const makeProposals = () =>
             hash,
             Math.max(0, Date.parse(at) - Date.parse(p.created_at)),
           )
-          yield* db.run("UPDATE proposals SET status = 'approved' WHERE id = ?", p.id)
-          yield* db.run("COMMIT")
+          tx.run("UPDATE proposals SET status = 'approved' WHERE id = ?", p.id)
           return { id: p.id, payloadHash: hash, at }
-        }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
+        })
       })
 
     /** 却下。理由は次の生成へ還流させる学習信号なので必須にする。 */
     const deny = (idOrPrefix: string, reason: string, opts?: { at?: string }) =>
       Effect.gen(function* () {
         const at = opts?.at ?? nowIso()
-        yield* db.run("BEGIN IMMEDIATE")
-        return yield* Effect.gen(function* () {
-          const p = yield* get(idOrPrefix)
-          yield* ensureDecidable(p)
-          yield* db.run(
+        return yield* db.withImmediateTransaction<
+          { readonly id: string; readonly at: string },
+          NotFound | Conflict
+        >("deny proposal", (tx, abort) => {
+          const resolved = resolveProposal(tx.all(FIND_PROPOSAL, idOrPrefix, idOrPrefix), idOrPrefix)
+          if (!resolved.found) return abort(resolved.error)
+          const p = resolved.value
+          const conflict = decisionConflict(p)
+          if (conflict) return abort(conflict)
+          tx.run(
             `INSERT INTO proposal_actions
                (id, proposal_id, at, action, actor, reason, latency_ms)
              VALUES (?, ?, ?, 'deny', 'owner', ?, ?)`,
@@ -239,10 +251,9 @@ const makeProposals = () =>
             reason,
             Math.max(0, Date.parse(at) - Date.parse(p.created_at)),
           )
-          yield* db.run("UPDATE proposals SET status = 'denied', deny_reason = ?WHERE id = ?", reason, p.id)
-          yield* db.run("COMMIT")
+          tx.run("UPDATE proposals SET status = 'denied', deny_reason = ?WHERE id = ?", reason, p.id)
           return { id: p.id, at }
-        }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
+        })
       })
 
     /**

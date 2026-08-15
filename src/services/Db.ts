@@ -32,6 +32,8 @@ export interface DbTx {
   readonly run: (sql: string, ...params: readonly unknown[]) => DbRunResult
 }
 
+export type DbTxAbort<E> = (error: E) => never
+
 type SyncResult<A> = A extends PromiseLike<unknown> ? never : A
 
 export const isThenable = (value: unknown): value is PromiseLike<unknown> =>
@@ -72,13 +74,21 @@ export interface DbApi {
   readonly run: (sql: string, ...params: readonly unknown[]) => Effect.Effect<unknown, DbFailed>
   readonly meta: (key: string) => Effect.Effect<string | undefined, DbFailed>
   readonly setMeta: (key: string, value: string) => Effect.Effect<unknown, DbFailed>
-  readonly withImmediateTransaction: <A>(
+  readonly withImmediateTransaction: <A, E = never>(
     op: string,
-    body: (tx: DbTx) => SyncResult<A>,
-  ) => Effect.Effect<SyncResult<A>, DbFailed>
+    body: (tx: DbTx, abort: DbTxAbort<E>) => SyncResult<A>,
+  ) => Effect.Effect<SyncResult<A>, DbFailed | E>
 }
 
 export class Db extends Context.Service<Db, DbApi>()("Db") {}
+
+class DbTxAbortSignal<E> {
+  readonly error: E
+
+  constructor(error: E) {
+    this.error = error
+  }
+}
 
 export const defaultDbPath = (): string => appConfig().paths.db
 
@@ -137,10 +147,17 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
         if (transactionActive) throw new Error("public DB API cannot run inside withImmediateTransaction")
       }
 
+      const assertPublicSql = (sql: string) => {
+        assertPublicAccess()
+        if (TRANSACTION_SQL.has(firstSqlKeyword(sql))) {
+          throw new Error("transaction control SQL is not allowed; use withImmediateTransaction")
+        }
+      }
+
       const all = (sql: string, ...params: readonly unknown[]) =>
         Effect.try({
           try: () => {
-            assertPublicAccess()
+            assertPublicSql(sql)
             return db.prepare(sql).all(...(params as never[])) as Row[]
           },
           catch: (e) => new DbFailed({ op: sql.slice(0, 40), message: String(e) }),
@@ -152,7 +169,7 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
       const run = (sql: string, ...params: readonly unknown[]) =>
         Effect.try({
           try: () => {
-            assertPublicAccess()
+            assertPublicSql(sql)
             return db.prepare(sql).run(...(params as never[])) as unknown
           },
           catch: (e) => new DbFailed({ op: sql.slice(0, 40), message: String(e) }),
@@ -167,39 +184,56 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
       const setMeta = (key: string, value: string) =>
         run("INSERT OR REPLACE INTO schema_meta (key, value)VALUES (?, ?)", key, value)
 
-      const withImmediateTransaction = <A>(op: string, body: (tx: DbTx) => SyncResult<A>) =>
+      const withImmediateTransaction = <A, E = never>(
+        op: string,
+        body: (tx: DbTx, abort: DbTxAbort<E>) => SyncResult<A>,
+      ) =>
         Effect.try({
           try: () => {
             assertPublicAccess()
-            return db
-              .transaction(() => {
-                transactionActive = true
-                let active = true
-                const prepare = (sql: string): ReturnType<Sqlite["prepare"]> => {
-                  if (!active) throw new Error("transaction handle is no longer active")
-                  const keyword = firstSqlKeyword(sql)
-                  if (TRANSACTION_SQL.has(keyword)) throw new Error("transaction control SQL is not allowed")
-                  if (!TRANSACTION_DML.has(keyword))
-                    throw new Error(`${keyword || "unknown"} SQL is not allowed`)
-                  return db.prepare(sql)
-                }
-                const tx: DbTx = {
-                  all: (sql, ...params) => prepare(sql).all(...(params as never[])) as Row[],
-                  get: (sql, ...params) => prepare(sql).get(...(params as never[])) as Row | undefined,
-                  run: (sql, ...params) => prepare(sql).run(...(params as never[])) as DbRunResult,
-                }
-                try {
-                  const result = body(tx)
-                  if (isThenable(result)) throw new Error("transaction callback must be synchronous")
-                  return result
-                } finally {
-                  active = false
-                  transactionActive = false
-                }
-              })
-              .immediate()
+            let aborted: DbTxAbortSignal<E> | undefined
+            try {
+              return db
+                .transaction(() => {
+                  transactionActive = true
+                  let active = true
+                  const prepare = (sql: string): ReturnType<Sqlite["prepare"]> => {
+                    if (!active) throw new Error("transaction handle is no longer active")
+                    const keyword = firstSqlKeyword(sql)
+                    if (TRANSACTION_SQL.has(keyword))
+                      throw new Error("transaction control SQL is not allowed")
+                    if (!TRANSACTION_DML.has(keyword))
+                      throw new Error(`${keyword || "unknown"} SQL is not allowed`)
+                    return db.prepare(sql)
+                  }
+                  const tx: DbTx = {
+                    all: (sql, ...params) => prepare(sql).all(...(params as never[])) as Row[],
+                    get: (sql, ...params) =>
+                      (prepare(sql).get(...(params as never[])) as Row | null | undefined) ?? undefined,
+                    run: (sql, ...params) => prepare(sql).run(...(params as never[])) as DbRunResult,
+                  }
+                  const abort: DbTxAbort<E> = (error) => {
+                    if (!active) throw new Error("transaction abort handle is no longer active")
+                    aborted = new DbTxAbortSignal(error)
+                    throw aborted
+                  }
+                  try {
+                    const result = body(tx, abort)
+                    if (aborted) throw aborted
+                    if (isThenable(result)) throw new Error("transaction callback must be synchronous")
+                    return result
+                  } finally {
+                    active = false
+                    transactionActive = false
+                  }
+                })
+                .immediate()
+            } catch (error) {
+              if (aborted) throw aborted
+              throw error
+            }
           },
-          catch: (e) => new DbFailed({ op, message: String(e) }),
+          catch: (e) => (e instanceof DbTxAbortSignal ? e.error : new DbFailed({ op, message: String(e) })),
         })
 
       return { all, get, run, meta, setMeta, withImmediateTransaction } satisfies DbApi

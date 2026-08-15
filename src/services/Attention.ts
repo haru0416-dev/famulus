@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { Conflict, NotFound } from "../core/errors.ts"
 import { localDayRange, localHour, nowIso } from "../core/time.ts"
-import { Db } from "./Db.ts"
+import { Db, type Row } from "./Db.ts"
 
 /**
  * 次に処理する主体。`famulus` は自律エージェント(SOUL.md の名前)。
@@ -176,6 +176,22 @@ export const dailyDraftHour = (): number => Number(process.env.OPEN_ZERO_DAILY_H
 
 const daysBetween = (fromIso: string, toMs: number) => (toMs - Date.parse(fromIso)) / 86_400_000
 
+const resolveWatch = (
+  rows: readonly Row[],
+  idOrPrefix: string,
+):
+  | { readonly found: true; readonly value: WatchRow }
+  | { readonly found: false; readonly error: NotFound | Conflict } => {
+  if (rows.length === 0) return { found: false, error: new NotFound({ what: "watch", id: idOrPrefix }) }
+  if (rows.length > 1) {
+    return {
+      found: false,
+      error: new Conflict({ what: "watch", id: idOrPrefix, reason: `${rows.length} 件に当たる` }),
+    }
+  }
+  return { found: true, value: rows[0] as unknown as WatchRow }
+}
+
 const makeAttention = () =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -211,13 +227,8 @@ const makeAttention = () =>
           idOrPrefix,
           idOrPrefix,
         )
-        if (rows.length === 0) return yield* Effect.fail(new NotFound({ what: "watch", id: idOrPrefix }))
-        if (rows.length > 1) {
-          return yield* Effect.fail(
-            new Conflict({ what: "watch", id: idOrPrefix, reason: `${rows.length} 件に当たる` }),
-          )
-        }
-        return rows[0] as unknown as WatchRow
+        const resolved = resolveWatch(rows, idOrPrefix)
+        return resolved.found ? resolved.value : yield* Effect.fail(resolved.error)
       })
 
     /**
@@ -251,33 +262,34 @@ const makeAttention = () =>
      * その分ずれるので、過去は渡せる。未来は取らない(渡せるとcooldownを好きなだけ伸ばせる)。
      */
     const recordWatchRun = (idOrPrefix: string, result: string, ranAt?: string) =>
-      Effect.gen(function* () {
-        yield* db.run("BEGIN IMMEDIATE")
-        return yield* Effect.gen(function* () {
-          const w = yield* findWatch(idOrPrefix)
-          const now = nowIso()
-          const at = ranAt === undefined || ranAt > now ? now : ranAt
-          // 動きの時刻は戻さない。後から記録するとき、その間に来た返事のほうが新しい。
-          const activity = at > w.last_activity_at ? at : w.last_activity_at
-          yield* db.run("INSERT INTO watch_runs (watch_id, at, result)VALUES (?, ?, ?)", w.id, at, result)
-          yield* db.run(
-            `UPDATE watchlist
+      db.withImmediateTransaction<WatchRow, NotFound | Conflict>("record watch run", (tx, abort) => {
+        const resolved = resolveWatch(
+          tx.all("SELECT * FROM watchlist WHERE id = ?OR id LIKE ? || '%' LIMIT 5", idOrPrefix, idOrPrefix),
+          idOrPrefix,
+        )
+        if (!resolved.found) return abort(resolved.error)
+        const w = resolved.value
+        const now = nowIso()
+        const at = ranAt === undefined || ranAt > now ? now : ranAt
+        // 動きの時刻は戻さない。後から記録するとき、その間に来た返事のほうが新しい。
+        const activity = at > w.last_activity_at ? at : w.last_activity_at
+        tx.run("INSERT INTO watch_runs (watch_id, at, result)VALUES (?, ?, ?)", w.id, at, result)
+        tx.run(
+          `UPDATE watchlist
                 SET last_run_at = ?, last_activity_at = ?, run_count = run_count + 1, last_result = ?
               WHERE id = ?`,
-            at,
-            activity,
-            result,
-            w.id,
-          )
-          yield* db.run("COMMIT")
-          return {
-            ...w,
-            last_run_at: at,
-            last_activity_at: activity,
-            run_count: w.run_count + 1,
-            last_result: result,
-          } satisfies WatchRow
-        }).pipe(Effect.tapError(() => db.run("ROLLBACK").pipe(Effect.ignore)))
+          at,
+          activity,
+          result,
+          w.id,
+        )
+        return {
+          ...w,
+          last_run_at: at,
+          last_activity_at: activity,
+          run_count: w.run_count + 1,
+          last_result: result,
+        } satisfies WatchRow
       })
 
     const closeWatch = (idOrPrefix: string) =>
