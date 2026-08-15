@@ -21,7 +21,7 @@ export interface DraftRow {
   readonly local_day: string
   readonly title: string
   readonly body: string
-  readonly basis: string
+  readonly dossier_id: string
   readonly content_hash: string
   readonly state: DraftState
   readonly review_feedback: string | null
@@ -35,7 +35,7 @@ export interface DraftRow {
 export interface DraftInput {
   readonly title: string
   readonly body: string
-  readonly basis: string
+  readonly dossierId: string
 }
 
 export type DraftDecision = "accept" | "revise" | "discard"
@@ -80,16 +80,19 @@ const makeDrafts = () =>
         const existing = selectPending(tx) ?? selectDay(tx, day)
         if (existing && existing.state !== "revision_needed") return existing
 
-        const contentHash = digestOf({ title: input.title, body: input.body })
+        const dossier = tx.get("SELECT state FROM research_dossiers WHERE id=?", input.dossierId)
+        if (!dossier || dossier.state === "open")
+          throw new Error(`Terminal research dossier not found: ${input.dossierId}`)
+        const contentHash = digestOf({ title: input.title, body: input.body, dossierId: input.dossierId })
         if (existing) {
           if (existing.content_hash === contentHash) return existing
           tx.run(
             `UPDATE drafts
-                SET title=?,body=?,basis=?,content_hash=?,state='review_pending',review_feedback=NULL,updated_at=?
+                SET title=?,body=?,dossier_id=?,content_hash=?,state='review_pending',review_feedback=NULL,updated_at=?
               WHERE id=? AND state='revision_needed'`,
             input.title,
             input.body,
-            input.basis,
+            input.dossierId,
             contentHash,
             at,
             existing.id,
@@ -100,13 +103,13 @@ const makeDrafts = () =>
         const id = randomUUID()
         tx.run(
           `INSERT INTO drafts
-            (id,local_day,title,body,basis,content_hash,state,created_at,updated_at)
+            (id,local_day,title,body,dossier_id,content_hash,state,created_at,updated_at)
            VALUES (?,?,?,?,?,?,'review_pending',?,?)`,
           id,
           day,
           input.title,
           input.body,
-          input.basis,
+          input.dossierId,
           contentHash,
           at,
           at,

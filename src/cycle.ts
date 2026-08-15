@@ -204,7 +204,7 @@ function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Works
               ...(pending.reviewFeedback ? [`前回の結果: ${pending.reviewFeedback}`] : []),
               "",
               `題: ${pending.title}`,
-              `根拠: ${pending.basis}`,
+              `調査dossier: ${pending.dossierId}`,
               "本文:",
               pending.body,
               "",

@@ -111,7 +111,7 @@ export interface CyclePlan {
   readonly pendingDraft?: {
     readonly title: string
     readonly body: string
-    readonly basis: string
+    readonly dossierId: string
     readonly state: "review_pending" | "revision_needed" | "delivery_pending"
     readonly reviewFeedback?: string
   }
@@ -491,7 +491,7 @@ const makeAttention = () =>
         // cooldownの対象外にする。1日に1回しか成立しない条件で、抑えると夕方に別の理由で動いた日は
         // 下書きが生成されない。
         const draftRow = yield* db.get(
-          `SELECT title,body,basis,state,review_feedback,delivered_at FROM drafts
+          `SELECT title,body,dossier_id,state,review_feedback,delivered_at FROM drafts
             WHERE delivered_at IS NULL AND state IN ('review_pending','revision_needed','delivery_pending')
             ORDER BY local_day,created_at LIMIT 1`,
         )
@@ -530,7 +530,7 @@ const makeAttention = () =>
                 pendingDraft: {
                   title: String(draftRow.title),
                   body: String(draftRow.body),
-                  basis: String(draftRow.basis),
+                  dossierId: String(draftRow.dossier_id),
                   state: draftRow.state as "review_pending" | "revision_needed" | "delivery_pending",
                   ...(draftRow.review_feedback ? { reviewFeedback: String(draftRow.review_feedback) } : {}),
                 },

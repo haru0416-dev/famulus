@@ -16,10 +16,21 @@ import { Attention } from "../src/services/Attention.ts"
 import { Db } from "../src/services/Db.ts"
 import { Discord, type Enqueue } from "../src/services/Discord.ts"
 import { Drafts } from "../src/services/Drafts.ts"
+import { Research } from "../src/services/Research.ts"
 import { withHarness } from "./helpers.ts"
 
 const OWNER = "1211509900937793597"
 const CH = "9001"
+const terminalDossier = (question: string) =>
+  Effect.flatMap(Research, (research) =>
+    research.recordWebDossier({
+      question,
+      summary: "test",
+      limitations: "test fixture",
+      snapshots: [],
+      claims: [],
+    }),
+  )
 
 interface Hit {
   readonly method: string
@@ -259,7 +270,8 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
         Effect.gen(function* () {
           const drafts = yield* Drafts
           const discord = yield* Discord
-          const draft = yield* drafts.materialize({ title: "題", body: "本文", basis: "run 1" })
+          const dossier = yield* terminalDossier("draft reaction")
+          const draft = yield* drafts.materialize({ title: "題", body: "本文", dossierId: dossier.id })
           const outbound = yield* discord.enqueue({
             purpose: "assistant-draft",
             dedupeKey: draft.id,
@@ -820,7 +832,11 @@ test("5xx は unknown で止まり、自動再送しない", async () => {
   try {
     await withHarness(async (h) => {
       const draft = await h.run(
-        Effect.flatMap(Drafts, (drafts) => drafts.materialize({ title: "題", body: "本文", basis: "run" })),
+        Effect.gen(function* () {
+          const drafts = yield* Drafts
+          const dossier = yield* terminalDossier("failed delivery")
+          return yield* drafts.materialize({ title: "題", body: "本文", dossierId: dossier.id })
+        }),
       )
       const outbound = await h.run(
         Effect.flatMap(Discord, (d) =>

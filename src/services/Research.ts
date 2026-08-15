@@ -305,11 +305,15 @@ const makeResearch = () =>
           dossierId,
         ),
         evidence: db.all(
-          `SELECT e.*,a.kind artifact_kind,a.source_ref,a.sha256,a.captured_at,r.verdict,r.command,r.check_command
+          `SELECT e.*,a.kind artifact_kind,a.source_ref,a.sha256,a.captured_at,
+                  r.verdict,r.command,r.check_command,
+                  command_artifact.sha256 command_sha256,check_artifact.sha256 check_sha256
              FROM research_claim_evidence e
              JOIN research_claims c ON c.id=e.claim_id
              LEFT JOIN research_artifacts a ON a.id=e.artifact_id
              LEFT JOIN research_experiment_runs r ON r.id=e.experiment_run_id
+             LEFT JOIN research_artifacts command_artifact ON command_artifact.id=r.command_artifact_id
+             LEFT JOIN research_artifacts check_artifact ON check_artifact.id=r.check_artifact_id
             WHERE c.dossier_id=? ORDER BY e.added_at,e.id`,
           dossierId,
         ),
@@ -332,6 +336,41 @@ const makeResearch = () =>
 
     const list = (limit = 20) =>
       db.all("SELECT * FROM research_dossiers ORDER BY created_at DESC,id DESC LIMIT ?", limit)
+
+    const render = (dossierId: string) =>
+      bundle(dossierId).pipe(
+        Effect.flatMap(({ dossier, claims, evidence }) =>
+          Effect.try({
+            try: () => {
+              if (!dossier) throw new Error(`Research dossier not found: ${dossierId}`)
+              const byClaim = new Map<string, Row[]>()
+              for (const edge of evidence) {
+                const id = String(edge.claim_id)
+                byClaim.set(id, [...(byClaim.get(id) ?? []), edge])
+              }
+              const lines = [`dossier: ${dossier.id}`, `問い: ${dossier.question}`, `状態: ${dossier.state}`]
+              for (const claim of claims) {
+                lines.push(`主張(${claim.kind}/${claim.state}): ${claim.statement}`)
+                for (const edge of byClaim.get(String(claim.id)) ?? []) {
+                  if (edge.artifact_id) {
+                    lines.push(
+                      `- ${edge.polarity}: ${edge.source_ref}「${edge.quote}」 sha256=${edge.sha256}`,
+                    )
+                  } else {
+                    lines.push(
+                      `- ${edge.polarity}: experiment ${edge.verdict} / ${edge.command} sha256=${edge.command_sha256}` +
+                        ` / check ${edge.check_command} ${edge.check_sha256 ? `sha256=${edge.check_sha256}` : "not-run"}`,
+                    )
+                  }
+                }
+              }
+              lines.push(`限界: ${dossier.limitations}`)
+              return lines.join("\n")
+            },
+            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+          }),
+        ),
+      )
 
     const recordWebDossier = (
       input: {
@@ -449,6 +488,7 @@ const makeResearch = () =>
       inconclusive,
       bundle,
       list,
+      render,
       recordWebDossier,
     } as const
   })

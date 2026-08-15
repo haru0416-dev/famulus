@@ -294,7 +294,7 @@ CREATE TABLE drafts (
   local_day          TEXT NOT NULL UNIQUE,
   title              TEXT NOT NULL,
   body               TEXT NOT NULL,
-  basis              TEXT NOT NULL,
+  dossier_id         TEXT NOT NULL REFERENCES research_dossiers(id),
   content_hash       TEXT NOT NULL,
   state              TEXT NOT NULL CHECK (state IN ('review_pending','revision_needed','delivery_pending','delivery_failed','delivered','accepted','revise_requested','discarded')),
   review_feedback    TEXT,
@@ -306,6 +306,19 @@ CREATE TABLE drafts (
   CHECK ((state IN ('delivery_pending','delivery_failed','delivered','accepted','revise_requested','discarded')) = (outbound_id IS NOT NULL)),
   CHECK ((delivered_at IS NOT NULL) = (state IN ('delivered','accepted','revise_requested','discarded')))
 ) STRICT;
+
+CREATE TRIGGER drafts_terminal_dossier_insert
+BEFORE INSERT ON drafts
+WHEN NOT EXISTS (SELECT 1 FROM research_dossiers WHERE id = NEW.dossier_id AND state != 'open')
+BEGIN
+  SELECT RAISE(ABORT, 'draft requires a terminal research dossier');
+END;
+CREATE TRIGGER drafts_terminal_dossier_update
+BEFORE UPDATE OF dossier_id ON drafts
+WHEN NOT EXISTS (SELECT 1 FROM research_dossiers WHERE id = NEW.dossier_id AND state != 'open')
+BEGIN
+  SELECT RAISE(ABORT, 'draft requires a terminal research dossier');
+END;
 
 CREATE TRIGGER drafts_sync_delivery
 AFTER UPDATE OF state ON discord_outbound

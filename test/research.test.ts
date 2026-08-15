@@ -54,6 +54,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
         yield* research.resolveClaim(conclusion.id, "supported")
         yield* research.conclude(dossier.id, conclusion.id, "取得時点の公開ページだけを確認した。")
         const bundle = yield* research.bundle(dossier.id)
+        const rendered = yield* research.render(dossier.id)
         const deleteClaim = yield* Effect.result(
           db.run("DELETE FROM research_claims WHERE id=?", conclusion.id),
         )
@@ -123,6 +124,7 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
         const hashMismatch = yield* Effect.result(research.bundle(other.id))
         return {
           bundle,
+          rendered,
           late,
           invalid,
           dossiers,
@@ -140,6 +142,8 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
     )
     assert.equal(result.bundle.dossier?.state, "concluded")
     assert.equal(result.bundle.evidence.length, 1)
+    assert.match(result.rendered, /Current version is 7\.0\.62\./)
+    assert.match(result.rendered, /sha256=[0-9a-f]{64}/)
     assert.equal(result.late._tag, "Failure")
     assert.equal(result.invalid._tag, "Failure")
     assert.equal(result.dossiers.length, 2)
@@ -172,6 +176,21 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
           checkCommand: "verify-change",
           checkResult: { status: "completed", exitCode: 1, output: "failed" },
         })
+        const verified = yield* research.recordExperiment({
+          hypothesisClaimId: hypothesis.id,
+          protocol: { acceptance: "check exits 0" },
+          environment: { runtime: "test" },
+          workspace: "research-test",
+          command: "apply-change",
+          commandResult: { status: "completed", exitCode: 1, output: "expected failure" },
+          checkCommand: "verify-change",
+          checkResult: { status: "completed", exitCode: 0, output: "verified" },
+        })
+        const conclusion = yield* research.addClaim(dossier.id, "検査条件を満たした", "conclusion")
+        yield* research.linkExperiment(conclusion.id, verified.id, "support")
+        yield* research.resolveClaim(conclusion.id, "supported")
+        yield* research.conclude(dossier.id, conclusion.id, "test environment only")
+        const rendered = yield* research.render(dossier.id)
         const fakeVerified = yield* Effect.result(
           db.run(
             `INSERT INTO research_experiment_runs
@@ -213,11 +232,13 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
             dossier.created_at,
           ),
         )
-        return { verdict: run.verdict, fakeVerified, crossExperiment, foreignArtifacts }
+        return { verdict: run.verdict, fakeVerified, crossExperiment, foreignArtifacts, rendered }
       }),
     )
     assert.equal(verdict.verdict, "failed")
     assert.equal(verdict.fakeVerified._tag, "Failure")
     assert.equal(verdict.crossExperiment._tag, "Failure")
     assert.equal(verdict.foreignArtifacts._tag, "Failure")
+    assert.match(verdict.rendered, /apply-change sha256=[0-9a-f]{64}/)
+    assert.match(verdict.rendered, /check verify-change sha256=[0-9a-f]{64}/)
   }))

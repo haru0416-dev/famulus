@@ -943,13 +943,13 @@ function buildTools(state: TurnState, gate: ToolGate) {
             v.string(),
             v.description("本文そのもの。Markdown。冒頭に「測っていないこと」を並べてから中身に入る。"),
           ),
-          basis: v.pipe(
+          dossierId: v.pipe(
             v.string(),
-            v.description("この本文が何の実測に基づくか。DB のどの記録・どの走行を見たかを1〜3行で。"),
+            v.description("本文の根拠を固定したresearch dossier ID。researcherが返したIDをそのまま使う。"),
           ),
         }),
       ),
-      execute: async ({ title, body, basis }, { abortSignal }) =>
+      execute: async ({ title, body, dossierId }, { abortSignal }) =>
         run(
           Effect.gen(function* () {
             const discord = yield* Discord
@@ -957,6 +957,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
             const mem = yield* Memory
             const db = yield* Db
             const runner = yield* Runner
+            const research = yield* Research
             const existing = (yield* drafts.pending()) ?? (yield* drafts.forDay())
             if (existing?.delivered_at) {
               return (
@@ -972,8 +973,8 @@ function buildTools(state: TurnState, gate: ToolGate) {
             }
             const candidate =
               existing?.state === "review_pending"
-                ? { title: existing.title, body: existing.body, basis: existing.basis }
-                : { title, body, basis }
+                ? { title: existing.title, body: existing.body, dossierId: existing.dossier_id }
+                : { title, body, dossierId }
             // DB の実測から書くとユーザーの生活が混ざるので、非公開の確定値が本文に残っていないかを
             // 機械で確かめる(規律に書くだけでは通る)。過去の値も含める — 走行記録から引かれるのは
             // 履歴のほうで、書き換え前の日時や旧い連絡先は今の値と一致しないぶん検査を通りやすい。
@@ -1003,6 +1004,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
             }
             // レビュー前に本文を確定する。中断・再起動後は同日の保存済み本文を使い、入力で上書きしない。
             const draft = yield* drafts.materialize(candidate)
+            const evidenceBundle = yield* research.render(draft.dossier_id)
             if (draft.state === "revision_needed") {
               return `出していない。前回から本文が変わっていない。精査結果に沿って改稿する: ${draft.review_feedback ?? "指摘を確認する"}`
             }
@@ -1027,6 +1029,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
                 // 本文は囲って渡す。子が外から拾ってきた材料が混ざっているので、指示と同じ平面に置かない。
                 prompt: buildFencedPrompt("この下書きを精査してください。", [
                   { source: "draft", label: draft.title, content: draft.body },
+                  { source: "research-dossier", label: draft.dossier_id, content: evidenceBundle },
                 ]),
                 schema: REVIEW_SCHEMA,
                 signal: abortSignal
@@ -1056,7 +1059,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
             const outbound = yield* discord.enqueue({
               purpose: "assistant-draft",
               dedupeKey: draft.id,
-              text: `**${draft.title}**\n\n${draft.body}\n\n---\n根拠: ${draft.basis}`,
+              text: `**${draft.title}**\n\n${draft.body}\n\n---\n根拠 dossier: ${draft.dossier_id}`,
               // 押してもらわないと外に出ない文なので、ミュートしてある場所でも呼ぶ。
               to: "draft",
               ping: true,
@@ -1087,7 +1090,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
               content: {
                 drafted: draft.title,
                 body: draft.body,
-                basis: draft.basis,
+                dossierId: draft.dossier_id,
                 queued: Boolean(outbound),
               },
               text: `${draft.title}\n${draft.body}`,

@@ -21,10 +21,21 @@ import { Db } from "../src/services/Db.ts"
 import { Drafts } from "../src/services/Drafts.ts"
 import { Memory } from "../src/services/Memory.ts"
 import { Proposals } from "../src/services/Proposals.ts"
+import { Research } from "../src/services/Research.ts"
 import { withHarness } from "./helpers.ts"
 
 const T0 = Date.parse("2026-08-08T09:00:00Z")
 const hours = (n: number) => n * 3_600_000
+const terminalDossier = (question: string) =>
+  Effect.flatMap(Research, (research) =>
+    research.recordWebDossier({
+      question,
+      summary: "test",
+      limitations: "test fixture",
+      snapshots: [],
+      claims: [],
+    }),
+  )
 
 // 日次の下書きは別の軸。時刻だけで成立する理由なので、通常の実行条件の検査からは外しておく
 // — 混ざると「入力が実行条件になった」のか「20時を過ぎた」のかが assert から区別できない。
@@ -622,12 +633,13 @@ test("下書き生成条件は決めた時刻から1日1回だけ成立する", 
       const saved = await h.run(
         Effect.gen(function* () {
           const drafts = yield* Drafts
+          const dossier = yield* terminalDossier("下書き再開")
           const first = yield* drafts.materialize(
-            { title: "元の題", body: "元の本文", basis: "run 1" },
+            { title: "元の題", body: "元の本文", dossierId: dossier.id },
             "2026-08-08T09:30:00Z",
           )
           const resumed = yield* drafts.materialize(
-            { title: "別の題", body: "別の本文", basis: "run 2" },
+            { title: "別の題", body: "別の本文", dossierId: dossier.id },
             "2026-08-08T10:00:00Z",
           )
           return { first, resumed }
@@ -643,11 +655,11 @@ test("下書き生成条件は決めた時刻から1日1回だけ成立する", 
           const drafts = yield* Drafts
           yield* drafts.requestRevision(saved.first.id, "本文を直す")
           const basisOnly = yield* drafts.materialize(
-            { title: "元の題", body: "元の本文", basis: "根拠だけ変更" },
+            { title: "元の題", body: "元の本文", dossierId: saved.first.dossier_id },
             "2026-08-08T10:10:00Z",
           )
           const changed = yield* drafts.materialize(
-            { title: "元の題", body: "改稿本文", basis: "run 2" },
+            { title: "元の題", body: "改稿本文", dossierId: saved.first.dossier_id },
             "2026-08-08T10:20:00Z",
           )
           return { basisOnly, changed }
