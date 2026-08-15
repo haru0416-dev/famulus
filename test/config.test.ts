@@ -22,7 +22,7 @@ test("model既定値はGPTだけで構成する", () => {
     default: "gpt-5.6-sol",
     cycle: "gpt-5.6-sol",
     work: "gpt-5.6-luna",
-    research: "gpt-5.6-luna-web",
+    research: "gpt-5.6-luna",
   })
 })
 

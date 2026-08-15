@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { isWebModel, MODEL_IDS, poolForModel } from "./models.ts"
+import { MODEL_IDS, poolForModel } from "./models.ts"
 import type { RuntimeSchema } from "./schema.ts"
 
 export interface GenerationRef {
@@ -38,7 +38,7 @@ export const PROFILE_REFS: Readonly<Record<(typeof MODEL_IDS)[number], Generatio
       formatVersion: 1,
       model,
       pool: poolForModel(model),
-      providerExternalIo: isWebModel(model),
+      providerExternalIo: false,
       transportRetryVisibility: "explicit",
     }),
   ]),
@@ -47,7 +47,6 @@ export const PROFILE_REFS: Readonly<Record<(typeof MODEL_IDS)[number], Generatio
 export const profileRefForModel = (model: string): GenerationRef => {
   const ref = PROFILE_REFS[model as keyof typeof PROFILE_REFS]
   if (!ref) throw new Error(`profileが無いmodel: ${model}`)
-  if (isWebModel(model)) throw new Error(`provider側で外部I/Oするprofileは使えない: ${model}`)
   return ref
 }
 

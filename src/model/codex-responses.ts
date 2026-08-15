@@ -29,19 +29,15 @@ import type {
   LanguageModelV4CallOptions,
   LanguageModelV4Content,
   LanguageModelV4GenerateResult,
-  LanguageModelV4ProviderTool,
   LanguageModelV4StreamPart,
 } from "@ai-sdk/provider"
 import {
-  baseModel,
   CODEX_POOL,
-  isWebModel,
   ModelCallError,
   type ModelCallOptions,
   type ModelCallResult,
   type QuotaSignal,
   RUNTIME_PROMPT,
-  stripCitationMarkers,
 } from "./models.ts"
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -223,14 +219,6 @@ const quotaJson = (q: QuotaSignal): JSONObject => ({
   ...(q.exhausted !== undefined ? { exhausted: q.exhausted } : {}),
 })
 
-/** 上流側で実行される web 検索。`-web` が付いたモデル id にだけ追加する(models.ts の isWebModel)。 */
-const WEB_SEARCH_TOOL: LanguageModelV4ProviderTool = {
-  type: "provider",
-  id: "openai.web_search",
-  name: "web_search",
-  args: {},
-}
-
 /** 上流の失敗を、統治が読める型に変換する。429 だけはクォータシグナルを付けて返す。 */
 function toCliError(e: unknown): ModelCallError {
   if (e instanceof ModelCallError) return e
@@ -271,8 +259,7 @@ async function collect(
         open.set(value.id, (open.get(value.id) ?? "") + value.delta)
         break
       case "text-end":
-        // 引用マーカーはここで除去する。残すと DB の全文検索の索引に表示されない文字が入る。
-        content.push({ type: "text", text: stripCitationMarkers(open.get(value.id) ?? "") })
+        content.push({ type: "text", text: open.get(value.id) ?? "" })
         open.delete(value.id)
         break
       case "reasoning-end":
@@ -315,8 +302,6 @@ async function collect(
  * ゲートと会計は src/model/governed.ts の middleware が外側で適用する。これを直接使わない。
  */
 export function codexResponsesModel(modelId: string): LanguageModelV4 {
-  const upstream = baseModel(modelId)
-
   /** 呼び出しごとに生成する。トークンを毎回読み直し、応答ヘッダをこの呼び出し専用の変数へ記録するため。 */
   const build = (): { model: LanguageModelV4; quota: () => QuotaSignal | undefined } => {
     const headers: Record<string, string | undefined> = {}
@@ -355,11 +340,11 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
       }) as unknown as typeof fetch,
     })
 
-    return { model: provider.responses(upstream), quota: () => quotaFromHeaders(headers, Date.now()) }
+    return { model: provider.responses(modelId), quota: () => quotaFromHeaders(headers, Date.now()) }
   }
 
   /**
-   * 上流が拒否する既定値を上書きし、`-web` のときだけ上流側の web 検索を追加する。
+   * 上流が拒否する既定値を上書きする。
    *
    * `strictJsonSchema` を false にするのは、strict が JSON Schema 側に
    * 「全ての object に `additionalProperties: false`、全ての欄を `required`」を要求するため。
@@ -373,7 +358,6 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
       ...options.providerOptions,
       openai: { ...options.providerOptions?.openai, store: false, strictJsonSchema: false },
     },
-    ...(isWebModel(modelId) ? { tools: [...(options.tools ?? []), WEB_SEARCH_TOOL] } : {}),
   })
 
   /** クォータシグナルを統治が読む欄へ書き出す。従量課金換算額はこの経路では取得できないので 0。 */

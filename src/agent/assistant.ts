@@ -60,10 +60,7 @@ loadEnv()
  */
 const workModel = () => appConfig().models.work
 
-/**
- * researcher の委譲エージェントに使うモデル。`-web` は Codex 側の web_search を有効にする接尾辞。
- * researcher には別途 `search` と `fetch` も渡す。
- */
+/** researcher の委譲エージェントに使うモデル。検索はローカルの `search` と `fetch` だけを使う。 */
 const researchModel = () => appConfig().models.research
 
 /**
@@ -136,9 +133,6 @@ const recallTool = (state: TurnState) =>
 
 /**
  * 探す道具。`fetch` が「この URL を開く」で、こちらは URL をまだ知らないとき。
- *
- * モデル呼び出しの内側(Codex 側の web_search)にも検索はあるが、何を引いて何件見たのかが
- * 外から見えない。ここを通せば、引いた先も件数もユーザーの側に残る。
  *
  * 接続先と、その選び方は src/services/Search.ts。
  */
@@ -277,10 +271,7 @@ const fetchTool = tool({
 /**
  * web を調べる役の指示。渡す道具は `search` と `fetch` の2つ。
  *
- * 検索をモデル呼び出しの内側(Codex 側の web_search)に任せると、何を検索したかが
- * ユーザーにも自分にも残らない。`search` を手前に置くと、どの索引を引いて何件見たかが
- * 答えと一緒に DB へ残る。上流側の web_search も両方使えるので、
- * どちらから出たかを分けるために指示で「検索した先」を書かせている。
+ * `search` を手前に置くと、どの索引を引いて何件見たかが答えと一緒に DB へ残る。
  *
  * DB の道具を渡さないのは、外から取得したものが自分の手で DB に入る経路を作らないため。
  * 返ってきたものを覚えるかどうかは呼んだ側が決め、実行を伴うことは propose を通る。
@@ -370,7 +361,7 @@ export const gateTools = <T extends Record<string, unknown>>(tools: T, gate: Too
 
 function buildTools(state: TurnState, gate: ToolGate) {
   const tools = {
-    // ── web を調べる役。明示的な search / fetch と、上流側の web_search を使う。
+    // ── web を調べる役。明示的な search / fetch だけを使う。
     researcher: tool({
       description:
         "web を調べる役。今の値・仕様・相場・営業時間のように**Web上の情報が必要なこと**はこれに依頼する。" +

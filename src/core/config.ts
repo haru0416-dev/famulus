@@ -162,7 +162,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     default: model,
     cycle: text(env, "OPEN_ZERO_CYCLE_MODEL", model),
     work: text(env, "OPEN_ZERO_WORK_MODEL", "gpt-5.6-luna"),
-    research: text(env, "OPEN_ZERO_RESEARCH_MODEL", "gpt-5.6-luna-web"),
+    research: text(env, "OPEN_ZERO_RESEARCH_MODEL", "gpt-5.6-luna"),
   }
   for (const [key, id] of [
     ["OPEN_ZERO_MODEL", models.default],

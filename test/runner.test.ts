@@ -10,13 +10,7 @@ import * as v from "valibot"
 import { test } from "vitest"
 import { parseCodexAuth, quotaFromHeaders } from "../src/model/codex-responses.ts"
 import { PROFILE_REFS, profileRefForModel } from "../src/model/kernel-spec.ts"
-import {
-  assertKnownModel,
-  baseModel,
-  isWebModel,
-  poolForModel,
-  stripCitationMarkers,
-} from "../src/model/models.ts"
+import { assertKnownModel, poolForModel } from "../src/model/models.ts"
 import { ROLE_MODEL, Runner, RunnerLive } from "../src/model/Runner.ts"
 import { rs } from "../src/model/schema.ts"
 import { makeAppLayer } from "../src/runtime.ts"
@@ -202,7 +196,7 @@ test("全modelが同じChatGPT OAuthクォータに載る", () => {
  * 入力元は env と役割表だけで、どちらも打ち間違えられる。
  */
 test("知らないモデル id は経路を選ぶ前に失敗させる", async () => {
-  assert.equal(assertKnownModel("gpt-5.6-luna-web"), "gpt-5.6-luna-web")
+  assert.equal(assertKnownModel("gpt-5.6-luna"), "gpt-5.6-luna")
   assert.throws(() => assertKnownModel("gpt-5.6-lunar"), /知らないモデル id/)
   assert.throws(() => assertKnownModel("claude-opus-4"), /知らないモデル id/)
   assert.throws(() => assertKnownModel(""), /知らないモデル id/)
@@ -278,29 +272,6 @@ test("Codex の応答ヘッダから使用率の高い窓を読む", () => {
 
   // ヘッダが無い応答では undefined を返す(前の状態を上書きしない)。
   assert.equal(quotaFromHeaders({}, now), undefined)
-})
-
-/**
- * 外向きの経路。能力はモデル id が持つので、呼ぶ側にフラグが散らない。
- * 上流に `-web` のまま渡すと「不明なモデル」で落ちる — 目印はこちら側にだけ在る。
- */
-test("`-web` は外に出られる目印で、上流には接尾辞を外して渡す", () => {
-  assert.equal(isWebModel("gpt-5.6-luna-web"), true)
-  assert.equal(isWebModel("gpt-5.6-luna"), false)
-  assert.equal(baseModel("gpt-5.6-luna-web"), "gpt-5.6-luna")
-  assert.equal(baseModel("gpt-5.6-luna"), "gpt-5.6-luna")
-  // クォータは本体と同じ。外を見たかどうかで会計単位は変わらない。
-  assert.equal(poolForModel("gpt-5.6-luna-web"), "chatgpt-oauth")
-})
-
-test("検索結果の引用マーカーを DB に持ち込まない", () => {
-  // 実測した形: U+E200 で開き、U+E202 で区切り、U+E201 で閉じる。
-  const raw = "最新版は 3.22.0 です。\ue200cite\ue202turn2search2\ue201 以上。"
-  const clean = stripCitationMarkers(raw)
-  assert.equal(clean, "最新版は 3.22.0 です。 以上。")
-  assert.doesNotMatch(clean, /[\ue200-\ue2ff]/, "見えない文字が索引に混ざらないこと")
-  // 閉じ忘れの片割れも残さない。
-  assert.equal(stripCitationMarkers("a\ue200b"), "ab")
 })
 
 /**
