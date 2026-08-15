@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { resolve } from "node:path"
 /**
  * ユーザー向け管理 CLI。提案の承認・却下、停止、状態確認、記憶や watch の操作をまとめる。
  * 提案の承認を記録する入口はこの CLI だけで、承認後の実行コネクタはまだ無い。
@@ -20,6 +21,9 @@
  *   oz belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
  *   oz dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定値として保存する(1回ぶんでは見えない値)
  *   oz cleanup [日数] [--dry]… `.data/` の増え続けるものを削除する(events は触らない)
+ *   oz backup              … DBのsnapshotを作り、一時復元して検証してから保持する
+ *   oz restore --verify [path]… backupを一時DBへ復元して検証する
+ *   oz doctor              … 設定・live DB・最新backupを診断する
  *   oz ws                  … workspace の一覧(名前・用途・大きさ・最後に触った時刻)
  *   oz selfdev [--fresh]   … 自分のソースの clone を workspace に置く(コンテナから直せるようにする)
  *   oz intake [--dry] [n]  … 過去の会話を圧縮して DB に入れる(DB の入口)
@@ -38,10 +42,12 @@ import { describeRefusal } from "./core/errors.ts"
 import { selfdev } from "./core/selfdev.ts"
 import { localDayRange, localStamp, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces } from "./core/workspaces.ts"
+import { checkDatabase, createBackup, latestBackup, verifyAndRecordRestore } from "./db/maintenance.ts"
 import { readJournal, renderJournal } from "./journal.ts"
 import { CLAUDE_POOL, CODEX_POOL } from "./model/models.ts"
 import { isRefusal, runtime } from "./runtime.ts"
 import { Attention, type NextMove } from "./services/Attention.ts"
+import { CycleLease } from "./services/CycleLease.ts"
 import { Db } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
 import { AUTONOMOUS_ROLE, BUDGET, Governance } from "./services/Governance.ts"
@@ -82,6 +88,9 @@ const USAGE = `oz — open-zero の承認 CLI
                            --from <ISO> で「いつから真だったか」を遡って書ける
   oz dream [日数] [--dry]   何日ぶんかをまとめて見直し、確定に上げ直す(既定 7 日)
   oz cleanup [日数] [--dry] workspace と読まれない会話を落とす(既定 14 日・events は触らない)
+  oz backup                DB snapshotを作成し、一時復元で検証する
+  oz restore --verify [path] backupを一時DBへ復元し、整合性とschemaを検証する
+  oz doctor                設定・live DB・最新backupを診断する
   oz ws                    workspace の一覧(何のための場所か・大きさ・最後に触った時刻)
   oz selfdev [--fresh]     自分のソースの clone を workspace に置き、中でゲートが通るまで確かめる
                            --fresh は clone ごと取り直す(中で直しかけていたものは消える)
@@ -202,6 +211,11 @@ const program = (argv: readonly string[]) =>
         const dc = yield* discord.where()
         const last = yield* db.meta("cycle:last")
         const lastActive = yield* db.meta("cycle:last_active")
+        const backupAt = yield* db.meta("backup:last_at")
+        const backupPath = yield* db.meta("backup:last_path")
+        const restoreAt = yield* db.meta("restore:last_verified_at")
+        const restorePath = yield* db.meta("restore:last_verified_path")
+        const lease = yield* (yield* CycleLease).status()
         // 記録が溜まっているか。仕組みがあることと中身があることは別で、
         // ここを出さないと「静かなのは用が無いからか、何も知らないからか」がユーザーに分からない。
         const mem = yield* db.get(
@@ -220,6 +234,15 @@ const program = (argv: readonly string[]) =>
             ? `自動処理: 最終 ${last}(最後に実際に動いたのは ${lastActive ?? "まだ無い"})`
             : "自動処理: まだ一度も回っていない — systemctl --user status open-zero-cycle.timer",
           `DB: ${Number(mem?.n ?? 0)} 件(うち取り込み ${Number(mem?.imported ?? 0)} セッション)`,
+          backupAt
+            ? `バックアップ: 最終 ${backupAt} (${backupPath ?? "保存先不明"})`
+            : "バックアップ: まだ無い — oz backup",
+          restoreAt
+            ? `復元検証: 最終 ${restoreAt} (${restorePath ?? "対象不明"})`
+            : "復元検証: まだ無い — oz backup または oz restore --verify",
+          lease.state === "held"
+            ? `cycle lease: held fence=${lease.fence} ${lease.owner_hostname ?? "host不明"}:${lease.owner_pid ?? "pid不明"} expires=${new Date(lease.expires_at_ms as number).toISOString()}`
+            : `cycle lease: ${lease.state} fence=${lease.fence}`,
           `承認待ち: ${pending.length} 件`,
           // 宛先が無いことは実行時に何も起こさない(黙って何もしない)ので、ここで出さないと
           // 「静かなのは用が無いからか、宛先が空だからか」が分からない。行き来はこの1本だけ。
@@ -525,7 +548,73 @@ function describe(e: unknown): string {
 
 const main = async (): Promise<void> => {
   loadEnv()
-  appConfig()
+  let config: ReturnType<typeof appConfig>
+  try {
+    config = appConfig()
+  } catch (error) {
+    console.error(describe(error))
+    process.exitCode = 1
+    return
+  }
+
+  const [command, ...args] = process.argv.slice(2)
+  try {
+    if (command === "backup" || command === "restore" || command === "doctor") {
+      const migrationRuntime = runtime()
+      try {
+        await migrationRuntime.runPromise(Effect.flatMap(Db, () => Effect.void))
+      } finally {
+        await migrationRuntime.dispose()
+      }
+    }
+    if (command === "backup") {
+      if (args.length !== 0) throw new Error("引数は取らない: oz backup")
+      const result = createBackup(config.paths.db, config.paths.backups, {
+        keep: config.maintenance.backupKeep,
+      })
+      console.log(
+        [
+          `バックアップ完了: ${result.path}`,
+          `schema v${result.schemaVersion} / ${kb(result.bytes)}`,
+          `復元検証: ok`,
+          `削除: ${result.removed.length} 世代`,
+        ].join("\n"),
+      )
+      return
+    }
+    if (command === "restore") {
+      if (!args.includes("--verify") || args.filter((arg) => arg === "--verify").length !== 1)
+        throw new Error("復元は検証だけを明示する: oz restore --verify [backup path]")
+      const paths = args.filter((arg) => arg !== "--verify")
+      if (paths.length > 1) throw new Error("backup pathは1つだけ指定する")
+      const backup = paths[0] ? resolve(config.rootDir, paths[0]) : latestBackup(config.paths.backups)
+      if (!backup) throw new Error("検証するbackupが無い: 先に oz backup")
+      const result = verifyAndRecordRestore(config.paths.db, backup)
+      console.log(`復元検証完了: ${backup}\nschema v${result.schemaVersion} / ${kb(result.bytes)}`)
+      return
+    }
+    if (command === "doctor") {
+      if (args.length !== 0) throw new Error("引数は取らない: oz doctor")
+      const live = checkDatabase(config.paths.db)
+      const backup = latestBackup(config.paths.backups)
+      const restored = backup ? verifyAndRecordRestore(config.paths.db, backup) : undefined
+      console.log(
+        [
+          "設定: ok",
+          `live DB: ok (schema v${live.schemaVersion} / ${kb(live.bytes)})`,
+          restored
+            ? `最新backup復元: ok (${backup} / ${kb(restored.bytes)})`
+            : "最新backup復元: 未実施 (backupなし — oz backup)",
+        ].join("\n"),
+      )
+      return
+    }
+  } catch (error) {
+    console.error(describe(error))
+    process.exitCode = 1
+    return
+  }
+
   const rt = runtime()
   try {
     // runPromise は失敗を FiberFailure で包んで投げてくる(message が "An error has occurred" になる)。

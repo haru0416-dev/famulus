@@ -173,7 +173,7 @@ test("空DBを2接続が同時に開いても同じschemaを受理する", async
   }
 })
 
-test("v5をv6へ移行してlease singletonを作る", async () => {
+test("v5を現行版へ移行してlease singletonを作る", async () => {
   const path = join(root, "migrate-v5.db")
   const db = openDb(path)
   db.exec(SCHEMA_SQL)
@@ -202,6 +202,55 @@ test("v5をv6へ移行してlease singletonを作る", async () => {
     migrations: [
       { version: 5, name: "baseline" },
       { version: 6, name: "cycle-lease" },
+      { version: 7, name: "cycle-lease-invariants" },
+    ],
+  })
+})
+
+test("弱い制約のv6をv7へ再構築しlease行を保持する", async () => {
+  const path = join(root, "migrate-v6.db")
+  const db = openDb(path)
+  db.exec(SCHEMA_SQL)
+  db.exec(`DROP TRIGGER cycle_lease_no_delete;
+    DROP TRIGGER cycle_lease_no_reinsert;
+    DROP TRIGGER cycle_lease_fence_monotonic;
+    DROP TRIGGER cycle_lease_owner_requires_fence;
+    ALTER TABLE cycle_lease RENAME TO cycle_lease_current;
+    CREATE TABLE cycle_lease (
+      lease_name TEXT PRIMARY KEY CHECK (lease_name = 'cycle'),
+      state TEXT NOT NULL CHECK (state IN ('free','held','released')),
+      fence INTEGER NOT NULL,
+      owner_id TEXT, owner_host_id TEXT, owner_boot_id TEXT, owner_pid_namespace TEXT,
+      owner_pid INTEGER, owner_start_ticks TEXT, owner_hostname TEXT,
+      acquired_at_ms INTEGER, heartbeat_at_ms INTEGER, expires_at_ms INTEGER, released_at_ms INTEGER,
+      CHECK ((state='free' AND owner_id IS NULL AND released_at_ms IS NULL) OR state!='free')
+    ) STRICT;
+    INSERT INTO cycle_lease SELECT * FROM cycle_lease_current;
+    DROP TABLE cycle_lease_current;
+    INSERT INTO schema_meta VALUES ('version','6'), ('v6-sentinel','keep');
+    INSERT INTO schema_migrations VALUES (6,'cycle-lease','2026-08-15T00:00:00.000Z')`)
+  db.close()
+
+  const rt = makeRuntime(DbLive(path), RunnerStub([{ text: "ok" }]).layer)
+  const state = await rt.runPromise(
+    Effect.gen(function* () {
+      const live = yield* Db
+      return {
+        version: yield* live.meta("version"),
+        sentinel: yield* live.meta("v6-sentinel"),
+        lease: yield* live.get("SELECT state,fence FROM cycle_lease"),
+        migrations: yield* live.all("SELECT version,name FROM schema_migrations ORDER BY version"),
+      }
+    }),
+  )
+  await rt.dispose()
+  assert.deepEqual(state, {
+    version: SCHEMA_VERSION,
+    sentinel: "keep",
+    lease: { state: "free", fence: 0 },
+    migrations: [
+      { version: 6, name: "cycle-lease" },
+      { version: 7, name: "cycle-lease-invariants" },
     ],
   })
 })
@@ -234,6 +283,7 @@ test("v4を現行版へ一度だけ移行し既存データを保持する", asy
       migrations: [
         { version: 5, name: "schema-migrations" },
         { version: 6, name: "cycle-lease" },
+        { version: 7, name: "cycle-lease-invariants" },
       ],
     })
   }

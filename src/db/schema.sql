@@ -1,4 +1,4 @@
--- open-zero schema v6.
+-- open-zero schema v7.
 
 CREATE TABLE schema_meta (
   key TEXT PRIMARY KEY,

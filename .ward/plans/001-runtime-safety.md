@@ -18,7 +18,9 @@ Out of scope: Discord delivery semantics, research schema, external connectors.
 - Resolve data, workspace, and cache paths from repository/config root, never caller cwd.
 - Add additive `schema_migrations`; retain schema shape verification after migrations.
 - Add a `cycle_lease` row with owner process incarnation (host/boot ID, PID, process start identity), monotonic fence token, acquired_at, heartbeat_at, expires_at.
-- Add SQLite online backup, integrity checks, restore-to-temp verification, and retention.
+- Add SQLite online backup, integrity checks, restore-to-temp verification, and retention. Bun 1.3 has no
+  online-backup binding, so use SQLite's transaction-consistent `VACUUM INTO` as the canonical supported
+  alternative; never copy the live main/WAL files directly.
 - Surface last successful backup, restore verification, lease holder, and config errors in `oz status`.
 
 Lease state: `free -> held -> released`; expiry alone never authorizes steal. Recovery first proves the exact old process incarnation is dead (or supervisor kill-and-join succeeds), then transactionally increments the monotonic fence and claims it. If liveness is uncertain or the old process is still alive/paused, recovery refuses to steal. One process owns a lease token and only that owner+fence may renew, commit cycle plan transitions, hand work to an effect gateway, or release it; stale fences fail compare-and-swap.

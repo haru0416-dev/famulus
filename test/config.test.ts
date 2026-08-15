@@ -35,6 +35,7 @@ test("時刻と相互制約を検証する", () => {
     () => parseConfig({ OPEN_ZERO_DAILY_RUNS: "10", OPEN_ZERO_AUTONOMOUS_RUNS: "11" }, "/tmp/open-zero"),
     ConfigError,
   )
+  assert.throws(() => parseConfig({ OPEN_ZERO_BACKUP_KEEP: "0" }, "/tmp/open-zero"), ConfigError)
 })
 
 test("TZとURLを境界で検証する", () => {

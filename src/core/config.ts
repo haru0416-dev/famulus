@@ -52,6 +52,9 @@ export interface AppConfig {
     readonly days: number
     readonly cacheMaxMb: number
   }
+  readonly maintenance: {
+    readonly backupKeep: number
+  }
   readonly web: {
     readonly hostIntervalMs: number
     readonly searxngBase: string
@@ -204,6 +207,9 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     cleanup: {
       days: integer(env, "OPEN_ZERO_CLEANUP_DAYS", 14, issues, { min: 1, max: 3_650 }),
       cacheMaxMb: integer(env, "OPEN_ZERO_CACHE_MAX_MB", 2_048, issues, { min: 1, max: 1_000_000 }),
+    },
+    maintenance: {
+      backupKeep: integer(env, "OPEN_ZERO_BACKUP_KEEP", 7, issues, { min: 1, max: 10_000 }),
     },
     web: {
       hostIntervalMs: integer(env, "OPEN_ZERO_HOST_INTERVAL_MS", 1_000, issues, { min: 0, max: 300_000 }),
