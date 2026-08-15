@@ -208,10 +208,12 @@ CREATE TABLE ledger (
   cache_read   INTEGER NOT NULL DEFAULT 0 CHECK (cache_read >= 0),
   cache_write  INTEGER NOT NULL DEFAULT 0 CHECK (cache_write >= 0),
   summary      TEXT,
-  provenance   TEXT CHECK (provenance IS NULL OR json_valid(provenance))
+  provenance   TEXT CHECK (provenance IS NULL OR json_valid(provenance)),
+  model_attempt_id TEXT REFERENCES model_attempts(id)
 ) STRICT;
 CREATE INDEX idx_ledger_at ON ledger(at, seq);
 CREATE INDEX idx_ledger_role_at ON ledger(role, at) WHERE role IS NOT NULL;
+CREATE UNIQUE INDEX idx_ledger_model_attempt ON ledger(model_attempt_id) WHERE model_attempt_id IS NOT NULL;
 
 CREATE TABLE watchlist (
   id               TEXT PRIMARY KEY,

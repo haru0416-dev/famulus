@@ -149,7 +149,6 @@ const makeRunner = (
         const replay = req.execution
           ? yield* kernel.replayModelResult(req.execution, requestDigest)
           : undefined
-        const replayed = replay !== undefined
         let out: Omit<RunnerResult, "model">
         if (replay) {
           const stored = replay as Partial<RunnerResult>
@@ -176,14 +175,44 @@ const makeRunner = (
                 ? gov.noteQuota({ pool: p.pool, window: "unknown", exhausted: true }, at, Date.now())
                 : Effect.void,
             ),
-            Effect.tapError(() => (attempt ? kernel.finishModelAttempt(attempt, "unknown") : Effect.void)),
+            Effect.tapError(() =>
+              attempt
+                ? kernel.finishModelAttempt(attempt, {
+                    outcome: "unknown",
+                    ledger: {
+                      kind: req.kind,
+                      role: req.role,
+                      model: p.model,
+                      inTok: 0,
+                      outTok: 0,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      provenance: { pool: p.pool, outcome: "unknown" },
+                      at,
+                    },
+                  })
+                : Effect.void,
+            ),
           )
 
           if (attempt) {
-            yield* kernel.finishModelAttempt(attempt, "succeeded", {
+            yield* kernel.finishModelAttempt(attempt, {
+              outcome: "succeeded",
               tokens: out.usage.inTok + out.usage.outTok + out.usage.cacheRead + out.usage.cacheWrite,
               costMicrousd: Math.ceil(out.usage.notionalUsd * 1_000_000),
               response: { ...out, model: p.model },
+              ledger: {
+                kind: req.kind,
+                role: req.role,
+                model: p.model,
+                inTok: out.usage.inTok,
+                outTok: out.usage.outTok,
+                cacheRead: out.usage.cacheRead,
+                cacheWrite: out.usage.cacheWrite,
+                summary: traceOf(out.text),
+                provenance: { pool: p.pool, notionalUsd: out.usage.notionalUsd },
+                at,
+              },
             })
           }
 
@@ -192,7 +221,7 @@ const makeRunner = (
 
         const checked = req.schema?.validate(out.structured)
 
-        if (!replayed)
+        if (!req.execution)
           yield* ledger.record({
             kind: req.kind,
             role: req.role, // role を入れないと日次 run 数の上限を適用できない

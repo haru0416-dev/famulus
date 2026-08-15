@@ -11,7 +11,9 @@ import { Db, DbLive } from "../src/services/Db.ts"
 
 let root = ""
 const dropKernel = (db: ReturnType<typeof openDb>): void => {
-  db.exec(`DROP TABLE model_attempts;
+  db.exec(`DROP INDEX idx_ledger_model_attempt;
+    ALTER TABLE ledger DROP COLUMN model_attempt_id;
+    DROP TABLE model_attempts;
     DROP TABLE budget_reservations;
     DROP TABLE loop_attempts;
     DROP TABLE loop_specs;
@@ -215,6 +217,7 @@ test("v5を現行版へ移行してlease singletonを作る", async () => {
       { version: 7, name: "cycle-lease-invariants" },
       { version: 8, name: "execution-kernel" },
       { version: 9, name: "model-attempt-request-identity" },
+      { version: 10, name: "atomic-model-ledger" },
     ],
   })
 })
@@ -266,6 +269,7 @@ test("弱い制約のv6を現行版へ再構築しlease行を保持する", asyn
       { version: 7, name: "cycle-lease-invariants" },
       { version: 8, name: "execution-kernel" },
       { version: 9, name: "model-attempt-request-identity" },
+      { version: 10, name: "atomic-model-ledger" },
     ],
   })
 })
@@ -301,6 +305,7 @@ test("v4を現行版へ一度だけ移行し既存データを保持する", asy
         { version: 7, name: "cycle-lease-invariants" },
         { version: 8, name: "execution-kernel" },
         { version: 9, name: "model-attempt-request-identity" },
+        { version: 10, name: "atomic-model-ledger" },
       ],
     })
   }

@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite"
 import { readFileSync } from "node:fs"
 
 export type Sqlite = Database
-export const SCHEMA_VERSION = "9"
+export const SCHEMA_VERSION = "10"
 const KERNEL_SQL = readFileSync(new URL("./kernel.sql", import.meta.url), "utf8")
 export const SCHEMA_SQL = `${readFileSync(new URL("./schema.sql", import.meta.url), "utf8")}\n${KERNEL_SQL}`
 
@@ -203,6 +203,13 @@ const MIGRATIONS: readonly Migration[] = [
            CASE WHEN m.state='started' THEN NULL ELSE b.consumed_cost_microusd END,m.started_at,m.finished_at
       FROM model_attempts_v8 m JOIN budget_reservations b ON b.id=m.reservation_id;
     DROP TABLE model_attempts_v8;`,
+  },
+  {
+    from: "9",
+    to: "10",
+    name: "atomic-model-ledger",
+    sql: `ALTER TABLE ledger ADD COLUMN model_attempt_id TEXT REFERENCES model_attempts(id);
+    CREATE UNIQUE INDEX idx_ledger_model_attempt ON ledger(model_attempt_id) WHERE model_attempt_id IS NOT NULL;`,
   },
 ]
 

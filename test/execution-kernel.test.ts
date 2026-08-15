@@ -36,6 +36,10 @@ test("keeperのroot・loop・予約を作りmodel attemptをprovider実行前の
             ),
             rootState: yield* db.get("SELECT status FROM execution_root_state"),
             loopAttempt: yield* db.get("SELECT state,fence,owner_start_ticks FROM loop_attempts"),
+            ledger: yield* db.get(
+              `SELECT l.role,l.model,l.model_attempt_id=m.id linked
+                 FROM ledger l JOIN model_attempts m ON m.id=l.model_attempt_id`,
+            ),
           }
         }),
       )
@@ -55,6 +59,7 @@ test("keeperのroot・loop・予約を作りmodel attemptをprovider実行前の
       assert.equal(rows.loopAttempt?.state, "completed")
       assert.equal(rows.loopAttempt?.fence, 1)
       assert.match(String(rows.loopAttempt?.owner_start_ticks), /^\d+$/)
+      assert.deepEqual(rows.ledger, { role: "structurer", model: "gpt-5.6-luna", linked: 1 })
     },
     [{ text: "", structured: { looked: "確認したが保存対象なし", values: [] } }],
   ))
@@ -78,6 +83,7 @@ test("provider結果が不明な失敗は予約をunknownのまま保持する",
               "SELECT state,consumed_tokens,consumed_cost_microusd FROM budget_reservations WHERE kind='model'",
             ),
             root: yield* db.get("SELECT status FROM execution_root_state"),
+            ledger: yield* db.get("SELECT role,in_tok,out_tok,provenance FROM ledger"),
           }
         }),
       )
@@ -88,6 +94,12 @@ test("provider結果が不明な失敗は予約をunknownのまま保持する",
         consumed_cost_microusd: 5_000_000,
       })
       assert.deepEqual(state.root, { status: "failed" })
+      assert.deepEqual(state.ledger, {
+        role: "structurer",
+        in_tok: 0,
+        out_tok: 0,
+        provenance: JSON.stringify({ outcome: "unknown", pool: "chatgpt-rmod" }),
+      })
     },
     [{ text: "", fail: "provider disconnected" }],
   ))
@@ -330,6 +342,23 @@ test("死亡確認できた旧incarnationだけを高いfenceで回復する", a
         reservation_state: "unknown",
         consumed_tokens: 1000,
         consumed_cost_microusd: 100_000,
+      },
+    )
+    assert.deepEqual(
+      await secondRuntime.runPromise(
+        Effect.flatMap(Db, (db) =>
+          db.get(
+            `SELECT l.kind,l.role,l.model,l.provenance
+               FROM ledger l JOIN model_attempts m ON m.id=l.model_attempt_id
+              WHERE m.state='unknown'`,
+          ),
+        ),
+      ),
+      {
+        kind: "recovered-model-attempt",
+        role: "structurer",
+        model: "gpt-5.6-luna",
+        provenance: JSON.stringify({ outcome: "unknown", recovered: true }),
       },
     )
     await secondRuntime.dispose()

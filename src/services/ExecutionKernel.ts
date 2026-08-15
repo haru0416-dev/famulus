@@ -51,6 +51,29 @@ export interface ModelAttemptToken {
   readonly requestDigest: string
 }
 
+export interface ModelAttemptLedgerInput {
+  readonly kind: string
+  readonly role: string
+  readonly model: string
+  readonly inTok: number
+  readonly outTok: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly summary?: string
+  readonly provenance: unknown
+  readonly at: string
+}
+
+export type ModelAttemptFinish =
+  | {
+      readonly outcome: "succeeded"
+      readonly tokens: number
+      readonly costMicrousd: number
+      readonly response: unknown
+      readonly ledger: ModelAttemptLedgerInput
+    }
+  | { readonly outcome: "unknown"; readonly ledger: ModelAttemptLedgerInput }
+
 export interface OpenSingleLoopInput {
   readonly owner: ExecutionOwnerRef
   readonly stableSlot: string
@@ -217,6 +240,14 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
                     : `owner生死が不明: ${liveness.reason}`,
               })
             const recoveredAt = nowIso()
+            const interrupted = tx.all(
+              `SELECT m.id,l.role,l.profile_snapshot
+                 FROM model_attempts m
+                 JOIN loop_attempts a ON a.id=m.loop_attempt_id
+                 JOIN loop_specs l ON l.id=a.loop_id
+                WHERE m.loop_attempt_id=? AND m.state='started'`,
+              existing.loop_attempt_id,
+            )
             tx.run(
               `UPDATE budget_reservations
                   SET state='unknown',consumed_tokens=tokens,consumed_cost_microusd=cost_microusd,finished_at=?
@@ -227,6 +258,21 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
               recoveredAt,
               existing.loop_attempt_id,
             )
+            for (const attempt of interrupted) {
+              const profile = JSON.parse(attempt.profile_snapshot as string) as { model?: unknown }
+              if (typeof profile.model !== "string") throw new Error("stored profile snapshot has no model")
+              tx.run(
+                `INSERT INTO ledger
+                   (id,at,kind,role,model,in_tok,out_tok,cache_read,cache_write,summary,provenance,model_attempt_id)
+                 VALUES (?,?,'recovered-model-attempt',?,?,0,0,0,0,NULL,?,?)`,
+                randomUUID(),
+                recoveredAt,
+                attempt.role,
+                profile.model,
+                canonicalJson({ outcome: "unknown", recovered: true }),
+                attempt.id,
+              )
+            }
             tx.run(
               "UPDATE model_attempts SET state='unknown',finished_at=? WHERE loop_attempt_id=? AND state='started'",
               recoveredAt,
@@ -440,27 +486,23 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
         return { id, reservationId, context, requestDigest } satisfies ModelAttemptToken
       })
 
-    const finishModelAttempt = (
-      token: ModelAttemptToken,
-      outcome: "succeeded" | "unknown",
-      usage?: { readonly tokens: number; readonly costMicrousd: number; readonly response: unknown },
-    ) =>
-      db.withImmediateTransaction(`finish model attempt ${outcome}`, (tx) => {
+    const finishModelAttempt = (token: ModelAttemptToken, finish: ModelAttemptFinish) =>
+      db.withImmediateTransaction(`finish model attempt ${finish.outcome}`, (tx) => {
         assertCurrent(tx, token.context, false)
         const at = nowIso()
-        const actualTokens = usage?.tokens ?? 0
-        const actualCostMicrousd = usage?.costMicrousd ?? 0
+        const actualTokens = finish.outcome === "succeeded" ? finish.tokens : 0
+        const actualCostMicrousd = finish.outcome === "succeeded" ? finish.costMicrousd : 0
         const overrun =
-          outcome === "succeeded" &&
+          finish.outcome === "succeeded" &&
           (actualTokens > token.context.modelTokenAllowance ||
             actualCostMicrousd > token.context.modelCostAllowanceMicrousd)
         const attempt = tx.run(
           `UPDATE model_attempts SET state=?,response_json=?,actual_tokens=?,actual_cost_microusd=?,finished_at=?
             WHERE id=? AND state='started' AND request_digest=?`,
-          outcome,
-          outcome === "succeeded" ? canonicalJson(usage?.response ?? null) : null,
-          outcome === "succeeded" ? actualTokens : null,
-          outcome === "succeeded" ? actualCostMicrousd : null,
+          finish.outcome,
+          finish.outcome === "succeeded" ? canonicalJson(finish.response) : null,
+          finish.outcome === "succeeded" ? actualTokens : null,
+          finish.outcome === "succeeded" ? actualCostMicrousd : null,
           at,
           token.id,
           token.requestDigest,
@@ -469,11 +511,30 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
         tx.run(
           `UPDATE budget_reservations SET state=?,consumed_tokens=?,consumed_cost_microusd=?,finished_at=?
             WHERE id=? AND state='consuming'`,
-          outcome === "unknown" || overrun ? "unknown" : "consumed",
-          outcome === "unknown" || overrun ? token.context.modelTokenAllowance : actualTokens,
-          outcome === "unknown" || overrun ? token.context.modelCostAllowanceMicrousd : actualCostMicrousd,
+          finish.outcome === "unknown" || overrun ? "unknown" : "consumed",
+          finish.outcome === "unknown" || overrun ? token.context.modelTokenAllowance : actualTokens,
+          finish.outcome === "unknown" || overrun
+            ? token.context.modelCostAllowanceMicrousd
+            : actualCostMicrousd,
           at,
           token.reservationId,
+        )
+        tx.run(
+          `INSERT INTO ledger
+             (id,at,kind,role,model,in_tok,out_tok,cache_read,cache_write,summary,provenance,model_attempt_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          randomUUID(),
+          finish.ledger.at,
+          finish.ledger.kind,
+          finish.ledger.role,
+          finish.ledger.model,
+          finish.ledger.inTok,
+          finish.ledger.outTok,
+          finish.ledger.cacheRead,
+          finish.ledger.cacheWrite,
+          finish.ledger.summary ?? null,
+          canonicalJson(finish.ledger.provenance),
+          token.id,
         )
       })
 
