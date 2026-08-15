@@ -258,7 +258,9 @@ const fetchTool = (fetched?: FetchedEvidence[]) =>
           ...(find ? { find } : {}),
           ...(offset ? { offset } : {}),
         })
-        fetched?.push({ url: page.url, content: page.text, status: page.status })
+        if (page.status >= 200 && page.status < 300 && page.text.length > 0) {
+          fetched?.push({ url: page.url, content: page.text, status: page.status })
+        }
         const head = [
           `上の EXTERNAL は ${page.url} の中身(HTTP ${page.status}`,
           find ? `、「${find}」の当たりだけ` : offset ? `、${offset}字目から` : "",

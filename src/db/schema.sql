@@ -100,12 +100,15 @@ CREATE TABLE research_experiment_runs (
   started_at          TEXT NOT NULL,
   finished_at         TEXT NOT NULL,
   CHECK ((command_status = 'completed') = (command_exit_code IS NOT NULL)),
-  CHECK ((check_status IS NULL) = (check_artifact_id IS NULL)),
-  CHECK ((check_status = 'completed') = (check_exit_code IS NOT NULL)),
   CHECK (
-    (verdict = 'verified' AND check_status = 'completed' AND check_exit_code = 0)
-    OR (verdict = 'failed' AND check_status = 'completed' AND check_exit_code != 0)
-    OR (verdict = 'inconclusive' AND (check_status IS NULL OR check_status != 'completed'))
+    (check_status IS NULL AND check_artifact_id IS NULL AND check_exit_code IS NULL)
+    OR (check_status IS 'completed' AND check_artifact_id IS NOT NULL AND check_exit_code IS NOT NULL)
+    OR (check_status IN ('timed_out','unavailable') AND check_artifact_id IS NOT NULL AND check_exit_code IS NULL)
+  ),
+  CHECK (
+    (verdict = 'verified' AND check_status IS 'completed' AND check_exit_code IS 0)
+    OR (verdict = 'failed' AND check_status IS 'completed' AND check_exit_code IS NOT 0)
+    OR (verdict = 'inconclusive' AND (check_status IS NULL OR check_status IN ('timed_out','unavailable')))
   )
 ) STRICT;
 CREATE INDEX idx_research_runs_claim ON research_experiment_runs(hypothesis_claim_id, started_at);
@@ -120,7 +123,8 @@ CREATE TABLE research_claim_evidence (
   location          TEXT,
   added_at          TEXT NOT NULL,
   CHECK ((artifact_id IS NULL) != (experiment_run_id IS NULL)),
-  CHECK (artifact_id IS NULL OR polarity = 'context' OR length(trim(quote)) > 0)
+  CHECK (quote IS NULL OR length(trim(quote)) > 0),
+  CHECK (artifact_id IS NULL OR polarity = 'context' OR quote IS NOT NULL)
 ) STRICT;
 CREATE INDEX idx_research_evidence_claim ON research_claim_evidence(claim_id, added_at);
 
@@ -155,6 +159,10 @@ WHEN NEW.id != OLD.id OR NEW.dossier_id != OLD.dossier_id OR NEW.statement != OL
 BEGIN
   SELECT RAISE(ABORT, 'research claim identity is immutable');
 END;
+CREATE TRIGGER research_claim_no_delete
+BEFORE DELETE ON research_claims BEGIN
+  SELECT RAISE(ABORT, 'research claims are immutable');
+END;
 CREATE TRIGGER research_claim_insert_open
 BEFORE INSERT ON research_claims WHEN NEW.state != 'open' OR NEW.resolved_at IS NOT NULL
 BEGIN
@@ -175,6 +183,56 @@ WHEN NEW.experiment_run_id IS NOT NULL AND NEW.polarity != 'context'
  AND NOT EXISTS (SELECT 1 FROM research_experiment_runs WHERE id = NEW.experiment_run_id AND verdict = 'verified')
 BEGIN
   SELECT RAISE(ABORT, 'only verified experiment runs can support or refute claims');
+END;
+CREATE TRIGGER research_evidence_same_dossier
+BEFORE INSERT ON research_claim_evidence
+WHEN NEW.artifact_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM research_claims c JOIN research_artifacts a ON a.dossier_id = c.dossier_id
+   WHERE c.id = NEW.claim_id AND a.id = NEW.artifact_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'research artifact evidence must belong to the claim dossier');
+END;
+CREATE TRIGGER research_experiment_evidence_same_dossier
+BEFORE INSERT ON research_claim_evidence
+WHEN NEW.experiment_run_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM research_claims target
+   JOIN research_experiment_runs r ON r.id = NEW.experiment_run_id
+   JOIN research_claims hypothesis ON hypothesis.id = r.hypothesis_claim_id
+   WHERE target.id = NEW.claim_id AND target.dossier_id = hypothesis.dossier_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'research experiment evidence must belong to the claim dossier');
+END;
+CREATE TRIGGER research_evidence_quote_present
+BEFORE INSERT ON research_claim_evidence
+WHEN NEW.artifact_id IS NOT NULL AND NEW.quote IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM research_artifacts WHERE id = NEW.artifact_id AND content IS NOT NULL AND instr(content, NEW.quote) > 0
+)
+BEGIN
+  SELECT RAISE(ABORT, 'research evidence quote must exist in the artifact');
+END;
+CREATE TRIGGER research_experiment_open_dossier
+BEFORE INSERT ON research_experiment_runs
+WHEN NOT EXISTS (
+  SELECT 1 FROM research_claims c JOIN research_dossiers d ON d.id = c.dossier_id
+   WHERE c.id = NEW.hypothesis_claim_id AND c.kind = 'hypothesis' AND d.state = 'open'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'research experiments require an open dossier hypothesis');
+END;
+CREATE TRIGGER research_experiment_artifacts_same_dossier
+BEFORE INSERT ON research_experiment_runs
+WHEN NOT EXISTS (
+  SELECT 1 FROM research_claims c
+   JOIN research_artifacts command_artifact ON command_artifact.id = NEW.command_artifact_id
+   LEFT JOIN research_artifacts check_artifact ON check_artifact.id = NEW.check_artifact_id
+   WHERE c.id = NEW.hypothesis_claim_id
+     AND command_artifact.dossier_id = c.dossier_id
+     AND (NEW.check_artifact_id IS NULL OR check_artifact.dossier_id = c.dossier_id)
+)
+BEGIN
+  SELECT RAISE(ABORT, 'research experiment artifacts must belong to the hypothesis dossier');
 END;
 CREATE TRIGGER research_dossier_conclusion_valid
 BEFORE UPDATE OF state ON research_dossiers
@@ -211,6 +269,15 @@ BEFORE INSERT ON research_artifacts
 WHEN NOT EXISTS (SELECT 1 FROM research_dossiers WHERE id = NEW.dossier_id AND state = 'open')
 BEGIN
   SELECT RAISE(ABORT, 'research artifacts require an open dossier');
+END;
+CREATE TRIGGER research_artifact_supersedes_same_dossier
+BEFORE INSERT ON research_artifacts
+WHEN NEW.supersedes_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM research_artifacts old
+   WHERE old.id = NEW.supersedes_id AND old.dossier_id = NEW.dossier_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'superseded research artifact must belong to the same dossier');
 END;
 CREATE TRIGGER research_evidence_open_dossier
 BEFORE INSERT ON research_claim_evidence

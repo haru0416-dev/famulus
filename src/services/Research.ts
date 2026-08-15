@@ -82,6 +82,7 @@ const makeResearch = () =>
       input: {
         sourceRef: string
         content: string
+        status: number
         mediaType?: string
         provenance?: unknown
         supersedesId?: string
@@ -90,6 +91,14 @@ const makeResearch = () =>
     ) =>
       db.withImmediateTransaction("add research source snapshot", (tx) => {
         requireOpen(tx, dossierId)
+        if (
+          !Number.isInteger(input.status) ||
+          input.status < 200 ||
+          input.status >= 300 ||
+          input.content.length === 0
+        ) {
+          throw new Error(`Research snapshot was not fetched successfully: ${input.sourceRef}`)
+        }
         const id = randomUUID()
         tx.run(
           `INSERT INTO research_artifacts
@@ -102,7 +111,7 @@ const makeResearch = () =>
           sha256(input.content),
           input.sourceRef,
           at,
-          JSON.stringify(input.provenance ?? { source: input.sourceRef }),
+          JSON.stringify(input.provenance ?? { source: input.sourceRef, status: input.status }),
           input.supersedesId ?? null,
           at,
         )
@@ -291,6 +300,10 @@ const makeResearch = () =>
       Effect.all({
         dossier: db.get("SELECT * FROM research_dossiers WHERE id=?", dossierId),
         claims: db.all("SELECT * FROM research_claims WHERE dossier_id=? ORDER BY created_at,id", dossierId),
+        artifacts: db.all(
+          "SELECT * FROM research_artifacts WHERE dossier_id=? ORDER BY created_at,id",
+          dossierId,
+        ),
         evidence: db.all(
           `SELECT e.*,a.kind artifact_kind,a.source_ref,a.sha256,a.captured_at,r.verdict,r.command,r.check_command
              FROM research_claim_evidence e
@@ -300,7 +313,22 @@ const makeResearch = () =>
             WHERE c.dossier_id=? ORDER BY e.added_at,e.id`,
           dossierId,
         ),
-      })
+      }).pipe(
+        Effect.flatMap((result) =>
+          Effect.try({
+            try: () => {
+              for (const value of result.artifacts) {
+                const artifact = cast<ArtifactRow>(value)
+                if (artifact.content !== null && sha256(artifact.content) !== artifact.sha256) {
+                  throw new Error(`Research artifact hash mismatch: ${artifact.id}`)
+                }
+              }
+              return result
+            },
+            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+          }),
+        ),
+      )
 
     const list = (limit = 20) =>
       db.all("SELECT * FROM research_dossiers ORDER BY created_at DESC,id DESC LIMIT ?", limit)
@@ -328,6 +356,14 @@ const makeResearch = () =>
           at,
         )
         const artifacts = input.snapshots.map((snapshot) => {
+          if (
+            !Number.isInteger(snapshot.status) ||
+            snapshot.status < 200 ||
+            snapshot.status >= 300 ||
+            snapshot.content.length === 0
+          ) {
+            throw new Error(`Research snapshot was not fetched successfully: ${snapshot.url}`)
+          }
           const id = randomUUID()
           tx.run(
             `INSERT INTO research_artifacts
@@ -358,6 +394,7 @@ const makeResearch = () =>
           let support = 0
           let refute = 0
           for (const evidence of item.evidence) {
+            if (evidence.quote.trim().length === 0) throw new Error("Research evidence quote cannot be empty")
             const artifact = artifacts.find(
               (candidate) => candidate.url === evidence.url && candidate.content.includes(evidence.quote),
             )

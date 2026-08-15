@@ -24,12 +24,58 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
         const source = yield* research.addSnapshot(dossier.id, {
           sourceRef: "https://example.com/spec",
           content: "Current version is 7.0.62.",
+          status: 200,
         })
         const conclusion = yield* research.addClaim(dossier.id, "Current version is 7.0.62.", "conclusion")
+        const other = yield* research.open("別の調査")
+        const otherSource = yield* research.addSnapshot(other.id, {
+          sourceRef: "https://example.com/other",
+          content: "other",
+          status: 200,
+        })
+        const crossSupersedes = yield* Effect.result(
+          research.addSnapshot(dossier.id, {
+            sourceRef: "https://example.com/new",
+            content: "new",
+            status: 200,
+            supersedesId: otherSource.id,
+          }),
+        )
+        const crossDossier = yield* Effect.result(
+          db.run(
+            `INSERT INTO research_claim_evidence(id,claim_id,artifact_id,polarity,quote,added_at)
+             VALUES ('cross',?,?,'support','other',?)`,
+            conclusion.id,
+            otherSource.id,
+            dossier.created_at,
+          ),
+        )
         yield* research.linkArtifact(conclusion.id, source.id, "support", "Current version is 7.0.62.")
         yield* research.resolveClaim(conclusion.id, "supported")
         yield* research.conclude(dossier.id, conclusion.id, "取得時点の公開ページだけを確認した。")
         const bundle = yield* research.bundle(dossier.id)
+        const deleteClaim = yield* Effect.result(
+          db.run("DELETE FROM research_claims WHERE id=?", conclusion.id),
+        )
+        const evidenceId = String(bundle.evidence[0]?.id)
+        const replaceEvidence = yield* Effect.result(
+          db.run(
+            `INSERT OR REPLACE INTO research_claim_evidence(id,claim_id,artifact_id,polarity,quote,added_at)
+             VALUES (?,?,?,'context',NULL,?)`,
+            evidenceId,
+            conclusion.id,
+            source.id,
+            dossier.created_at,
+          ),
+        )
+        const replaceDossier = yield* Effect.result(
+          db.run(
+            `INSERT OR REPLACE INTO research_dossiers(id,question,state,created_at)
+             VALUES (?,'reopened','open',?)`,
+            dossier.id,
+            dossier.created_at,
+          ),
+        )
         const late = yield* Effect.result(research.addClaim(dossier.id, "late", "observation"))
         const invalid = yield* Effect.result(
           research.recordWebDossier({
@@ -47,15 +93,65 @@ test("結論は引用可能な根拠と限界を持ち、終端後は固定さ�
           }),
         )
         const dossiers = yield* research.list()
-        return { bundle, late, invalid, dossiers, unsupported }
+        const emptySnapshot = yield* Effect.result(
+          research.recordWebDossier({
+            question: "取得失敗",
+            summary: "保存しない",
+            limitations: "本文なし",
+            snapshots: [{ url: "https://x.com/example", content: "", status: 0 }],
+            claims: [],
+          }),
+        )
+        const nanStatus = yield* Effect.result(
+          research.recordWebDossier({
+            question: "不正status",
+            summary: "保存しない",
+            limitations: "NaN",
+            snapshots: [{ url: "https://example.com/nan", content: "body", status: Number.NaN }],
+            claims: [],
+          }),
+        )
+        yield* db.run(
+          `INSERT INTO research_artifacts
+            (id,dossier_id,kind,media_type,content,sha256,source_ref,captured_at,provenance,created_at)
+           VALUES ('bad-hash',?,'source_snapshot','text/plain','tampered',?,'https://example.com/bad',?,'{}',?)`,
+          other.id,
+          "0".repeat(64),
+          dossier.created_at,
+          dossier.created_at,
+        )
+        const hashMismatch = yield* Effect.result(research.bundle(other.id))
+        return {
+          bundle,
+          late,
+          invalid,
+          dossiers,
+          unsupported,
+          crossDossier,
+          crossSupersedes,
+          replaceEvidence,
+          replaceDossier,
+          emptySnapshot,
+          deleteClaim,
+          nanStatus,
+          hashMismatch,
+        }
       }),
     )
     assert.equal(result.bundle.dossier?.state, "concluded")
     assert.equal(result.bundle.evidence.length, 1)
     assert.equal(result.late._tag, "Failure")
     assert.equal(result.invalid._tag, "Failure")
-    assert.equal(result.dossiers.length, 1)
+    assert.equal(result.dossiers.length, 2)
     assert.equal(result.unsupported._tag, "Failure")
+    assert.equal(result.crossDossier._tag, "Failure")
+    assert.equal(result.crossSupersedes._tag, "Failure")
+    assert.equal(result.replaceEvidence._tag, "Failure")
+    assert.equal(result.replaceDossier._tag, "Failure")
+    assert.equal(result.emptySnapshot._tag, "Failure")
+    assert.equal(result.deleteClaim._tag, "Failure")
+    assert.equal(result.nanStatus._tag, "Failure")
+    assert.equal(result.hashMismatch._tag, "Failure")
   }))
 
 test("command成功ではなくcheck成功だけが実験をverifiedにする", () =>
@@ -63,6 +159,7 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
     const verdict = await h.run(
       Effect.gen(function* () {
         const research = yield* Research
+        const db = yield* Db
         const dossier = yield* research.open("変更は条件を満たすか")
         const hypothesis = yield* research.addClaim(dossier.id, "変更後は検査を通る", "hypothesis")
         const run = yield* research.recordExperiment({
@@ -75,8 +172,52 @@ test("command成功ではなくcheck成功だけが実験をverifiedにする", 
           checkCommand: "verify-change",
           checkResult: { status: "completed", exitCode: 1, output: "failed" },
         })
-        return run.verdict
+        const fakeVerified = yield* Effect.result(
+          db.run(
+            `INSERT INTO research_experiment_runs
+              (id,hypothesis_claim_id,protocol,environment,workspace,command,command_artifact_id,command_status,
+               command_exit_code,check_command,verdict,started_at,finished_at)
+             VALUES ('fake',?,'{}','{}','test','run',?,'completed',0,'check','verified',?,?)`,
+            hypothesis.id,
+            run.commandArtifactId,
+            dossier.created_at,
+            dossier.created_at,
+          ),
+        )
+        const other = yield* research.open("別dossier")
+        const otherClaim = yield* research.addClaim(other.id, "別の結論", "conclusion")
+        const otherArtifact = yield* research.addSnapshot(other.id, {
+          sourceRef: "https://example.com/other-run",
+          content: "foreign output",
+          status: 200,
+        })
+        const foreignArtifacts = yield* Effect.result(
+          db.run(
+            `INSERT INTO research_experiment_runs
+              (id,hypothesis_claim_id,protocol,environment,workspace,command,command_artifact_id,command_status,
+               command_exit_code,check_command,check_artifact_id,check_status,check_exit_code,verdict,started_at,finished_at)
+             VALUES ('foreign-artifacts',?,'{}','{}','test','run',?,'completed',0,'check',?,'completed',0,'verified',?,?)`,
+            hypothesis.id,
+            otherArtifact.id,
+            otherArtifact.id,
+            dossier.created_at,
+            dossier.created_at,
+          ),
+        )
+        const crossExperiment = yield* Effect.result(
+          db.run(
+            `INSERT INTO research_claim_evidence(id,claim_id,experiment_run_id,polarity,added_at)
+             VALUES ('cross-run',?,?,'support',?)`,
+            otherClaim.id,
+            run.id,
+            dossier.created_at,
+          ),
+        )
+        return { verdict: run.verdict, fakeVerified, crossExperiment, foreignArtifacts }
       }),
     )
-    assert.equal(verdict, "failed")
+    assert.equal(verdict.verdict, "failed")
+    assert.equal(verdict.fakeVerified._tag, "Failure")
+    assert.equal(verdict.crossExperiment._tag, "Failure")
+    assert.equal(verdict.foreignArtifacts._tag, "Failure")
   }))

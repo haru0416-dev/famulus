@@ -7,7 +7,11 @@ export type Sqlite = Database
 const KERNEL_SQL = readFileSync(new URL("./kernel.sql", import.meta.url), "utf8")
 export const SCHEMA_SQL = `${readFileSync(new URL("./schema.sql", import.meta.url), "utf8")}\n${KERNEL_SQL}`
 
-export const openDb = (path: string): Sqlite => new Database(path)
+export const openDb = (path: string): Sqlite => {
+  const db = new Database(path)
+  db.exec("PRAGMA recursive_triggers = ON;")
+  return db
+}
 
 const normalizeSql = (sql: string): string => {
   let out = ""
