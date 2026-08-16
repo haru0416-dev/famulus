@@ -6,6 +6,7 @@
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
+import { governance } from "../src/model/governed.ts"
 import { Db } from "../src/services/Db.ts"
 import { type BudgetConfig, buildFencedPrompt, Governance } from "../src/services/Governance.ts"
 import { withHarness } from "./helpers.ts"
@@ -209,4 +210,26 @@ test("外部データは偽の境界マーカーを作れない", () => {
   assert.equal((fenced.match(/<<<END EXTERNAL>>>/g) ?? []).length, 1)
   assert.match(fenced, /\\u003c\\u003c\\u003cEND EXTERNAL/)
   assert.ok(fenced.indexOf("<<<END EXTERNAL>>>") < fenced.lastIndexOf("続けて"))
+})
+
+/**
+ * 統治は wrapGenerate にしか掛かっていない。wrapStream を素通しにすると
+ * 事前検査も会計も通らないままモデルへ届く。封鎖が外れたらこの検査が落ちる。
+ * (selfdev で famulus が見つけた穴。2026-08-16)
+ */
+test("stream 経路は統治を通らないので塞いでいる", async () => {
+  const g = governance()
+  assert.ok(g.wrapStream, "wrapStream が無いと素通しになる")
+  await assert.rejects(
+    () =>
+      (g.wrapStream as unknown as (args: { doStream: () => Promise<unknown> }) => Promise<unknown>)({
+        doStream: async () => {
+          throw new Error("doStream が呼ばれた — 封鎖が外れている")
+        },
+      }),
+    (e: unknown) =>
+      e instanceof Error &&
+      e.message.includes("stream 経路は統治") &&
+      !e.message.includes("doStream が呼ばれた"),
+  )
 })

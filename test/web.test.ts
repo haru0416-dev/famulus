@@ -8,7 +8,14 @@
 
 import assert from "node:assert/strict"
 import fc from "fast-check"
-import { test } from "vitest"
+import { test, vi } from "vitest"
+
+// 名前解決は外に出る。ここは止める条件の検査なので、解決そのものは差し替えて
+// ネットワークから切り離す(src/services/Web.ts の denyReason が node:dns/promises を使う)。
+vi.mock("node:dns/promises", () => ({
+  lookup: async (host: string) => (host === "example.com" ? [{ address: "93.184.216.34", family: 4 }] : []),
+}))
+
 import { deniedByName, denyReason, detour, fetchPage, findIn, isPrivateAddress } from "../src/services/Web.ts"
 
 // 同じホストへの間隔は既定 1 秒。ここは fetch を差し替えてあるので誰も接続していない —

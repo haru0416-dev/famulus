@@ -94,6 +94,20 @@ interface Session {
 }
 
 /**
+ * 閉じたあとに次の回へ持ち越すもの。セッションを捨てた回は番号も捨てる —
+ * 4007/4009 や op 9 で受け取った seq を次の IDENTIFY へ持ち越すと、新しいセッションに
+ * 無い番号で heartbeat を送ることになり、同じところで切られ続ける。
+ */
+export function carryOver(
+  code: number,
+  session: Session | undefined,
+  seq: number | null,
+): { session: Session | undefined; seq: number | null } {
+  const keep = STALE.has(code) ? undefined : session
+  return { session: keep, seq: keep ? seq : null }
+}
+
+/**
  * 1回ぶんの接続。閉じた理由を返す — 呼ぶ側が次に RESUME するか IDENTIFY するかを決める。
  * 例外にしないのは、切れることが異常ではないから(Discord 側から定期的に張り直させられる)。
  */
@@ -199,10 +213,9 @@ function once(
       if (settled) return
       settled = true
       if (FATAL.has(e.code)) fatal = e.code
-      if (STALE.has(e.code)) session = undefined
       // 4000 は自分で閉じた回。それ以外は理由を残す — 通知なしの停止を診断するための唯一の記録。
       if (e.code !== 4000) log(`切れた: ${e.code} ${e.reason || ""}`)
-      done({ session, seq, connected, ...(fatal === undefined ? {} : { fatal }) })
+      done({ ...carryOver(e.code, session, seq), connected, ...(fatal === undefined ? {} : { fatal }) })
     }
     ws.onerror = () => {
       /* onclose が続けて来る。ここで done すると二重になる。 */

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "vitest"
 import { SCHEMA_SQL } from "../src/db/sqlite.ts"
-import { presence, stateLine } from "../src/presence.ts"
+import { carryOver, presence, stateLine } from "../src/presence.ts"
 
 /** 現行schemaのDBを1つ作る。shape境界も含めてpresenceと同じ条件で読む。 */
 const withDb = (fn: (path: string, db: Database) => void): void => {
@@ -81,4 +81,23 @@ test("文が作れたら活動として載る", () => {
     // type 4 は前置きの付かない表示。観測(別セッションの GUILD_CREATE)で state がそのまま返る。
     assert.deepEqual(p.activities, [{ type: 4, name: "Custom Status", state: "watch 1" }])
   })
+})
+
+/**
+ * 再接続の持ち越し。セッションが残る回だけ seq を渡す。
+ * 捨てたセッションの番号を持ち越すと、新しいセッションで同じところから切られ続ける。
+ */
+test("セッションごと捨てる終わり方では番号も捨てる", () => {
+  const s = { id: "s1", url: "wss://x" }
+  assert.deepEqual(carryOver(4007, s, 42), { session: undefined, seq: null })
+  assert.deepEqual(carryOver(4009, s, 42), { session: undefined, seq: null })
+})
+
+test("セッションが残る終わり方では番号を持ち越す", () => {
+  const s = { id: "s1", url: "wss://x" }
+  assert.deepEqual(carryOver(4000, s, 42), { session: s, seq: 42 })
+})
+
+test("op 9 で先にセッションを捨てた回も番号は残さない", () => {
+  assert.deepEqual(carryOver(4000, undefined, 42), { session: undefined, seq: null })
 })

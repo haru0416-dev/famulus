@@ -122,6 +122,15 @@ async function noteFailure(model: string, e: unknown): Promise<void> {
 export function governance(): LanguageModelV4Middleware {
   return {
     specificationVersion: "v4",
+    /**
+     * 流し込み経路は塞ぐ。統治を掛けてあるのは `wrapGenerate` だけなので、ここを素通しにすると
+     * 事前検査も会計も通らないままモデルへ届く(xai の `doStream` は実 HTTP でクォータが減る)。
+     * エージェント経路は generate しか使わない(実走で確認済み)。使う側が要るようになったら、
+     * ここに gate → 実行 → account を書いてから開ける。
+     */
+    async wrapStream() {
+      throw new Error("stream 経路は統治(事前検査・会計)を通らない。generate を使う")
+    },
     async wrapGenerate({ doGenerate, model }) {
       await gate(model.modelId)
       let result: Awaited<ReturnType<typeof doGenerate>>
