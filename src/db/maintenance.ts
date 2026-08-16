@@ -13,7 +13,7 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
-import { assertCurrentSchema, openDb } from "./sqlite.ts"
+import { assertCurrentSchema, ensureCurrentSchema, openDb } from "./sqlite.ts"
 
 const BACKUP_FILE = /^open-zero-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f-]+\.db$/
 
@@ -59,6 +59,13 @@ export const verifyRestore = (backupPath: string): DatabaseCheck => {
   const restored = join(root, "restored.db")
   try {
     copyFileSync(backupPath, restored)
+    const db = openDb(restored)
+    try {
+      db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;")
+      ensureCurrentSchema(db, restored, { allowInitialize: false })
+    } finally {
+      db.close()
+    }
     return checkDatabase(restored)
   } finally {
     rmSync(root, { recursive: true, force: true })

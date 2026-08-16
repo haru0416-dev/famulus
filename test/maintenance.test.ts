@@ -5,8 +5,14 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import * as Effect from "effect/Effect"
 import { afterAll, beforeAll, test } from "vitest"
-import { checkDatabase, createBackup, listBackups, verifyRestore } from "../src/db/maintenance.ts"
-import { openDb } from "../src/db/sqlite.ts"
+import {
+  checkDatabase,
+  createBackup,
+  listBackups,
+  verifyAndRecordRestore,
+  verifyRestore,
+} from "../src/db/maintenance.ts"
+import { openDb, SCHEMA_SQL } from "../src/db/sqlite.ts"
 import { RunnerStub } from "../src/model/Runner.ts"
 import { makeRuntime } from "../src/runtime.ts"
 import { Db, DbLive } from "../src/services/Db.ts"
@@ -146,4 +152,54 @@ test("壊れたbackupの復元検証を拒否する", () => {
   chmodSync(corrupt, 0o600)
   assert.throws(() => verifyRestore(corrupt))
   assert.throws(() => checkDatabase(":memory:"), /memory database/)
+})
+
+test("schemaを失ったbackupを復元成功として記録しない", () => {
+  const beforeDb = openDb(source)
+  const before = beforeDb.prepare("SELECT value FROM schema_meta WHERE key='restore:last_verified_at'").get()
+  beforeDb.close()
+
+  const empty = join(root, "empty-backup.db")
+  writeFileSync(empty, "")
+  assert.throws(
+    () => verifyAndRecordRestore(source, empty, new Date("2026-08-15T10:20:33.123Z")),
+    /without schema objects/,
+  )
+
+  const live = openDb(source)
+  assert.deepEqual(
+    live.prepare("SELECT value FROM schema_meta WHERE key='restore:last_verified_at'").get(),
+    before,
+  )
+  live.close()
+
+  const objectless = join(root, "objectless-backup.db")
+  const blank = openDb(objectless)
+  blank.exec("VACUUM")
+  blank.close()
+  assert.throws(() => verifyRestore(objectless), /without schema objects/)
+})
+
+test("pre-ledger backupは一時復元側だけを移行して検証する", () => {
+  const backup = join(root, "legacy-backup.db")
+  const db = openDb(backup)
+  db.exec(SCHEMA_SQL)
+  db.exec("DROP TABLE schema_migrations")
+  db.prepare("INSERT INTO schema_meta(key,value)VALUES('legacy-sentinel','kept')").run()
+  db.close()
+
+  assert.ok(verifyRestore(backup).bytes > 0)
+  const original = openDb(backup)
+  assert.deepEqual(original.prepare("SELECT value FROM schema_meta WHERE key='legacy-sentinel'").get(), {
+    value: "kept",
+  })
+  assert.equal(
+    (
+      original.prepare("SELECT count(*) n FROM sqlite_master WHERE name='schema_migrations'").get() as {
+        n: number
+      }
+    ).n,
+    0,
+  )
+  original.close()
 })

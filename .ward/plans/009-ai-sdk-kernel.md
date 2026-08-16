@@ -36,7 +36,8 @@ Durable model attempts are not a general conversation-resume mechanism. The main
 6. Remove provider-native `web_search`. Research uses the local `search` and `fetch` tools, so policy and observations remain on the host side.
 7. Validate structured Runner results with the existing runtime schema bridge.
 8. Keep ExecutionKernel model attempts available for stable owner-bound work such as keeper jobs. Calls without a meaningful durable owner use Governance and Ledger only.
-9. Create the current SQLite schema once. No schema version or migration chain is maintained.
+9. Create fresh databases from the current SQLite schema in one shot. Plan 001 owns the checksummed additive
+   migration chain for recognized existing databases; the AI SDK kernel does not own schema evolution.
 
 ## Deferred
 

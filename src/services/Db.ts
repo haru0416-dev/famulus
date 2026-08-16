@@ -16,7 +16,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { appConfig } from "../core/config.ts"
 import { DbFailed } from "../core/errors.ts"
-import { assertCurrentSchema, assertUnownedEmptyDb, openDb, SCHEMA_SQL, type Sqlite } from "../db/sqlite.ts"
+import { enableWalJournalMode, ensureCurrentSchema, openDb, type Sqlite } from "../db/sqlite.ts"
 export interface Row {
   readonly [k: string]: unknown
 }
@@ -106,35 +106,9 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
             // poll と cycle が同じ瞬間に開くと journal_mode が WAL の復旧ロックに当たって落ちていた。
             d.exec("PRAGMA busy_timeout = 5000;")
             d.exec("PRAGMA foreign_keys = ON;")
-            const objects = d.prepare("SELECT count(*)AS n FROM sqlite_master").get() as { n: number }
-            if (objects.n === 0) {
-              d.exec("BEGIN IMMEDIATE")
-              try {
-                const afterLock = d.prepare("SELECT count(*)AS n FROM sqlite_master").get() as { n: number }
-                if (afterLock.n === 0) {
-                  assertUnownedEmptyDb(d, path)
-                  d.exec(SCHEMA_SQL)
-                  assertCurrentSchema(d, path)
-                } else {
-                  assertCurrentSchema(d, path)
-                }
-                d.exec("COMMIT")
-              } catch (e) {
-                d.exec("ROLLBACK")
-                throw e
-              }
-            } else {
-              d.exec("BEGIN IMMEDIATE")
-              try {
-                assertCurrentSchema(d, path)
-                d.exec("COMMIT")
-              } catch (e) {
-                d.exec("ROLLBACK")
-                throw e
-              }
-            }
+            ensureCurrentSchema(d, path)
             // shapeを受理してから接続モードを変更する。拒否したDBは変更しない。
-            if (path !== ":memory:") d.exec("PRAGMA journal_mode = WAL;")
+            if (path !== ":memory:") enableWalJournalMode(d)
             return d
           },
           catch: (e) => new DbFailed({ op: `open ${path}`, message: String(e) }),

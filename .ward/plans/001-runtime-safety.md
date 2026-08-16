@@ -16,7 +16,8 @@ Out of scope: Discord delivery semantics, research schema, external connectors.
 
 - Load and validate config before service modules consume values.
 - Resolve data, workspace, and cache paths from repository/config root, never caller cwd.
-- Add additive `schema_migrations`; retain schema shape verification after migrations.
+- Create fresh databases from one current schema snapshot. Upgrade only recognized existing shapes through
+  checksummed additive `schema_migrations`, then retain full schema shape verification.
 - Add a `cycle_lease` row with owner process incarnation (host/boot ID, PID, process start identity), monotonic fence token, acquired_at, heartbeat_at, expires_at.
 - Add SQLite online backup, integrity checks, restore-to-temp verification, and retention. Bun 1.3 has no
   online-backup binding, so use SQLite's transaction-consistent `VACUUM INTO` as the canonical supported
@@ -29,7 +30,8 @@ Lease state: `free -> held -> released`; expiry alone never authorizes steal. Re
 
 1. Introduce a schema-validated `Config` value and remove module-level environment reads.
 2. Make every entrypoint call `loadEnv()` then construct `Config` before runtime layers.
-3. Add migration runner and migrate v4 to the next version without rebuilding data.
+3. Add a migration runner that adopts the exact v4 shape as the baseline, migrates it without rebuilding data,
+   and rejects unknown or checksum-mismatched histories without modification.
 4. Implement cycle lease claim, heartbeat, release, process-incarnation liveness checks, kill-and-join recovery where supported, monotonic fencing, and expired-lease recovery that refuses uncertain/live owners. Check the current fence before every durable plan transition and before handing work to model/tool/Delivery gateways; later plans add their own per-attempt fences rather than weakening this root fence.
 5. Implement `oz backup`, `oz restore --verify`, and `oz doctor` using SQLite backup APIs and integrity checks.
 6. Add tests for invalid numbers, cwd independence, migration idempotency, two-process lease contention, paused live owner past expiry refusing steal, dead process incarnation recovery, PID reuse/start-identity mismatch, stale owner commit/effect-handoff fence rejection, and restore verification.
