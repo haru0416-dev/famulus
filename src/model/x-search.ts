@@ -16,13 +16,13 @@
  * plan 007(Capability)が入ったら、この道具はそこへ登録して分類を受ける。
  */
 import * as Effect from "effect/Effect"
-import { appConfig } from "../core/config.ts"
 import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown } from "../core/errors.ts"
 import { RunnerFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { ModelCallError, XAI_POOL } from "./models.ts"
+import { AGENT_PROFILES } from "./profiles.ts"
 import { traceOf } from "./trace.ts"
 import { loadXaiAccess } from "./xai-auth.ts"
 import { classifyXaiFailure, XAI_BASE_URL } from "./xai-responses.ts"
@@ -166,7 +166,7 @@ export const xSearch = (
   Effect.gen(function* () {
     const gov = yield* Governance
     const ledger = yield* Ledger
-    const model = appConfig().models.research
+    const model = AGENT_PROFILES["x-search"].model()
     const at = nowIso()
     const body = yield* Effect.try({
       try: () => buildXSearchBody(opts, model),

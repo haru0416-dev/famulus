@@ -91,23 +91,31 @@ export function branchBrief(seed: string, transform: ExploreTransform): string {
   ].join("\n")
 }
 
-/** wide への指示の重ね。件数を持たせるのが要点 — 持たせないと3件で満足して帰ってくる。 */
+/**
+ * wide への指示の重ね。件数を持たせるのが要点 — 持たせないと3件で満足して帰ってくる。
+ * テンプレートを世代固定の対象にする(Skill 登録 — src/agent/skills.ts)。件数は task 入力で、
+ * Skill の文面ではない — 埋めても Skill の世代は変わらない。
+ */
+export const WIDE_TEMPLATE = [
+  "**wide モード**: 条件を満たすものを {targetCount} 件まで列挙する。",
+  "1件 = claim 1つ(observation)。それぞれに evidence を付ける。",
+  "{targetCount} 件に届かなければ、何件で尽きたか・どこまで探したかを limitations に書く。",
+  "深掘りしない。列挙が仕事で、評価は親がやる。",
+].join("\n")
+
 export function wideInstructions(targetCount: number): string {
-  return [
-    `**wide モード**: 条件を満たすものを ${targetCount} 件まで列挙する。`,
-    "1件 = claim 1つ(observation)。それぞれに evidence を付ける。",
-    `${targetCount} 件に届かなければ、何件で尽きたか・どこまで探したかを limitations に書く。`,
-    "深掘りしない。列挙が仕事で、評価は親がやる。",
-  ].join("\n")
+  return WIDE_TEMPLATE.replaceAll("{targetCount}", String(targetCount))
 }
 
 /** deep への指示の重ね。対象1つを一次資料で確かめる。 */
+export const DEEP_TEXT = [
+  "**deep モード**: 対象は1つ。一次資料(公式ページ・リポジトリ・仕様書)まで開いて確かめる。",
+  "検索の索引で止まらない — 一次資料を開けなかったら、その旨を limitations に書いて未確認として返す。",
+  "対象の周辺に話を広げない。",
+].join("\n")
+
 export function deepInstructions(): string {
-  return [
-    "**deep モード**: 対象は1つ。一次資料(公式ページ・リポジトリ・仕様書)まで開いて確かめる。",
-    "検索の索引で止まらない — 一次資料を開けなかったら、その旨を limitations に書いて未確認として返す。",
-    "対象の周辺に話を広げない。",
-  ].join("\n")
+  return DEEP_TEXT
 }
 
 export interface Snapshot {

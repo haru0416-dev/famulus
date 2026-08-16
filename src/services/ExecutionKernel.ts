@@ -85,6 +85,8 @@ export interface OpenSingleLoopInput {
   readonly budget: BudgetVector
   readonly modelTokenAllowance: number
   readonly modelCostAllowanceMicrousd: number
+  /** 合成済み SkillPlan(canonical JSON と hash)。省略時は空計画(ZERO_SKILL_PLAN)。 */
+  readonly skillPlan?: { readonly json: string; readonly hash: string }
 }
 
 export interface ExecutionKernelDeps {
@@ -164,7 +166,7 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
           profile: input.profile,
           resultContract: input.resultContract,
           taskInputJson,
-          skillPlanHash: ZERO_SKILL_PLAN_HASH,
+          skillPlanHash: input.skillPlan?.hash ?? ZERO_SKILL_PLAN_HASH,
           budget: input.budget,
           modelTokenAllowance: input.modelTokenAllowance,
           modelCostAllowanceMicrousd: input.modelCostAllowanceMicrousd,
@@ -359,8 +361,8 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
             digestOf(taskInputJson),
             "[]",
             digestOf([]),
-            ZERO_SKILL_PLAN_JSON,
-            ZERO_SKILL_PLAN_HASH,
+            input.skillPlan?.json ?? ZERO_SKILL_PLAN_JSON,
+            input.skillPlan?.hash ?? ZERO_SKILL_PLAN_HASH,
             input.resultContract.id,
             input.resultContract.generation,
             input.resultContract.digest,

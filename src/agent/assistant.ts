@@ -25,10 +25,12 @@ import { causeReason } from "../core/errors.ts"
 import { localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
 import { governedModel } from "../model/governed.ts"
-import { digestOf } from "../model/kernel-spec.ts"
+import { digestOf, profileRefForModel, resultContractRef } from "../model/kernel-spec.ts"
 import { XAI_POOL } from "../model/models.ts"
+import { AGENT_PROFILES, type AgentProfileId, PARENT_AUTHORITY } from "../model/profiles.ts"
 import { Runner } from "../model/Runner.ts"
 import { rs, vs } from "../model/schema.ts"
+import { intersectScope } from "../model/scope.ts"
 import { X_SEARCH_TIMEOUT_MS, xSearch } from "../model/x-search.ts"
 import { run } from "../runtime.ts"
 import { Attention } from "../services/Attention.ts"
@@ -36,6 +38,7 @@ import { CycleLease, type CycleLeaseToken } from "../services/CycleLease.ts"
 import { Db } from "../services/Db.ts"
 import { Discord } from "../services/Discord.ts"
 import { Drafts } from "../services/Drafts.ts"
+import { ExecutionKernel } from "../services/ExecutionKernel.ts"
 import { buildFencedPrompt, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { Memory, renderRecall } from "../services/Memory.ts"
@@ -53,16 +56,18 @@ import {
   type Review,
   reviewOutcome,
 } from "./drafting.ts"
-import { deepInstructions, runExplore, wideInstructions } from "./explore.ts"
+import { runExplore } from "./explore.ts"
+import { compileSkillPlan, renderSkillOverlay, type SkillPlan } from "./skills.ts"
 import { soulInstruction } from "./soul.ts"
 
 /**
  * 作業役のモデル。語を変えて何度も検索する量の多い仕事なので軽量modelに固定する。
+ * 出所は実行主体の全数登録(src/model/profiles.ts)— 経路とモデルの対応はそこの1点で決まる。
  */
-const workModel = () => appConfig().models.work
+const workModel = () => AGENT_PROFILES.digger.model()
 
 /** researcher の委譲エージェントに使うモデル。検索はローカルの `search` と `fetch` だけを使う。 */
-const researchModel = () => appConfig().models.research
+const researchModel = () => AGENT_PROFILES.researcher.model()
 
 /**
  * `shell` が締切のために空けておく時間。この回で分かったことを書くための取り分。
@@ -102,6 +107,8 @@ interface TurnState {
    * 検索役(子)も同じ除外が要る — 子は親の会話を持たないが DB は同じものを見る。
    */
   lastInputEventId: string | undefined
+  /** このターンで開いた委譲の通し番号。kernel の owner id に入る。 */
+  delegations: number
 }
 
 /** 自由文のツール結果を、親モデルへの指示ではなく参照データとして渡す。 */
@@ -370,6 +377,73 @@ async function delegate(
   return r.text || "(委譲エージェントが何も書かずに返した)"
 }
 
+/** 委譲の結果契約。自由文で返る委譲(digger / explore の描画済み本文)に共通。 */
+const TEXT_CONTRACT = resultContractRef("delegate-text-v1", rs(v.string()))
+
+/** 委譲1回ぶんの予算の天井。実行を止める線ではなく、監査と同一性の器(plan 011 Phase A)。 */
+const DELEGATION_BUDGET = {
+  researcher: { modelCalls: 12, toolCalls: 24, tokens: 400_000, costMicrousd: 2_000_000 },
+  digger: { modelCalls: 10, toolCalls: 16, tokens: 200_000, costMicrousd: 1_000_000 },
+  explore: { modelCalls: 56, toolCalls: 100, tokens: 1_500_000, costMicrousd: 8_000_000 },
+} as const
+
+/**
+ * 委譲を kernel の ExecutionRoot/LoopSpec として固定する(.ward/plans/011 Phase A step 6)。
+ *
+ * ここで固定するのは同一性(owner・stable slot・profile・SkillPlan・task 入力の hash)と
+ * 予算の器。モデル呼び出しごとの統治と会計は governed middleware が今までどおり持つ。
+ * scope は交差で検査する — 委譲先の道具が親の authority を超えていたら開かない。
+ */
+async function delegationLoop<T>(
+  state: TurnState,
+  kind: keyof typeof DELEGATION_BUDGET,
+  profileId: AgentProfileId,
+  taskInput: unknown,
+  skillPlan: SkillPlan | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const profile = AGENT_PROFILES[profileId]
+  const budget = DELEGATION_BUDGET[kind]
+  const left = remainingMs()
+  const deadlineAtMs = Date.now() + Math.max(Math.min(Number.isFinite(left) ? left : 600_000, 600_000), 1_000)
+  const scope = intersectScope(
+    { tools: PARENT_AUTHORITY, budget, deadlineAtMs, maxDelegationDepth: 1 },
+    { tools: profile.tools, maxDelegationDepth: 0 },
+  )
+  if (scope.tools.length !== profile.tools.length) {
+    throw new Error(`委譲先 ${profileId} の道具が親の authority を超えている`)
+  }
+  const ordinal = state.delegations++
+  const context = await run(
+    Effect.flatMap(ExecutionKernel, (kernel) =>
+      kernel.openSingleLoop({
+        owner: { kind: "delegation", id: `${state.lastInputEventId ?? "no-input"}:${kind}:${ordinal}` },
+        stableSlot: kind,
+        role: profile.loopRole,
+        profile: profileRefForModel(profile.model()),
+        resultContract:
+          kind === "researcher" ? resultContractRef("researcher-v1", RESEARCH_SCHEMA) : TEXT_CONTRACT,
+        taskInput,
+        deadlineAtMs,
+        budget: scope.budget,
+        modelTokenAllowance: scope.budget.tokens,
+        modelCostAllowanceMicrousd: scope.budget.costMicrousd,
+        ...(skillPlan ? { skillPlan: { json: skillPlan.json, hash: skillPlan.hash } } : {}),
+      }),
+    ),
+  )
+  try {
+    const out = await fn()
+    await run(Effect.flatMap(ExecutionKernel, (kernel) => kernel.finishLoop(context, "completed")))
+    return out
+  } catch (e) {
+    await run(Effect.flatMap(ExecutionKernel, (kernel) => kernel.finishLoop(context, "failed"))).catch(
+      () => {},
+    )
+    throw e
+  }
+}
+
 /** 委譲エージェントに共通の設定。CLI 1回が分単位なので、SDK 側の自動再試行は入れない。 */
 const childOpts = (maxSteps: number) => ({ stopWhen: stepCountIs(maxSteps), maxRetries: 0 }) as const
 
@@ -440,99 +514,112 @@ function buildTools(state: TurnState, gate: ToolGate) {
           if (remainingMs() < 240_000) {
             return `explore を回す時間が残っていない(${remainingLabel()})。次の回の最初に呼ぶ。`
           }
-          const { branches, duplicates } = await runExplore(
-            {
-              model: governedModel(researchModel()),
-              makeTools: (collector) =>
-                gateTools({ search: searchTool(), fetch: fetchTool(collector) }, gate),
-              maxSteps: 6,
-              ...(abortSignal ? { signal: abortSignal } : {}),
-            },
-            task,
-          )
-          return run(
-            Effect.gen(function* () {
-              const research = yield* Research
-              const dossier = yield* research.recordExploreDossier({
-                seed: task,
-                ...(prediction ? { prediction } : {}),
-                ...(exclusions ? { exclusions } : {}),
-                branches: branches.map((b) => ({
-                  transform: b.transform,
-                  empty: b.output.empty,
-                  summary: b.output.summary,
-                  limitations: b.output.limitations,
-                  ...(b.failed ? { failed: b.failed } : {}),
-                  snapshots: b.snapshots,
-                  claims: b.output.claims,
-                })),
-                duplicates,
-              })
-              const rendered = yield* research.render(dossier.id)
-              const stat = branches
-                .map(
-                  (b) => `${b.transform}${b.output.empty ? "(空)" : ""} ${Math.round(b.elapsedMs / 1000)}s`,
-                )
-                .join(" / ")
-              return `${rendered}\n\n分岐: ${stat} / 重複 ${duplicates.length} 件`
-            }),
-          )
+          return delegationLoop(state, "explore", "explore-branch", { task }, undefined, async () => {
+            const { branches, duplicates } = await runExplore(
+              {
+                model: governedModel(AGENT_PROFILES["explore-branch"].model()),
+                makeTools: (collector) =>
+                  gateTools({ search: searchTool(), fetch: fetchTool(collector) }, gate),
+                maxSteps: 6,
+                ...(abortSignal ? { signal: abortSignal } : {}),
+              },
+              task,
+            )
+            return run(
+              Effect.gen(function* () {
+                const research = yield* Research
+                const dossier = yield* research.recordExploreDossier({
+                  seed: task,
+                  ...(prediction ? { prediction } : {}),
+                  ...(exclusions ? { exclusions } : {}),
+                  branches: branches.map((b) => ({
+                    transform: b.transform,
+                    empty: b.output.empty,
+                    summary: b.output.summary,
+                    limitations: b.output.limitations,
+                    ...(b.failed ? { failed: b.failed } : {}),
+                    snapshots: b.snapshots,
+                    claims: b.output.claims,
+                  })),
+                  duplicates,
+                })
+                const rendered = yield* research.render(dossier.id)
+                const stat = branches
+                  .map(
+                    (b) => `${b.transform}${b.output.empty ? "(空)" : ""} ${Math.round(b.elapsedMs / 1000)}s`,
+                  )
+                  .join(" / ")
+                return `${rendered}\n\n分岐: ${stat} / 重複 ${duplicates.length} 件`
+              }),
+            )
+          })
         }
-        // ── wide / deep は同じループへの指示の重ね。既定(mode 省略)の挙動は変えない。
+        // ── wide / deep は同じループへの指示の重ね(Skill として世代固定 — src/agent/skills.ts)。
+        // 既定(mode 省略)は計画なしで、挙動を変えない。
         if (mode === "wide" && (target_count === undefined || target_count < 1 || target_count > 30)) {
           return "wide には target_count(1〜30)が要る。何件まで列挙するかを決めてから呼ぶ。"
         }
-        const overlay =
+        const plan =
           mode === "wide"
-            ? `\n\n${wideInstructions(target_count ?? 10)}`
+            ? compileSkillPlan({ profile: "researcher", method: "research-wide" })
             : mode === "deep"
-              ? `\n\n${deepInstructions()}`
-              : ""
-        const fetched: FetchedEvidence[] = []
-        const generated = await new ToolLoopAgent({
-          model: governedModel(researchModel()),
-          instructions: `${RESEARCHER}${overlay}`,
-          tools: gateTools({ search: searchTool(), fetch: fetchTool(fetched) }, gate),
-          output: Output.object({
-            schema: vs(
-              v.object({
-                limitations: v.string(),
-                claims: v.array(
+              ? compileSkillPlan({ profile: "researcher", method: "research-deep" })
+              : undefined
+        const overlay = plan ? `\n\n${renderSkillOverlay(plan, { targetCount: target_count ?? 10 })}` : ""
+        return delegationLoop(
+          state,
+          "researcher",
+          "researcher",
+          { task, mode: mode ?? "focus", target_count: target_count ?? null },
+          plan,
+          async () => {
+            const fetched: FetchedEvidence[] = []
+            const generated = await new ToolLoopAgent({
+              model: governedModel(researchModel()),
+              instructions: `${RESEARCHER}${overlay}`,
+              tools: gateTools({ search: searchTool(), fetch: fetchTool(fetched) }, gate),
+              output: Output.object({
+                schema: vs(
                   v.object({
-                    statement: v.string(),
-                    kind: v.picklist(["observation", "hypothesis", "conclusion"]),
-                    evidence: v.pipe(
-                      v.array(
-                        v.object({
-                          url: v.string(),
-                          quote: v.string(),
-                          polarity: v.picklist(["support", "refute", "context"]),
-                        }),
-                      ),
-                      v.minLength(1),
+                    limitations: v.string(),
+                    claims: v.array(
+                      v.object({
+                        statement: v.string(),
+                        kind: v.picklist(["observation", "hypothesis", "conclusion"]),
+                        evidence: v.pipe(
+                          v.array(
+                            v.object({
+                              url: v.string(),
+                              quote: v.string(),
+                              polarity: v.picklist(["support", "refute", "context"]),
+                            }),
+                          ),
+                          v.minLength(1),
+                        ),
+                      }),
                     ),
                   }),
                 ),
+                name: "research_dossier",
+                description: "fetchで開いた資料だけに基づくclaimと引用",
               }),
-            ),
-            name: "research_dossier",
-            description: "fetchで開いた資料だけに基づくclaimと引用",
-          }),
-          ...childOpts(10),
-        }).generate({ prompt: task, ...(abortSignal ? { abortSignal } : {}) })
-        const parsed = RESEARCH_SCHEMA.validate(generated.output)
-        if (!parsed.success) throw parsed.error
-        return run(
-          Effect.gen(function* () {
-            const research = yield* Research
-            const dossier = yield* research.recordWebDossier({
-              question: task,
-              limitations: parsed.value.limitations,
-              snapshots: fetched,
-              claims: parsed.value.claims,
-            })
-            return yield* research.render(dossier.id)
-          }),
+              ...childOpts(10),
+            }).generate({ prompt: task, ...(abortSignal ? { abortSignal } : {}) })
+            const parsed = RESEARCH_SCHEMA.validate(generated.output)
+            if (!parsed.success) throw parsed.error
+            return run(
+              Effect.gen(function* () {
+                const research = yield* Research
+                const dossier = yield* research.recordWebDossier({
+                  question: task,
+                  limitations: parsed.value.limitations,
+                  snapshots: fetched,
+                  claims: parsed.value.claims,
+                })
+                return yield* research.render(dossier.id)
+              }),
+            )
+          },
         )
       },
       toModelOutput: untrustedToolOutput("delegate", "researcher"),
@@ -550,15 +637,17 @@ function buildTools(state: TurnState, gate: ToolGate) {
         }),
       ),
       execute: async ({ task }, { abortSignal }) =>
-        delegate(
-          new ToolLoopAgent({
-            model: governedModel(workModel()),
-            instructions: DIGGER,
-            tools: gateTools({ recall: recallTool(state) }, gate),
-            ...childOpts(8),
-          }),
-          task,
-          abortSignal,
+        delegationLoop(state, "digger", "digger", { task }, undefined, () =>
+          delegate(
+            new ToolLoopAgent({
+              model: governedModel(workModel()),
+              instructions: DIGGER,
+              tools: gateTools({ recall: recallTool(state) }, gate),
+              ...childOpts(8),
+            }),
+            task,
+            abortSignal,
+          ),
         ),
       toModelOutput: untrustedToolOutput("delegate", "digger"),
     }),
@@ -1398,7 +1487,7 @@ export const replyStepText = (text: string, toolCalls: readonly unknown[]): stri
  */
 export function createAssistant(opts: AssistantOptions = {}) {
   const modelId = opts.model ?? appConfig().models.default
-  const state: TurnState = { lastInputEventId: undefined }
+  const state: TurnState = { lastInputEventId: undefined, delegations: 0 }
   let history: ModelMessage[] = []
   const token = opts.leaseToken
   const gate: ToolGate = token

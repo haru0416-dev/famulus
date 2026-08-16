@@ -92,3 +92,20 @@ P0 through P2 means plans 001 through 006 plus cross-cutting plans 009 and 011 P
 - GPT cancelled. Provider is now xAI (SuperGrok OAuth): models `grok-4.6` / `grok-4.3`, adapter `src/model/xai-responses.ts`. Plan 009's "sol/luna only" and "Codex Responses adapter" wording is superseded; the boundary itself (one adapter, Governance+Ledger on every call, no silent retry) is unchanged. wrapStream is now blocked in governance middleware.
 - Deliberate deviation from 009/007: `x_search` (provider-executed X search) added as a local tool making an isolated, prechecked, ledgered Responses call — not injected into agent model calls. Reason: no host-side X alternative exists. To be registered under plan 007's Capability model when that lands. See src/model/x-search.ts header.
 - Plan 002 contract addendum: cycle now also calls `flushQueued()` at cycle end (still the single HTTP path) so replies do not wait for the next poll tick. Cycle-log dedupe key is journal-entry-derived.
+
+## Addendum 2026-08-17 (2) — plan 005 / 011 Phase A の実装状態
+
+- **005 実装済み**(commit 233ce77)。比較評価は fixture 2 で対を実施 — どの変形も accepted
+  evidence を足さず、**explore は opt-in 継続**。fixture 1 / 3 の対は契約固定済みの上で未実施。
+- **006 は着手しない**: 005 の「1サイクルを超える有用な分岐」が観測されるまで、006 自身の
+  Why の前提を満たさない。
+- **011 Phase A**: step 1〜6 実装済み — 実行主体の全数登録(profiles.ts)、scope 交差
+  (scope.ts)、provider 道具の回帰網(profiles.test)、組み込み Skill 登録と SkillPlan
+  合成(skills.ts、明示単数選択のみ)、researcher/digger/explore 委譲の kernel LoopSpec 化
+  (owner=delegation:<event>:<kind>:<n>、concurrency 1 開始、SkillPlan hash が同一性に載る)。
+  orthogonal 対(research method + draft presentation)は登録のみで**未計測** — 計測して
+  から有効化する(005 と同じ手順)。
+- **011 step 7 の lease 新テーブルは保留**: loop_specs が snapshot を丸ごと固定する現行方式が
+  Phase A の保持要件を満たしており、lease 表は最初の消費者(coordinator / 006)と同時にしか
+  足せない(README の global stop 「読み書き手なしの新テーブルを作らない」)。
+- 011 Phase B(plugin Skill / router / observer)は 007 / 010 待ちのまま。
