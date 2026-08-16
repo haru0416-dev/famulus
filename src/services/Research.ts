@@ -469,6 +469,145 @@ const makeResearch = () =>
         return { id: dossierId }
       })
 
+    /**
+     * explore(fan-out)1回ぶんを1つのdossierに固定する(.ward/plans/005 step 6)。
+     *
+     * webのdossierと違う点は2つ:
+     * - 分岐の状態(空振り・失敗・重複)を evidence 無しの observation として残す。
+     *   空振りは結果であって欠損ではない — 記録しないと同じ方向をもう一度掘る。
+     * - 親の予想と除外予定を**分岐の結果より先に**固定する。結果を見てから予想を書くと、
+     *   「予想を外した」の判定が後知恵になる(assessment §15)。呼ぶ側は分岐実行前に
+     *   この引数を確定させる。
+     *
+     * 実体のあるclaim(evidence付き)の検証はwebと同じ: quoteは取得snapshotに実在すること。
+     */
+    const recordExploreDossier = (
+      input: {
+        seed: string
+        prediction?: string
+        exclusions?: readonly string[]
+        branches: readonly {
+          transform: string
+          empty: boolean
+          summary: string
+          limitations: string
+          failed?: string
+          snapshots: readonly { url: string; content: string; status: number }[]
+          claims: readonly {
+            statement: string
+            kind: "observation" | "hypothesis"
+            evidence: readonly { url: string; quote: string; polarity: EvidencePolarity }[]
+          }[]
+        }[]
+        duplicates: readonly { statement: string; transforms: readonly string[] }[]
+      },
+      at: string = nowIso(),
+    ) =>
+      db.withImmediateTransaction("record explore dossier", (tx) => {
+        const dossierId = randomUUID()
+        tx.run(INSERT_DOSSIER, dossierId, `[explore] ${input.seed.trim()}`, at)
+
+        /** evidence の無い記録行。open で入れて即 inconclusive に畳む(openのまま残すと終端化できない)。 */
+        const note = (statement: string) => {
+          const id = randomUUID()
+          tx.run(INSERT_CLAIM, id, dossierId, statement, "observation", at)
+          tx.run("UPDATE research_claims SET state='inconclusive',resolved_at=? WHERE id=?", at, id)
+        }
+
+        if (input.prediction) note(`[explore:予想] ${input.prediction.trim()}`)
+        for (const exclusion of input.exclusions ?? []) note(`[explore:除外予定] ${exclusion.trim()}`)
+
+        const limitations: string[] = []
+        for (const branch of input.branches) {
+          const artifacts = branch.snapshots
+            .filter(
+              (s) => Number.isInteger(s.status) && s.status >= 200 && s.status < 300 && s.content.length > 0,
+            )
+            .map((snapshot) => {
+              const id = randomUUID()
+              tx.run(
+                INSERT_SNAPSHOT,
+                id,
+                dossierId,
+                "text/plain",
+                snapshot.content,
+                sha256(snapshot.content),
+                snapshot.url,
+                at,
+                JSON.stringify({ url: snapshot.url, status: snapshot.status, transform: branch.transform }),
+                null,
+                at,
+              )
+              return { ...snapshot, id }
+            })
+
+          note(
+            branch.failed
+              ? `[explore:${branch.transform}] 失敗: ${branch.summary}`
+              : branch.empty
+                ? `[explore:${branch.transform}] 空振り: ${branch.summary}`
+                : `[explore:${branch.transform}] ${branch.summary}`,
+          )
+          if (branch.limitations.trim().length > 0)
+            limitations.push(`${branch.transform}: ${branch.limitations.trim()}`)
+
+          for (const item of branch.claims) {
+            const claimId = randomUUID()
+            tx.run(
+              INSERT_CLAIM,
+              claimId,
+              dossierId,
+              `[${branch.transform}] ${item.statement.trim()}`,
+              item.kind,
+              at,
+            )
+            let support = 0
+            let refute = 0
+            for (const evidence of item.evidence) {
+              if (evidence.quote.trim().length === 0)
+                throw new Error("Research evidence quote cannot be empty")
+              const artifact = artifacts.find(
+                (candidate) => candidate.url === evidence.url && candidate.content.includes(evidence.quote),
+              )
+              if (!artifact)
+                throw new Error(`Research quote is not present in fetched snapshot: ${evidence.url}`)
+              tx.run(
+                INSERT_ARTIFACT_EVIDENCE,
+                randomUUID(),
+                claimId,
+                artifact.id,
+                evidence.polarity,
+                evidence.quote,
+                null,
+                at,
+              )
+              if (evidence.polarity === "support") support += 1
+              if (evidence.polarity === "refute") refute += 1
+            }
+            const state =
+              support > 0 && refute === 0
+                ? "supported"
+                : refute > 0 && support === 0
+                  ? "refuted"
+                  : "inconclusive"
+            tx.run("UPDATE research_claims SET state=?,resolved_at=? WHERE id=?", state, at, claimId)
+          }
+        }
+
+        for (const duplicate of input.duplicates) {
+          note(`[explore:重複] ${duplicate.transforms.join("+")}: ${duplicate.statement.trim()}`)
+        }
+
+        // 統合(conclusion)は分岐の仕事ではないので、dossierは常にinconclusiveで終端化する。
+        tx.run(
+          `UPDATE research_dossiers SET state='inconclusive',limitations=?,concluded_at=? WHERE id=?`,
+          limitations.length > 0 ? limitations.join(" / ") : "explore fan-out(統合前)",
+          at,
+          dossierId,
+        )
+        return { id: dossierId }
+      })
+
     return {
       open,
       addSnapshot,
@@ -483,6 +622,7 @@ const makeResearch = () =>
       list,
       render,
       recordWebDossier,
+      recordExploreDossier,
     } as const
   })
 

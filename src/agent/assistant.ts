@@ -53,6 +53,7 @@ import {
   type Review,
   reviewOutcome,
 } from "./drafting.ts"
+import { deepInstructions, runExplore, wideInstructions } from "./explore.ts"
 import { soulInstruction } from "./soul.ts"
 
 /**
@@ -146,7 +147,7 @@ const recallTool = (state: TurnState) =>
  *
  * 接続先と、その選び方は src/services/Search.ts。
  */
-const searchTool = () =>
+export const searchTool = () =>
   tool({
     description: `語で探して、**題と URL の一覧**を返す。本文は返らない — 開くかどうかは見てから決める。
 - **\`where\` は書かない**のが既定。省くと ${defaultSources().join("・")} へ**同時に**出る
@@ -222,13 +223,13 @@ ${SOURCE_MENU.map((s) => `  - \`${s.name}\` — ${s.what}`).join("\n")}
  * 取ってよい先の判定は src/services/Web.ts。宛先を列挙できない読み取りなので allowlist ではなく
  * 形で拒否する(loopback・私設・link-local・CGNAT)。
  */
-interface FetchedEvidence {
+export interface FetchedEvidence {
   readonly url: string
   readonly content: string
   readonly status: number
 }
 
-const fetchTool = (fetched?: FetchedEvidence[]) =>
+export const fetchTool = (fetched?: FetchedEvidence[]) =>
   tool({
     description: `URL を1つ開いて中身を読む。**一次資料に戻るための道具**。
 検索で拾った値が古そうなとき、公式のページ・レジストリ・リリースノートを直接開いて確かめる。
@@ -289,7 +290,7 @@ const fetchTool = (fetched?: FetchedEvidence[]) =>
     toModelOutput: untrustedToolOutput("web", "page"),
   })
 
-const RESEARCH_SCHEMA = rs(
+export const RESEARCH_SCHEMA = rs(
   v.object({
     limitations: v.string(),
     claims: v.array(
@@ -319,7 +320,7 @@ const RESEARCH_SCHEMA = rs(
  * DB の道具を渡さないのは、外から取得したものが自分の手で DB に入る経路を作らないため。
  * 返ってきたものを覚えるかどうかは呼んだ側が決め、実行を伴うことは propose を通る。
  */
-const RESEARCHER = `web を調べる役。fetchで開いた資料からclaim・引用・限界を構造化して返す。
+export const RESEARCHER = `web を調べる役。fetchで開いた資料からclaim・引用・限界を構造化して返す。
 
 - **まず \`search\` で候補を出し、要るものだけ \`fetch\` で開く。** 順番が逆になると、
   推測で組み立てた URL を開いて何も取れない。
@@ -414,13 +415,83 @@ function buildTools(state: TurnState, gate: ToolGate) {
       inputSchema: vs(
         v.object({
           task: v.pipe(v.string(), v.description("何を調べてほしいか。会話は見えないので一件で分かる形に。")),
+          mode: v.pipe(
+            v.optional(v.picklist(["wide", "deep", "explore"])),
+            v.description(
+              "省略=通常。wide=条件を満たすものの列挙(target_count 必須)。deep=対象1つを一次資料で検証。" +
+                "explore=決められた7方向の独立fan-out(重い。種の枠の外を探すときだけ)。",
+            ),
+          ),
+          target_count: v.pipe(v.optional(v.number()), v.description("wide の目標件数(1〜30)。")),
+          prediction: v.pipe(
+            v.optional(v.string()),
+            v.description("explore用: 実行前の予想。分岐には渡らず、dossier に先に固定される。"),
+          ),
+          exclusions: v.pipe(
+            v.optional(v.array(v.string())),
+            v.description("explore用: 同じ基準で除外した観点。予想と同じく先に固定される。"),
+          ),
         }),
       ),
-      execute: async ({ task }, { abortSignal }) => {
+      execute: async ({ task, mode, target_count, prediction, exclusions }, { abortSignal }) => {
+        // ── explore: コード側の決められた fan-out(.ward/plans/005)。親の自発的な分割に依存しない。
+        if (mode === "explore") {
+          // 分岐7本 × 最大6手は長い。締めの時間を残せない回は始めない — 途中で切ると全分岐が消える。
+          if (remainingMs() < 240_000) {
+            return `explore を回す時間が残っていない(${remainingLabel()})。次の回の最初に呼ぶ。`
+          }
+          const { branches, duplicates } = await runExplore(
+            {
+              model: governedModel(researchModel()),
+              makeTools: (collector) =>
+                gateTools({ search: searchTool(), fetch: fetchTool(collector) }, gate),
+              maxSteps: 6,
+              ...(abortSignal ? { signal: abortSignal } : {}),
+            },
+            task,
+          )
+          return run(
+            Effect.gen(function* () {
+              const research = yield* Research
+              const dossier = yield* research.recordExploreDossier({
+                seed: task,
+                ...(prediction ? { prediction } : {}),
+                ...(exclusions ? { exclusions } : {}),
+                branches: branches.map((b) => ({
+                  transform: b.transform,
+                  empty: b.output.empty,
+                  summary: b.output.summary,
+                  limitations: b.output.limitations,
+                  ...(b.failed ? { failed: b.failed } : {}),
+                  snapshots: b.snapshots,
+                  claims: b.output.claims,
+                })),
+                duplicates,
+              })
+              const rendered = yield* research.render(dossier.id)
+              const stat = branches
+                .map(
+                  (b) => `${b.transform}${b.output.empty ? "(空)" : ""} ${Math.round(b.elapsedMs / 1000)}s`,
+                )
+                .join(" / ")
+              return `${rendered}\n\n分岐: ${stat} / 重複 ${duplicates.length} 件`
+            }),
+          )
+        }
+        // ── wide / deep は同じループへの指示の重ね。既定(mode 省略)の挙動は変えない。
+        if (mode === "wide" && (target_count === undefined || target_count < 1 || target_count > 30)) {
+          return "wide には target_count(1〜30)が要る。何件まで列挙するかを決めてから呼ぶ。"
+        }
+        const overlay =
+          mode === "wide"
+            ? `\n\n${wideInstructions(target_count ?? 10)}`
+            : mode === "deep"
+              ? `\n\n${deepInstructions()}`
+              : ""
         const fetched: FetchedEvidence[] = []
         const generated = await new ToolLoopAgent({
           model: governedModel(researchModel()),
-          instructions: RESEARCHER,
+          instructions: `${RESEARCHER}${overlay}`,
           tools: gateTools({ search: searchTool(), fetch: fetchTool(fetched) }, gate),
           output: Output.object({
             schema: vs(

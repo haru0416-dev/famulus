@@ -1,0 +1,20 @@
+{
+  "id": 2,
+  "seed": "Discord Gateway の再接続でセッションを捨てるとき、シーケンス番号も捨てるべきか",
+  "vocabulary": [
+    "Discord",
+    "Gateway",
+    "再接続",
+    "セッション",
+    "シーケンス番号",
+    "IDENTIFY",
+    "RESUME",
+    "heartbeat"
+  ],
+  "prediction": "公式ドキュメントの再接続仕様と、ライブラリ実装の再現例が出る。WebSocket の外には出ない",
+  "exclusions": [
+    "Discord 以外のチャット製品の一般論"
+  ],
+  "rubric": "新分野名: 契約の語彙・予想のどちらにも無い研究/産業分野の固有名\n新概念名: 契約の語彙に無い技術概念・手法の固有名\n構造差: 種の問いと異なる構造(規格・訴訟・組織論など)で説明された候補\n一次確認: fetch で開いた一次資料の quote が付いている claim\n予想外れ: 契約の prediction に反する観測\n判定は raw artifacts に対して行い、この rubric を実行後に変えない",
+  "fixedAt": "2026-08-16T23:29:20.996Z"
+}

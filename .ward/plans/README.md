@@ -86,3 +86,9 @@ P0 through P2 means plans 001 through 006 plus cross-cutting plans 009 and 011 P
 - Stop after the same verification failure occurs twice; re-derive the approach.
 - Stop if an implementation needs credentials inside Sandbox or model-controlled code.
 - Stop if a new table has no production reader, writer, and targeted test in the same change.
+
+## Addendum 2026-08-17 (post-plan drift record)
+
+- GPT cancelled. Provider is now xAI (SuperGrok OAuth): models `grok-4.6` / `grok-4.3`, adapter `src/model/xai-responses.ts`. Plan 009's "sol/luna only" and "Codex Responses adapter" wording is superseded; the boundary itself (one adapter, Governance+Ledger on every call, no silent retry) is unchanged. wrapStream is now blocked in governance middleware.
+- Deliberate deviation from 009/007: `x_search` (provider-executed X search) added as a local tool making an isolated, prechecked, ledgered Responses call — not injected into agent model calls. Reason: no host-side X alternative exists. To be registered under plan 007's Capability model when that lands. See src/model/x-search.ts header.
+- Plan 002 contract addendum: cycle now also calls `flushQueued()` at cycle end (still the single HTTP path) so replies do not wait for the next poll tick. Cycle-log dedupe key is journal-entry-derived.
