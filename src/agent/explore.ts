@@ -134,6 +134,28 @@ export interface BranchOutcome {
   readonly failed?: string
 }
 
+/**
+ * 引用照合できる claim だけを残す(照合はサービス側と同じ規則: 2xx で取得した本文に quote が
+ * そのまま含まれること)。落とした claim は文の一覧で返す — 記録側で throw させると、
+ * 1件の照合失敗が委譲まるごとを捨てさせ、親が同じ委譲を再試行して手数を燃やす(実測:
+ * 2026-08-17 の watch 回で researcher 3連続失敗)。捏造を通さない砦は記録側に残したまま、
+ * 救える分をここで救う。
+ */
+export function salvageClaims<
+  C extends { readonly statement: string; readonly evidence: readonly { url: string; quote: string }[] },
+>(claims: readonly C[], snapshots: readonly Snapshot[]): { kept: C[]; dropped: string[] } {
+  const verifiable = (e: { url: string; quote: string }) =>
+    snapshots.some((s) => s.url === e.url && s.status >= 200 && s.status < 300 && s.content.includes(e.quote))
+  const kept: C[] = []
+  const dropped: string[] = []
+  for (const claim of claims) {
+    const evidence = claim.evidence.filter(verifiable)
+    if (evidence.length > 0) kept.push({ ...claim, evidence })
+    else dropped.push(claim.statement)
+  }
+  return { kept, dropped }
+}
+
 /** 兄弟間の重複を可視化する。消さない — 重複は「同じ候補に別方向から当たった」という情報。 */
 export function findDuplicates(
   branches: readonly BranchOutcome[],

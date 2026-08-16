@@ -56,7 +56,7 @@ import {
   type Review,
   reviewOutcome,
 } from "./drafting.ts"
-import { runExplore } from "./explore.ts"
+import { runExplore, salvageClaims } from "./explore.ts"
 import { compileSkillPlan, renderSkillOverlay, type SkillPlan } from "./skills.ts"
 import { soulInstruction } from "./soul.ts"
 
@@ -532,15 +532,21 @@ function buildTools(state: TurnState, gate: ToolGate) {
                   seed: task,
                   ...(prediction ? { prediction } : {}),
                   ...(exclusions ? { exclusions } : {}),
-                  branches: branches.map((b) => ({
-                    transform: b.transform,
-                    empty: b.output.empty,
-                    summary: b.output.summary,
-                    limitations: b.output.limitations,
-                    ...(b.failed ? { failed: b.failed } : {}),
-                    snapshots: b.snapshots,
-                    claims: b.output.claims,
-                  })),
+                  branches: branches.map((b) => {
+                    const kept = salvageClaims(b.output.claims, b.snapshots)
+                    return {
+                      transform: b.transform,
+                      empty: b.output.empty,
+                      summary: b.output.summary,
+                      limitations:
+                        kept.dropped.length > 0
+                          ? `${b.output.limitations}\n引用照合で落とした claim: ${kept.dropped.join(" / ")}`
+                          : b.output.limitations,
+                      ...(b.failed ? { failed: b.failed } : {}),
+                      snapshots: b.snapshots,
+                      claims: kept.kept,
+                    }
+                  }),
                   duplicates,
                 })
                 const rendered = yield* research.render(dossier.id)
@@ -607,14 +613,21 @@ function buildTools(state: TurnState, gate: ToolGate) {
             }).generate({ prompt: task, ...(abortSignal ? { abortSignal } : {}) })
             const parsed = RESEARCH_SCHEMA.validate(generated.output)
             if (!parsed.success) throw parsed.error
+            // 照合できない claim はここで落として limitations に残す。記録側で throw させると
+            // 1件の失敗が委譲まるごとを捨てさせる(親が再試行して手数だけ減る — 実測 2026-08-17)。
+            const salvage = salvageClaims(parsed.value.claims, fetched)
+            const limitations =
+              salvage.dropped.length > 0
+                ? `${parsed.value.limitations}\n引用照合で落とした claim: ${salvage.dropped.join(" / ")}`
+                : parsed.value.limitations
             return run(
               Effect.gen(function* () {
                 const research = yield* Research
                 const dossier = yield* research.recordWebDossier({
                   question: task,
-                  limitations: parsed.value.limitations,
+                  limitations,
                   snapshots: fetched,
-                  claims: parsed.value.claims,
+                  claims: salvage.kept,
                 })
                 return yield* research.render(dossier.id)
               }),

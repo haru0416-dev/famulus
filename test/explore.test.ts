@@ -12,6 +12,7 @@ import {
   branchBrief,
   EXPLORE_TRANSFORMS,
   findDuplicates,
+  salvageClaims,
   TRANSFORM_GOAL,
   wideInstructions,
 } from "../src/agent/explore.ts"
@@ -176,4 +177,29 @@ test("explore dossier は snapshot に無い quote を拒否する", async () =>
       )
     assert.match(String(error), /not present in fetched snapshot/)
   })
+})
+
+/**
+ * 引用の救済。照合失敗1件で委譲まるごとを捨てない — 照合できた claim は残し、
+ * 落とした分は文の一覧で返す(limitations 行き)。捏造を通さない砦は記録側に残る。
+ */
+test("照合できない claim は落とし、できた分だけ残す", () => {
+  const snapshots = [{ url: "https://a", content: "実在する本文", status: 200 }]
+  const { kept, dropped } = salvageClaims(
+    [
+      {
+        statement: "実在",
+        evidence: [
+          { url: "https://a", quote: "実在する本文" },
+          { url: "https://a", quote: "無い引用" }, // この evidence だけ落ちる
+        ],
+      },
+      { statement: "捏造", evidence: [{ url: "https://a", quote: "全部無い" }] },
+      { statement: "取得失敗先", evidence: [{ url: "https://404", quote: "実在する本文" }] },
+    ],
+    snapshots,
+  )
+  assert.equal(kept.length, 1)
+  assert.deepEqual(kept[0]?.evidence, [{ url: "https://a", quote: "実在する本文" }])
+  assert.deepEqual(dropped, ["捏造", "取得失敗先"])
 })
