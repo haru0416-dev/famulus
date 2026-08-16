@@ -29,6 +29,7 @@ import { digestOf } from "../model/kernel-spec.ts"
 import { XAI_POOL } from "../model/models.ts"
 import { Runner } from "../model/Runner.ts"
 import { rs, vs } from "../model/schema.ts"
+import { X_SEARCH_TIMEOUT_MS, xSearch } from "../model/x-search.ts"
 import { run } from "../runtime.ts"
 import { Attention } from "../services/Attention.ts"
 import { CycleLease, type CycleLeaseToken } from "../services/CycleLease.ts"
@@ -489,6 +490,59 @@ function buildTools(state: TurnState, gate: ToolGate) {
           abortSignal,
         ),
       toModelOutput: untrustedToolOutput("delegate", "digger"),
+    }),
+
+    x_search: tool({
+      description:
+        "X(旧Twitter)の**実在の投稿**を xAI のサーバ側検索で調べる委譲。回答と投稿 URL の引用が返る。" +
+        "`search` の x(検索エンジンの要約)と違って一次の投稿に当たるので、AI 追跡の watch はまずこれ。" +
+        "重い委譲(実測10秒〜1分)なので観点は1回に1つ。ハンドルと日付(YYYY-MM-DD)で絞ると速く安くなる。",
+      inputSchema: vs(
+        v.object({
+          query: v.pipe(v.string(), v.description("調べたいこと。観点を1つに絞った一件で分かる文。")),
+          allowed_x_handles: v.pipe(
+            v.optional(v.array(v.string())),
+            v.description("この投稿者だけを見る(@は不要)。excluded と同時指定不可。"),
+          ),
+          excluded_x_handles: v.pipe(
+            v.optional(v.array(v.string())),
+            v.description("この投稿者を除外する(@は不要)。"),
+          ),
+          from_date: v.pipe(v.optional(v.string()), v.description("この日以降。YYYY-MM-DD。")),
+          to_date: v.pipe(v.optional(v.string()), v.description("この日以前。YYYY-MM-DD。")),
+        }),
+      ),
+      execute: async (
+        { query, allowed_x_handles, excluded_x_handles, from_date, to_date },
+        { abortSignal },
+      ) => {
+        // 委譲の実測上限(タイムアウト)+締め処理ぶんが残っていなければ呼ばない。
+        // 途中で切られると消費したクォータごと消える。
+        const left = remainingMs()
+        if (left < X_SEARCH_TIMEOUT_MS + RUN_RESERVE_MS) {
+          return `x_search を回す時間が残っていない(${remainingLabel()})。次の回の最初に呼ぶ。`
+        }
+        try {
+          const r = await run(
+            xSearch({
+              query,
+              ...(allowed_x_handles ? { allowedHandles: allowed_x_handles } : {}),
+              ...(excluded_x_handles ? { excludedHandles: excluded_x_handles } : {}),
+              ...(from_date ? { fromDate: from_date } : {}),
+              ...(to_date ? { toDate: to_date } : {}),
+              ...(abortSignal ? { signal: abortSignal } : {}),
+            }),
+          )
+          const cites =
+            r.citations.length > 0
+              ? `\n\n引用:\n${r.citations.map((c) => `- ${c.url}${c.title ? ` (${c.title})` : ""}`).join("\n")}`
+              : "\n\n(引用 URL は返らなかった — 断定の根拠にしない)"
+          return `${r.answer}${cites}\n\n(サーバ側検索 ${r.searches} 回)`
+        } catch (e) {
+          return `x_search 失敗: ${causeReason(e)}`
+        }
+      },
+      toModelOutput: untrustedToolOutput("x", "x_search"),
     }),
 
     // ── 記録。エージェントが DB へ保存し、後のターンで検索する。

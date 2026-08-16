@@ -28,7 +28,7 @@ import {
 } from "./models.ts"
 import { loadXaiAccess } from "./xai-auth.ts"
 
-const XAI_BASE_URL = "https://api.x.ai/v1"
+export const XAI_BASE_URL = "https://api.x.ai/v1"
 
 /** `providerMetadata` の鍵。統治の middleware がここからクォータシグナルを読む。 */
 export const XAI_PROVIDER_META = "supergrok-oauth"
