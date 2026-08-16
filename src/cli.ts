@@ -45,7 +45,8 @@ import { localDayRange, localStamp, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces } from "./core/workspaces.ts"
 import { checkDatabase, createBackup, latestBackup, verifyAndRecordRestore } from "./db/maintenance.ts"
 import { readJournal, renderJournal } from "./journal.ts"
-import { CODEX_POOL } from "./model/models.ts"
+import { CODEX_POOL, XAI_POOL } from "./model/models.ts"
+import { xaiDeviceLogin } from "./model/xai-auth.ts"
 import { isRefusal, runtime } from "./runtime.ts"
 import { Attention, type NextMove } from "./services/Attention.ts"
 import { CycleLease } from "./services/CycleLease.ts"
@@ -97,6 +98,7 @@ const USAGE = `oz — open-zero の承認 CLI
   oz ws                    workspace の一覧(何のための場所か・大きさ・最後に触った時刻)
   oz selfdev [--fresh]     自分のソースの clone を workspace に置き、中でゲートが通るまで確かめる
                            --fresh は clone ごと取り直す(中で直しかけていたものは消える)
+  oz grok-login            SuperGrok OAuth の device flow を通す(トークンを保存)
   oz intake --dry [n]      過去の会話を選別だけして圧縮率を見る(モデルを呼ばない)
   oz intake [n]            未取り込みの会話を古い順に n 件(既定 10)DB へ入れる
                            取り込み元は Claude Code のログと Claude.ai の書き出しの両方
@@ -211,7 +213,7 @@ const program = (argv: readonly string[]) =>
         // production modelは全て同じChatGPT OAuthクォータを使う。
         const nowMs = Date.now()
         const pools: string[] = []
-        for (const pool of [CODEX_POOL]) {
+        for (const pool of [CODEX_POOL, XAI_POOL]) {
           const cd = yield* gov.quotaCooldown(pool, nowMs)
           pools.push(
             cd
@@ -594,6 +596,16 @@ const main = async (): Promise<void> => {
       } finally {
         await migrationRuntime.dispose()
       }
+    }
+    if (command === "grok-login") {
+      // device flow。URL とコードを出して、手元のブラウザでの承認を待つ。
+      if (args.length !== 0) throw new Error("引数は取らない: oz grok-login")
+      const auth = await xaiDeviceLogin((uri, code) => {
+        console.log(`ブラウザで開いて承認する: ${uri}`)
+        console.log(`コード: ${code}`)
+      })
+      console.log(`ログイン完了${auth.email ? `: ${auth.email}` : ""} → ${config.paths.xaiAuth}`)
+      return
     }
     if (command === "backup") {
       if (args.length !== 0) throw new Error("引数は取らない: oz backup")

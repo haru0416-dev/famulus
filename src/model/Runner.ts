@@ -16,9 +16,17 @@ import { accountingRole, currentLane, Governance } from "../services/Governance.
 import { Ledger } from "../services/Ledger.ts"
 import { callCodex } from "./codex-responses.ts"
 import { digestOf, profileRefForModel } from "./kernel-spec.ts"
-import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal, RUNTIME_PROMPT } from "./models.ts"
+import {
+  assertKnownModel,
+  isXaiModel,
+  ModelCallError,
+  poolForModel,
+  type QuotaSignal,
+  RUNTIME_PROMPT,
+} from "./models.ts"
 import type { RuntimeSchema } from "./schema.ts"
 import { traceOf } from "./trace.ts"
+import { callXai } from "./xai-responses.ts"
 
 export type Role = "structurer" | "scout" | "reviewer"
 
@@ -264,7 +272,7 @@ const productionPlan = (role: string): RunPlan => {
 }
 
 /**
- * 本番の層。ChatGPT OAuthの定額クォータをCodex Responsesで使う。
+ * 本番の層。定額クォータを Responses で使う。経路(Codex / xAI)は model id で決まる。
  */
 export const RunnerLive = Layer.effect(
   Runner,
@@ -272,7 +280,7 @@ export const RunnerLive = Layer.effect(
     (req, p) =>
       Effect.tryPromise({
         try: (abort) =>
-          callCodex({
+          (isXaiModel(p.model) ? callXai : callCodex)({
             prompt: req.prompt,
             model: p.model,
             systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,

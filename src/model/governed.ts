@@ -24,8 +24,9 @@ import { isRefusal, run } from "../runtime.ts"
 import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { CODEX_PROVIDER_META, codexResponsesModel } from "./codex-responses.ts"
-import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal } from "./models.ts"
+import { assertKnownModel, isXaiModel, ModelCallError, poolForModel, type QuotaSignal } from "./models.ts"
 import { traceOf } from "./trace.ts"
+import { XAI_PROVIDER_META, xaiResponsesModel } from "./xai-responses.ts"
 
 /**
  * この経路がどちらのクォータを消費するかはプロセス単位で決まる。
@@ -132,7 +133,8 @@ export function governance(): LanguageModelV4Middleware {
         throw e
       }
       // 2つの経路が別の鍵で載せる。どちらも「クォータと従量課金換算額」の欄で、読む側は同じ。
-      const meta = result.providerMetadata?.[CODEX_PROVIDER_META]
+      const meta =
+        result.providerMetadata?.[CODEX_PROVIDER_META] ?? result.providerMetadata?.[XAI_PROVIDER_META]
       const u = result.usage
       await account(
         model.modelId,
@@ -163,5 +165,6 @@ export function governance(): LanguageModelV4Middleware {
  */
 export function governedModel(modelId: string): LanguageModelV4 {
   assertKnownModel(modelId)
-  return wrapLanguageModel({ model: codexResponsesModel(modelId), middleware: governance() })
+  const base = isXaiModel(modelId) ? xaiResponsesModel(modelId) : codexResponsesModel(modelId)
+  return wrapLanguageModel({ model: base, middleware: governance() })
 }

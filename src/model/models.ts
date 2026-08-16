@@ -16,6 +16,9 @@
  */
 export const CODEX_POOL = "chatgpt-oauth"
 
+/** SuperGrok 契約の週次共有プール。Chat / API / x_search が同じプールを消費する。 */
+export const XAI_POOL = "supergrok-oauth"
+
 /**
  * 呼べるモデル id の全体。ここに無い id は受け付けない。
  *
@@ -24,7 +27,10 @@ export const CODEX_POOL = "chatgpt-oauth"
  * どちらも実行を開始した後なので、cycle なら1回ぶんの実行が失敗として残る。
  * 入口で失敗させれば、起動した時点で理由が読める。
  */
-export const MODEL_IDS = ["gpt-5.6-sol", "gpt-5.6-luna"] as const
+export const MODEL_IDS = ["gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "grok-4.3"] as const
+
+/** xAI(SuperGrok OAuth)経路のmodelか。実装の分岐はこの1点で決まる。 */
+export const isXaiModel = (model: string): boolean => model.startsWith("grok-")
 
 export const isKnownModel = (model: string): boolean => (MODEL_IDS as readonly string[]).includes(model)
 
@@ -36,8 +42,8 @@ export const assertKnownModel = (model: string): string => {
   return model
 }
 
-/** GPT modelが消費する永続クォータ集計単位。 */
-export const poolForModel = (_model: string): string => CODEX_POOL
+/** modelが消費する永続クォータ集計単位。GPT は Codex、grok は SuperGrok の契約枠。 */
+export const poolForModel = (model: string): string => (isXaiModel(model) ? XAI_POOL : CODEX_POOL)
 
 /**
  * 既定のシステムプロンプト(コーディング・エージェントの前置き)を置き換える文。

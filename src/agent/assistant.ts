@@ -26,7 +26,7 @@ import { localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
 import { governedModel } from "../model/governed.ts"
 import { digestOf } from "../model/kernel-spec.ts"
-import { CODEX_POOL } from "../model/models.ts"
+import { CODEX_POOL, XAI_POOL } from "../model/models.ts"
 import { Runner } from "../model/Runner.ts"
 import { rs, vs } from "../model/schema.ts"
 import { run } from "../runtime.ts"
@@ -1218,11 +1218,10 @@ function buildTools(state: TurnState, gate: ToolGate) {
             const ledger = yield* Ledger
             const gov = yield* Governance
             const t = yield* ledger.today()
-            // pool は2つある。対話は Claude、検索役は Codex。片方がクールダウン中でも
-            // もう片方は動くので、一括りにすると出来ることを取り違える。
+            // pool ごとに別のクールダウンを持つ。一括りにすると出来ることを取り違える。
             const now = Date.now()
             const states: string[] = []
-            for (const pool of [CODEX_POOL]) {
+            for (const pool of [CODEX_POOL, XAI_POOL]) {
               const cd = yield* gov.quotaCooldown(pool, now)
               states.push(
                 cd

@@ -140,9 +140,13 @@ function toCliError(e: unknown): ModelCallError {
   return new ModelCallError(`codex: ${message}`)
 }
 
-/** doStream の出力を1回ぶんの応答にまとめる。上流が stream しか受けないので doGenerate はこれで作る。 */
-async function collect(
+/**
+ * doStream の出力を1回ぶんの応答にまとめる。上流が stream しか受けないので doGenerate はこれで作る。
+ * xai 経路(src/model/xai-responses.ts)も同じ形の Responses stream を受けるので共用する。
+ */
+export async function collect(
   stream: ReadableStream<LanguageModelV4StreamPart>,
+  wrap: (e: unknown) => ModelCallError = toCliError,
 ): Promise<Omit<LanguageModelV4GenerateResult, "warnings">> {
   const content: LanguageModelV4Content[] = []
   const open = new Map<string, string>()
@@ -190,7 +194,7 @@ async function collect(
         break
     }
   }
-  if (failure !== undefined) throw toCliError(failure)
+  if (failure !== undefined) throw wrap(failure)
 
   return {
     content,

@@ -26,6 +26,7 @@ export interface AppConfig {
     readonly exportRoot: string
     readonly transcriptRoot: string
     readonly codexAuth: string
+    readonly xaiAuth: string
   }
   readonly timeZone: string
   readonly models: {
@@ -215,6 +216,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
         text(env, "OPEN_ZERO_TRANSCRIPT_ROOT", resolve(homedir(), ".claude/projects")),
       ),
       codexAuth: absolutePath(root, text(env, "OPEN_ZERO_CODEX_AUTH", resolve(codexHome, "auth.json"))),
+      xaiAuth: absolutePath(root, text(env, "OPEN_ZERO_XAI_AUTH", resolve(dataDir, "xai-auth.json"))),
     },
     timeZone,
     models,
