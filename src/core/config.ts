@@ -25,7 +25,6 @@ export interface AppConfig {
     readonly runCache: string
     readonly exportRoot: string
     readonly transcriptRoot: string
-    readonly codexAuth: string
     readonly xaiAuth: string
   }
   readonly timeZone: string
@@ -177,12 +176,12 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     issues.push("OPEN_ZERO_TZ: IANAタイムゾーンが必要です")
   }
 
-  const model = text(env, "OPEN_ZERO_MODEL", "gpt-5.6-sol")
+  const model = text(env, "OPEN_ZERO_MODEL", "grok-4.6")
   const models = {
     default: model,
     cycle: text(env, "OPEN_ZERO_CYCLE_MODEL", model),
-    work: text(env, "OPEN_ZERO_WORK_MODEL", "gpt-5.6-luna"),
-    research: text(env, "OPEN_ZERO_RESEARCH_MODEL", "gpt-5.6-luna"),
+    work: text(env, "OPEN_ZERO_WORK_MODEL", "grok-4.3"),
+    research: text(env, "OPEN_ZERO_RESEARCH_MODEL", "grok-4.3"),
   }
   for (const [key, id] of [
     ["OPEN_ZERO_MODEL", models.default],
@@ -190,7 +189,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     ["OPEN_ZERO_WORK_MODEL", models.work],
     ["OPEN_ZERO_RESEARCH_MODEL", models.research],
   ] as const) {
-    if (!isKnownModel(id)) issues.push(`${key}: GPT model idが必要です: ${id}`)
+    if (!isKnownModel(id)) issues.push(`${key}: 既知のmodel idが必要です: ${id}`)
   }
   const discordToken = optional(env, "OPEN_ZERO_DISCORD_TOKEN")
   const discordOwnerId = optional(env, "OPEN_ZERO_DISCORD_OWNER_ID")
@@ -198,7 +197,6 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
   const discordDraft = optional(env, "OPEN_ZERO_DISCORD_CH_DRAFT")
   const discordLog = optional(env, "OPEN_ZERO_DISCORD_CH_LOG")
   const runImage = optional(env, "OPEN_ZERO_RUN_IMAGE")
-  const codexHome = absolutePath(root, text(env, "CODEX_HOME", resolve(homedir(), ".codex")))
   const searxngBase = optionalEndpoint(env, "OPEN_ZERO_SEARXNG", "http://127.0.0.1:8888", issues, {
     allowLoopbackHttp: true,
   })
@@ -215,7 +213,6 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
         root,
         text(env, "OPEN_ZERO_TRANSCRIPT_ROOT", resolve(homedir(), ".claude/projects")),
       ),
-      codexAuth: absolutePath(root, text(env, "OPEN_ZERO_CODEX_AUTH", resolve(codexHome, "auth.json"))),
       xaiAuth: absolutePath(root, text(env, "OPEN_ZERO_XAI_AUTH", resolve(dataDir, "xai-auth.json"))),
     },
     timeZone,

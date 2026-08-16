@@ -526,7 +526,10 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
           const logText = logPost(entry)
           yield* discord.enqueue({
             purpose: "cycle-log",
-            dedupeKey: deliveryKey,
+            // 鍵は journal entry の識別(記録時刻)。deliveryKey(実行条件+cursor)を使うと、
+            // 入力の無い overdue 起動が2回続いたとき同じ鍵で違う本文を enqueue して Conflict になる
+            // (実測 2026-08-17)。entry 由来なら、同じ記録の再送だけが重複として弾かれる。
+            dedupeKey: digestOf({ cycleLog: entry.at }),
             text: logText,
             to: "log",
           })

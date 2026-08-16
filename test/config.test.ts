@@ -6,17 +6,14 @@ import { ConfigError, PROJECT_ROOT, parseConfig } from "../src/core/config.ts"
 
 test("相対パスはcwdではなく設定rootを基準に絶対化する", () => {
   const root = "/tmp/open-zero-config-root"
-  const config = parseConfig(
-    { OPEN_ZERO_DB: "state/open-zero.db", OPEN_ZERO_RUNS: "runs", CODEX_HOME: "codex-home" },
-    root,
-  )
+  const config = parseConfig({ OPEN_ZERO_DB: "state/open-zero.db", OPEN_ZERO_RUNS: "runs" }, root)
   assert.equal(config.paths.db, join(root, "state/open-zero.db"))
   assert.equal(config.paths.runs, join(root, "runs"))
   assert.ok(isAbsolute(config.paths.backups))
   assert.equal(config.paths.runCache, join(root, ".data/run-cache"))
   assert.equal(config.paths.exportRoot, join(root, ".data/claude-export"))
   assert.ok(isAbsolute(config.paths.transcriptRoot))
-  assert.equal(config.paths.codexAuth, join(root, "codex-home/auth.json"))
+  assert.equal(config.paths.xaiAuth, join(root, ".data/xai-auth.json"))
 })
 
 test("SQLiteのmemory pathと空のcycle unitを保持する", () => {
@@ -24,23 +21,23 @@ test("SQLiteのmemory pathと空のcycle unitを保持する", () => {
     {
       OPEN_ZERO_DB: ":memory:",
       OPEN_ZERO_RUNS: ":memory:",
-      OPEN_ZERO_CODEX_AUTH: ":memory:",
+      OPEN_ZERO_XAI_AUTH: ":memory:",
       OPEN_ZERO_CYCLE_UNIT: "",
     },
     "/tmp/open-zero",
   )
   assert.equal(config.paths.db, ":memory:")
   assert.equal(config.paths.runs, "/tmp/open-zero/:memory:")
-  assert.equal(config.paths.codexAuth, "/tmp/open-zero/:memory:")
+  assert.equal(config.paths.xaiAuth, "/tmp/open-zero/:memory:")
   assert.equal(config.cycle.unit, "")
 })
 
-test("model既定値はGPTだけで構成する", () => {
+test("model既定値はGrokだけで構成する", () => {
   assert.deepEqual(parseConfig({}, "/tmp/open-zero").models, {
-    default: "gpt-5.6-sol",
-    cycle: "gpt-5.6-sol",
-    work: "gpt-5.6-luna",
-    research: "gpt-5.6-luna",
+    default: "grok-4.6",
+    cycle: "grok-4.6",
+    work: "grok-4.3",
+    research: "grok-4.3",
   })
 })
 
@@ -53,8 +50,8 @@ test.each([
   assert.throws(() => parseConfig({ [key]: "claude-opus-5" }, "/tmp/open-zero"), ConfigError)
 })
 
-test("terra modelを起動前に拒否する", () => {
-  assert.throws(() => parseConfig({ OPEN_ZERO_MODEL: "gpt-5.6-terra" }, "/tmp/open-zero"), ConfigError)
+test("解約済みのGPT modelを起動前に拒否する", () => {
+  assert.throws(() => parseConfig({ OPEN_ZERO_MODEL: "gpt-5.6-sol" }, "/tmp/open-zero"), ConfigError)
 })
 
 test.each(["NaN", "Infinity", "1e3", "-1", "1.5"])("不正な数値 %s を拒否する", (value) => {

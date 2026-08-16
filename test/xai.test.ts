@@ -9,15 +9,15 @@ import { readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "vitest"
-import { isKnownModel, isXaiModel, poolForModel, XAI_POOL } from "../src/model/models.ts"
+import { isKnownModel, poolForModel, XAI_POOL } from "../src/model/models.ts"
 import { needsRefresh, parseXaiAuth, readXaiAuth, saveXaiAuth, type XaiAuth } from "../src/model/xai-auth.ts"
 import { classifyXaiFailure } from "../src/model/xai-responses.ts"
 
 test("grok model は SuperGrok の pool に載る", () => {
   assert.equal(isKnownModel("grok-4.6"), true)
   assert.equal(isKnownModel("grok-4.3"), true)
-  assert.equal(isXaiModel("grok-4.6"), true)
-  assert.equal(isXaiModel("gpt-5.6-sol"), false)
+  // 解約済みの GPT は id ごと受け付けない。
+  assert.equal(isKnownModel("gpt-5.6-sol"), false)
   assert.equal(poolForModel("grok-4.6"), XAI_POOL)
   assert.equal(poolForModel("grok-4.3"), "supergrok-oauth")
 })

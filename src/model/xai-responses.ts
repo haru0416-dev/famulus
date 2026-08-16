@@ -1,10 +1,10 @@
 /**
  * xAI(Grok)経路の実装。SuperGrok OAuth のトークン(src/model/xai-auth.ts)で
- * `api.x.ai/v1` の Responses API を直接呼ぶ。認証以外の要求形式は Codex 経路と同じ。
+ * `api.x.ai/v1` の Responses API を直接呼ぶ。`store` は false(契約枠の必須指定)。
  *
- * Codex との違いは2つ:
- *  - 応答ヘッダに使用率が入らない。billing API も残量を返さない(実測 2026-08-17 —
- *    読めるのは追加クレジットの台帳だけ)。残量は unknown が既定で、
+ * 残量の扱い(実測 2026-08-17):
+ *  - 応答ヘッダに使用率が入らない。billing API も残量を返さない
+ *    (読めるのは追加クレジットの台帳だけ)。残量は unknown が既定で、
  *    クォータシグナルは**失敗の分類からだけ**作る(classifyXaiFailure)。
  *  - entitlement の誤ブロック(数時間で復旧する 403)がある。枯渇と同じ長さで避けると
  *    必要以上に止まるので、短いクールダウンに分類する。
@@ -14,10 +14,10 @@ import { createOpenAI } from "@ai-sdk/openai"
 import type {
   LanguageModelV4,
   LanguageModelV4CallOptions,
+  LanguageModelV4Content,
   LanguageModelV4GenerateResult,
   LanguageModelV4StreamPart,
 } from "@ai-sdk/provider"
-import { collect } from "./codex-responses.ts"
 import {
   ModelCallError,
   type ModelCallOptions,
@@ -68,6 +68,72 @@ export function classifyXaiFailure(
   return undefined
 }
 
+/**
+ * doStream の出力を1回ぶんの応答にまとめる。doGenerate と構造化呼び出しはこれで作る。
+ * ストリーム中の失敗は素のまま投げ、呼び出し側の catch が toXaiError で変換する。
+ */
+async function collect(
+  stream: ReadableStream<LanguageModelV4StreamPart>,
+): Promise<Omit<LanguageModelV4GenerateResult, "warnings">> {
+  const content: LanguageModelV4Content[] = []
+  const open = new Map<string, string>()
+  let finishReason: LanguageModelV4GenerateResult["finishReason"] = { unified: "stop", raw: undefined }
+  let usage: LanguageModelV4GenerateResult["usage"] | undefined
+  let providerMetadata: LanguageModelV4GenerateResult["providerMetadata"]
+  let failure: unknown
+
+  const reader = stream.getReader()
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    switch (value.type) {
+      case "text-start":
+      case "reasoning-start":
+        open.set(value.id, "")
+        break
+      case "text-delta":
+      case "reasoning-delta":
+        open.set(value.id, (open.get(value.id) ?? "") + value.delta)
+        break
+      case "text-end":
+        content.push({ type: "text", text: open.get(value.id) ?? "" })
+        open.delete(value.id)
+        break
+      case "reasoning-end":
+        content.push({ type: "reasoning", text: open.get(value.id) ?? "" })
+        open.delete(value.id)
+        break
+      case "tool-call":
+      case "tool-result":
+      case "source":
+      case "file":
+        content.push(value)
+        break
+      case "finish":
+        finishReason = value.finishReason
+        usage = value.usage
+        providerMetadata = value.providerMetadata
+        break
+      case "error":
+        failure = value.error
+        break
+      default:
+        break
+    }
+  }
+  if (failure !== undefined) throw failure
+
+  return {
+    content,
+    finishReason,
+    usage: usage ?? {
+      inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 0, text: 0, reasoning: undefined },
+    },
+    ...(providerMetadata ? { providerMetadata } : {}),
+  }
+}
+
 /** 上流の失敗を、統治が読める型に変換する。枯渇・誤ブロックだけクォータシグナルを付ける。 */
 function toXaiError(e: unknown): ModelCallError {
   if (e instanceof ModelCallError) return e
@@ -93,7 +159,12 @@ export function xaiResponsesModel(modelId: string): LanguageModelV4 {
     }) as unknown as typeof fetch,
   })
 
-  /** `store: false` は上流の必須指定。`strictJsonSchema` の事情は Codex 側の同名箇所と同じ。 */
+  /**
+   * `store: false` は契約枠の必須指定。`strictJsonSchema` を false にするのは、strict が
+   * 全ての object に `additionalProperties: false` と全欄 `required` を要求するため —
+   * open-zero のスキーマは valibot 生成で任意欄を持つので、そのままでは 400 で拒否される。
+   * 構造の保証は上流ではなく読み出し側(schema.validate)にある。
+   */
   const prepare = (options: LanguageModelV4CallOptions): LanguageModelV4CallOptions => ({
     ...options,
     providerOptions: {
@@ -121,7 +192,7 @@ export function xaiResponsesModel(modelId: string): LanguageModelV4 {
     async doGenerate(options) {
       try {
         const { stream } = await inner.doStream(prepare(options))
-        const gen = await collect(stream, toXaiError)
+        const gen = await collect(stream)
         return { ...gen, warnings: [], providerMetadata: withMeta(gen.providerMetadata) }
       } catch (e) {
         throw toXaiError(e)
@@ -155,7 +226,7 @@ export function xaiResponsesModel(modelId: string): LanguageModelV4 {
 
 /**
  * xAIを1回呼ぶ構造化処理の入口。src/model/Runner.tsが使う。
- * Codex 側の callCodex と同じ契約(prompt 1つ + 任意の JSON Schema)。
+ * そちらは道具ループを持たないので、prompt 1つと任意の JSON Schema だけを渡す。
  */
 export async function callXai(opts: ModelCallOptions): Promise<ModelCallResult> {
   const model = xaiResponsesModel(opts.model)
@@ -192,7 +263,7 @@ export async function callXai(opts: ModelCallOptions): Promise<ModelCallResult> 
       }
     })()
     if (!opts.onText) void a.cancel()
-    const gen = await collect(b, toXaiError)
+    const gen = await collect(b)
     await relay
 
     const text = gen.content.map((c) => (c.type === "text" ? c.text : "")).join("")

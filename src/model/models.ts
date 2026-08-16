@@ -1,36 +1,29 @@
 /**
- * モデル id と、id から決まること。実装を持つ2つのファイル
- * GPT の Codex Responses 実装と、その上位層が共通で参照する。
+ * モデル id と、id から決まること。xai の Responses 実装と、その上位層が共通で参照する。
  *
- * ここに置くのは「どちらの経路でも同じもの」だけ:
+ * ここに置くのは経路の実装に依存しないものだけ:
  *  - 呼べる id の一覧とpool
- *  - 1回の呼び出しの入出力の型(呼び出し側が経路を分岐しないで済む)
+ *  - 1回の呼び出しの入出力の型
  *  - クォータシグナルと失敗の型(統治がこれを読んで再実行を抑止する)
- *
- * 実装側のファイルに置くと、片方を参照するだけでもう片方への import が要る。
  */
 
 /**
+ * SuperGrok 契約の週次共有プール。Chat / API / x_search が同じプールを消費する。
  * 値が経路名と一致しないのは、DB(`quota:<pool>` と ledger の provenance)に記録済みの履歴と
  * 同じ鍵でないと、改名した時点でクールダウンと集計が過去分と繋がらなくなる。
+ * (旧 GPT 経路の履歴は `chatgpt-oauth` の鍵のまま DB に残っている。)
  */
-export const CODEX_POOL = "chatgpt-oauth"
-
-/** SuperGrok 契約の週次共有プール。Chat / API / x_search が同じプールを消費する。 */
 export const XAI_POOL = "supergrok-oauth"
 
 /**
- * 呼べるモデル id の全体。ここに無い id は受け付けない。
+ * 呼べるモデル id の全体。ここに無い id は受け付けない。実測で疎通済みの id だけ載せる。
  *
  * id の入力元は env(`OPEN_ZERO_MODEL` など)と役割表だけで、どちらも打ち間違えられる。
- * 検査せずに通すとCodex上流の4xxで失敗する —
+ * 検査せずに通すと上流の4xxで失敗する —
  * どちらも実行を開始した後なので、cycle なら1回ぶんの実行が失敗として残る。
  * 入口で失敗させれば、起動した時点で理由が読める。
  */
-export const MODEL_IDS = ["gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "grok-4.3"] as const
-
-/** xAI(SuperGrok OAuth)経路のmodelか。実装の分岐はこの1点で決まる。 */
-export const isXaiModel = (model: string): boolean => model.startsWith("grok-")
+export const MODEL_IDS = ["grok-4.6", "grok-4.3"] as const
 
 export const isKnownModel = (model: string): boolean => (MODEL_IDS as readonly string[]).includes(model)
 
@@ -42,8 +35,8 @@ export const assertKnownModel = (model: string): string => {
   return model
 }
 
-/** modelが消費する永続クォータ集計単位。GPT は Codex、grok は SuperGrok の契約枠。 */
-export const poolForModel = (model: string): string => (isXaiModel(model) ? XAI_POOL : CODEX_POOL)
+/** modelが消費する永続クォータ集計単位。production model は全て SuperGrok の契約枠に載る。 */
+export const poolForModel = (_model: string): string => XAI_POOL
 
 /**
  * 既定のシステムプロンプト(コーディング・エージェントの前置き)を置き換える文。

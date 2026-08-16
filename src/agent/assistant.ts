@@ -12,7 +12,7 @@
  * 道具は `createAssistant()` が1ターンぶんの状態をクロージャで保持して作る。前の形はフックで登録していて、
  * 1回のターンに固有のもの(今の入力の event id)をモジュール変数に置くしかなかった。
  *
- * モデル呼び出しは全て Codex Responses 経由の GPT を使う。
+ * モデル呼び出しは全て SuperGrok OAuth 経由の Grok を使う。
  */
 
 import { basename } from "node:path"
@@ -26,7 +26,7 @@ import { localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
 import { governedModel } from "../model/governed.ts"
 import { digestOf } from "../model/kernel-spec.ts"
-import { CODEX_POOL, XAI_POOL } from "../model/models.ts"
+import { XAI_POOL } from "../model/models.ts"
 import { Runner } from "../model/Runner.ts"
 import { rs, vs } from "../model/schema.ts"
 import { run } from "../runtime.ts"
@@ -1221,7 +1221,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
             // pool ごとに別のクールダウンを持つ。一括りにすると出来ることを取り違える。
             const now = Date.now()
             const states: string[] = []
-            for (const pool of [CODEX_POOL, XAI_POOL]) {
+            for (const pool of [XAI_POOL]) {
               const cd = yield* gov.quotaCooldown(pool, now)
               states.push(
                 cd

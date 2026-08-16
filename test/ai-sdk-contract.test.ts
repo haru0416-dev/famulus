@@ -16,6 +16,6 @@ test("AI SDK execution kernel is pinned to the tested stable agent API", () => {
 })
 
 test("production modelはGPTだけを受け付ける", () => {
-  assert.equal(governedModel("gpt-5.6-sol").modelId, "gpt-5.6-sol")
+  assert.equal(governedModel("grok-4.6").modelId, "grok-4.6")
   assert.throws(() => governedModel("claude-opus-5"), /知らないモデル id/)
 })

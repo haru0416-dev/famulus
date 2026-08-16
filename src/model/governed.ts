@@ -23,8 +23,7 @@ import { nowIso } from "../core/time.ts"
 import { isRefusal, run } from "../runtime.ts"
 import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
-import { CODEX_PROVIDER_META, codexResponsesModel } from "./codex-responses.ts"
-import { assertKnownModel, isXaiModel, ModelCallError, poolForModel, type QuotaSignal } from "./models.ts"
+import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal } from "./models.ts"
 import { traceOf } from "./trace.ts"
 import { XAI_PROVIDER_META, xaiResponsesModel } from "./xai-responses.ts"
 
@@ -132,9 +131,7 @@ export function governance(): LanguageModelV4Middleware {
         await noteFailure(model.modelId, e)
         throw e
       }
-      // 2つの経路が別の鍵で載せる。どちらも「クォータと従量課金換算額」の欄で、読む側は同じ。
-      const meta =
-        result.providerMetadata?.[CODEX_PROVIDER_META] ?? result.providerMetadata?.[XAI_PROVIDER_META]
+      const meta = result.providerMetadata?.[XAI_PROVIDER_META]
       const u = result.usage
       await account(
         model.modelId,
@@ -155,16 +152,13 @@ export function governance(): LanguageModelV4Middleware {
 
 /**
  * 統治つきのモデル。エージェントに差すのはこれだけ。
- * 素の `codexResponsesModel` を直接使う経路を作らない —
+ * 素の `xaiResponsesModel` を直接使う経路を作らない —
  * 事前検査を通らずにクォータが減る。
- *
- * Codex Responsesの外側に統治(ゲート・クォータ・会計)を適用する。
  *
  * 知らない id はここで失敗させる。呼ばれるのはエージェントを生成するときなので、env の打ち間違いは
  * 起動時に読める理由で止まる(実行を開始してから上流の 4xx で失敗しない)。
  */
 export function governedModel(modelId: string): LanguageModelV4 {
   assertKnownModel(modelId)
-  const base = isXaiModel(modelId) ? xaiResponsesModel(modelId) : codexResponsesModel(modelId)
-  return wrapLanguageModel({ model: base, middleware: governance() })
+  return wrapLanguageModel({ model: xaiResponsesModel(modelId), middleware: governance() })
 }

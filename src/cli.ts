@@ -45,7 +45,7 @@ import { localDayRange, localStamp, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces } from "./core/workspaces.ts"
 import { checkDatabase, createBackup, latestBackup, verifyAndRecordRestore } from "./db/maintenance.ts"
 import { readJournal, renderJournal } from "./journal.ts"
-import { CODEX_POOL, XAI_POOL } from "./model/models.ts"
+import { XAI_POOL } from "./model/models.ts"
 import { xaiDeviceLogin } from "./model/xai-auth.ts"
 import { isRefusal, runtime } from "./runtime.ts"
 import { Attention, type NextMove } from "./services/Attention.ts"
@@ -210,10 +210,10 @@ const program = (argv: readonly string[]) =>
         const ledger = yield* Ledger
         const db = yield* Db
         const halt = yield* gov.readHalt
-        // production modelは全て同じChatGPT OAuthクォータを使う。
+        // production modelは全て同じSuperGrokクォータを使う。
         const nowMs = Date.now()
         const pools: string[] = []
-        for (const pool of [CODEX_POOL, XAI_POOL]) {
+        for (const pool of [XAI_POOL]) {
           const cd = yield* gov.quotaCooldown(pool, nowMs)
           pools.push(
             cd

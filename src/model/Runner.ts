@@ -14,16 +14,8 @@ import { nowIso } from "../core/time.ts"
 import { ExecutionKernel, type KernelLoopContext } from "../services/ExecutionKernel.ts"
 import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
-import { callCodex } from "./codex-responses.ts"
 import { digestOf, profileRefForModel } from "./kernel-spec.ts"
-import {
-  assertKnownModel,
-  isXaiModel,
-  ModelCallError,
-  poolForModel,
-  type QuotaSignal,
-  RUNTIME_PROMPT,
-} from "./models.ts"
+import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal, RUNTIME_PROMPT } from "./models.ts"
 import type { RuntimeSchema } from "./schema.ts"
 import { traceOf } from "./trace.ts"
 import { callXai } from "./xai-responses.ts"
@@ -31,21 +23,22 @@ import { callXai } from "./xai-responses.ts"
 export type Role = "structurer" | "scout" | "reviewer"
 
 /**
- * 役割→モデル。全てChatGPT OAuthのGPTで、品質と処理量に応じてmodelを分ける。
+ * 役割→モデル。全て SuperGrok OAuth の Grok で、品質と処理量に応じてmodelを分ける。
  *
  * 対話と cycle 本体のモデルは createAssistant() に渡す model id で決まる。
  *
  * `structurer` と `scout` は引用を原文のまま写す仕事を持つ。引けなかった項目はコードが落とし、
  * 後から復元できないため、モデルを替えるときは引用の原文一致率を検証する。
+ * grok への切り替え(2026-08-17、GPT 解約)後の原文一致率はまだ検証していない。
  */
 export const ROLE_MODEL: Record<Role, string> = {
   // 締めの keeper(keeper)。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
   // (keepGrounded)。scout と同じ性質で対話ごとに通るため、処理量を抑えたmodelに置く。
-  structurer: "gpt-5.6-luna",
-  // 下書きの精査(assistant の draft)。外に出る前の最後の検査で、書いた側とは別の系列に置く。
-  // 既定の対話modelとは別modelに置く。
-  reviewer: "gpt-5.6-sol",
-  scout: "gpt-5.6-luna", // 取り込みの構造化。引用を写す役(Intake.ingest)
+  structurer: "grok-4.3",
+  // 下書きの精査(assistant の draft)。外に出る前の最後の検査。ADR 0031 の「書いた側と別の系列」は
+  // GPT 解約で同系列になった — 別系列に戻す候補は Claude 経路。それまでは既定の対話modelと同じ id。
+  reviewer: "grok-4.6",
+  scout: "grok-4.3", // 取り込みの構造化。引用を写す役(Intake.ingest)
 }
 
 export interface RunPlan {
@@ -95,7 +88,7 @@ export class Runner extends Context.Service<Runner, RunnerApi>()("Runner") {}
 
 /**
  * precheck → run → クォータ状態の更新 → 会計 の共通処理。実行本体だけ差し替えられるようにしてある
- * (これがCodex層とStub層の唯一の違い)。
+ * (これが本番層とStub層の唯一の違い)。
  */
 const makeRunner = (
   exec: (req: RunnerRequest, plan: RunPlan) => Effect.Effect<Omit<RunnerResult, "model">, RunnerFailed>,
@@ -257,7 +250,7 @@ const makeRunner = (
 
 const testPlan = (role: string): RunPlan => {
   // 既知の role でなければモデル id そのものとして読む。ただし知らない id は受け付けない —
-  // 通すとCodex上流の4xxで、実行開始後に失敗する。
+  // 通すと上流の4xxで、実行開始後に失敗する。
   const model = assertKnownModel(ROLE_MODEL[role as Role] ?? role)
   return {
     model,
@@ -272,7 +265,7 @@ const productionPlan = (role: string): RunPlan => {
 }
 
 /**
- * 本番の層。定額クォータを Responses で使う。経路(Codex / xAI)は model id で決まる。
+ * 本番の層。SuperGrok の定額クォータを xAI Responses で使う。
  */
 export const RunnerLive = Layer.effect(
   Runner,
@@ -280,7 +273,7 @@ export const RunnerLive = Layer.effect(
     (req, p) =>
       Effect.tryPromise({
         try: (abort) =>
-          (isXaiModel(p.model) ? callXai : callCodex)({
+          callXai({
             prompt: req.prompt,
             model: p.model,
             systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,

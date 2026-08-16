@@ -12,7 +12,7 @@ import { withHarness } from "./helpers.ts"
 
 const AT = "2026-08-08T09:00:00Z"
 const NOW = Date.parse(AT)
-const base = { pool: "chatgpt-oauth" }
+const base = { pool: "supergrok-oauth" }
 
 const SMALL: BudgetConfig = { dailyRuns: 2, autonomousRuns: 60 }
 
@@ -60,7 +60,7 @@ test("枠クールダウンは窓が明ければ自動で戻り、schema_meta �
       Effect.gen(function* () {
         const gov = yield* Governance
         yield* gov.noteQuota(
-          { pool: "chatgpt-oauth", window: "5h", exhausted: true, resetsAtMs: NOW + 60_000 },
+          { pool: "supergrok-oauth", window: "5h", exhausted: true, resetsAtMs: NOW + 60_000 },
           AT,
           NOW,
         )
@@ -74,7 +74,7 @@ test("枠クールダウンは窓が明ければ自動で戻り、schema_meta �
       }),
     )
     assert.equal((e as { _tag: string })._tag, "QuotaCooldown")
-    assert.equal((e as { pool: string }).pool, "chatgpt-oauth")
+    assert.equal((e as { pool: string }).pool, "supergrok-oauth")
 
     // 窓が明けたあと: 通る + 状態が消えている。
     const left = await h.run(
@@ -82,7 +82,7 @@ test("枠クールダウンは窓が明ければ自動で戻り、schema_meta �
         const gov = yield* Governance
         const db = yield* Db
         yield* gov.precheck({ ...base, at: AT, nowMs: NOW + 61_000 })
-        return yield* db.meta("quota:chatgpt-oauth")
+        return yield* db.meta("quota:supergrok-oauth")
       }),
     )
     assert.equal(left, undefined)
@@ -95,9 +95,9 @@ test("枠が健全なシグナルを返したら冷却状態は消える", async
       Effect.gen(function* () {
         const gov = yield* Governance
         const db = yield* Db
-        yield* gov.noteQuota({ pool: "chatgpt-oauth", window: "5h", exhausted: true }, AT, NOW)
-        yield* gov.noteQuota({ pool: "chatgpt-oauth", window: "5h", usedPercent: 12 }, AT, NOW)
-        return yield* db.meta("quota:chatgpt-oauth")
+        yield* gov.noteQuota({ pool: "supergrok-oauth", window: "5h", exhausted: true }, AT, NOW)
+        yield* gov.noteQuota({ pool: "supergrok-oauth", window: "5h", usedPercent: 12 }, AT, NOW)
+        return yield* db.meta("quota:supergrok-oauth")
       }),
     )
     assert.equal(left, undefined)
@@ -109,7 +109,7 @@ test("使用率 97% 以上は再実行を抑止する", async () => {
     const e = await h.fail(
       Effect.gen(function* () {
         const gov = yield* Governance
-        yield* gov.noteQuota({ pool: "chatgpt-oauth", window: "5h", usedPercent: 97 }, AT, NOW)
+        yield* gov.noteQuota({ pool: "supergrok-oauth", window: "5h", usedPercent: 97 }, AT, NOW)
         yield* gov.precheck({ ...base, at: AT, nowMs: NOW })
       }),
     )

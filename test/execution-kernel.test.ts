@@ -59,7 +59,7 @@ test("keeperのroot・loop・予約を作りmodel attemptをprovider実行前の
       assert.equal(rows.loopAttempt?.state, "completed")
       assert.equal(rows.loopAttempt?.fence, 1)
       assert.match(String(rows.loopAttempt?.owner_start_ticks), /^\d+$/)
-      assert.deepEqual(rows.ledger, { role: "structurer", model: "gpt-5.6-luna", linked: 1 })
+      assert.deepEqual(rows.ledger, { role: "structurer", model: "grok-4.3", linked: 1 })
     },
     [{ text: "", structured: { looked: "確認したが保存対象なし", values: [] } }],
   ))
@@ -98,7 +98,7 @@ test("provider結果が不明な失敗は予約をunknownのまま保持する",
         role: "structurer",
         in_tok: 0,
         out_tok: 0,
-        provenance: JSON.stringify({ outcome: "unknown", pool: "chatgpt-oauth" }),
+        provenance: JSON.stringify({ outcome: "unknown", pool: "supergrok-oauth" }),
       })
     },
     [{ text: "", fail: "provider disconnected" }],
@@ -110,7 +110,7 @@ test("同じownerのLoopSpec変更とimmutable root更新を拒否する", () =>
       owner: { kind: "owner-event", id: "event-kernel-conflict" },
       stableSlot: "keeper",
       role: "structurer",
-      profile: profileRefForModel("gpt-5.6-luna"),
+      profile: profileRefForModel("grok-4.3"),
       resultContract: resultContractRef("keeper-v1", KEEPER_SCHEMA),
       deadlineAtMs: Date.now() + 45_000,
       budget: { modelCalls: 1, toolCalls: 0, tokens: 100_000, costMicrousd: 5_000_000 },
@@ -137,7 +137,7 @@ test("固定Profileと違うmodelはattempt作成前に拒否する", () =>
           owner: { kind: "test", id: "profile-mismatch" },
           stableSlot: "review",
           role: "reviewer",
-          profile: profileRefForModel("gpt-5.6-luna"),
+          profile: profileRefForModel("grok-4.3"),
           resultContract: resultContractRef("keeper-v1", KEEPER_SCHEMA),
           taskInput: {},
           deadlineAtMs: Date.now() + 45_000,
@@ -166,7 +166,7 @@ test("同じrequestだけ成功済みresponseを再利用し別requestはprovide
             owner: { kind: "test", id: "two-attempts" },
             stableSlot: "worker",
             role: "structurer",
-            profile: profileRefForModel("gpt-5.6-luna"),
+            profile: profileRefForModel("grok-4.3"),
             resultContract: resultContractRef("keeper-v1", KEEPER_SCHEMA),
             taskInput: {},
             deadlineAtMs: Date.now() + 45_000,
@@ -220,7 +220,7 @@ test("予約超過でも実使用量を保存してattemptを終端化する", (
             owner: { kind: "test", id: "usage-overrun" },
             stableSlot: "worker",
             role: "structurer",
-            profile: profileRefForModel("gpt-5.6-luna"),
+            profile: profileRefForModel("grok-4.3"),
             resultContract: resultContractRef("keeper-v1", KEEPER_SCHEMA),
             taskInput: {},
             deadlineAtMs: Date.now() + 45_000,
@@ -280,7 +280,7 @@ test("死亡確認できた旧incarnationだけを高いfenceで回復する", a
     owner: { kind: "test", id: "recover-owner" },
     stableSlot: "keeper",
     role: "structurer",
-    profile: profileRefForModel("gpt-5.6-luna"),
+    profile: profileRefForModel("grok-4.3"),
     resultContract: resultContractRef("keeper-v1", KEEPER_SCHEMA),
     taskInput: {},
     deadlineAtMs: Date.now() + 45_000,
@@ -357,7 +357,7 @@ test("死亡確認できた旧incarnationだけを高いfenceで回復する", a
       {
         kind: "recovered-model-attempt",
         role: "structurer",
-        model: "gpt-5.6-luna",
+        model: "grok-4.3",
         provenance: JSON.stringify({ outcome: "unknown", recovered: true }),
       },
     )

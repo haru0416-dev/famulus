@@ -28,9 +28,16 @@ export interface RuntimeSchema<T> {
   readonly validate: (value: unknown) => { success: true; value: T } | { success: false; error: Error }
 }
 
-/** Runner の構造化出力を、モデルへ渡す JSON Schema と実行時検証の組で持つ。 */
+/**
+ * Runner の構造化出力を、モデルへ渡す JSON Schema と実行時検証の組で持つ。
+ *
+ * `errorMode: "ignore"` は JSON Schema に表せない action(`trim` など)を変換から落とす。
+ * 黙って弱くなるのは JSON Schema の側だけ — 検証の正本は下の `validate`(safeParse)で、
+ * そちらは全 action を実行する。既定の throw のままだと、表せない action を含む道具が
+ * 1つあるだけで assistant の組み立てが丸ごと落ちる(実測: v.trim() で cycle が起動不能)。
+ */
 export const rs = <T extends v.GenericSchema>(s: T): RuntimeSchema<v.InferOutput<T>> => ({
-  jsonSchema: toJsonSchema(s) as Record<string, unknown>,
+  jsonSchema: toJsonSchema(s, { errorMode: "ignore" }) as Record<string, unknown>,
   validate: (value) => {
     const r = v.safeParse(s, value)
     return r.success
