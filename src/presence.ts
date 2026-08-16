@@ -19,11 +19,9 @@
  * DB が読めなくても接続は落とさない。表示のために接続を切らない。
  */
 import { Database } from "bun:sqlite"
-import { appConfig } from "./core/config.ts"
+import { appConfig, configureApp } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { nowIso } from "./core/time.ts"
-
-loadEnv()
 
 /** 既定の入口。READY が `resume_gateway_url` を寄越したら、次はそちらへ繋ぐ。 */
 const ENTRY = "wss://gateway.discord.gg/?v=10&encoding=json"
@@ -257,6 +255,8 @@ async function main(): Promise<void> {
 // systemd から止められたら黙って降りる。落ちたことにすると Restart が数える。
 // 入口として走ったときだけ。検査から import したときに接続を張らせない。
 if (import.meta.main) {
+  loadEnv()
+  configureApp()
   for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => process.exit(0))
   await main()
 }

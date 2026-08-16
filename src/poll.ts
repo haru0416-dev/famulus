@@ -15,7 +15,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import * as Effect from "effect/Effect"
-import { appConfig } from "./core/config.ts"
+import { configureApp } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { nowIso } from "./core/time.ts"
 import { drainInbox } from "./inbox.ts"
@@ -23,7 +23,7 @@ import { run, runtime } from "./runtime.ts"
 import { Db } from "./services/Db.ts"
 
 loadEnv()
-const CONFIG = appConfig()
+const CONFIG = configureApp()
 
 const exec = promisify(execFile)
 

@@ -17,6 +17,7 @@
  * 先を指定しなければ `wide` の先へ同時に出る。`where` で名指しもできる。
  * 返すのは題・URL・書き手・日付と、各 API の数値や検索結果の要約。ページ本文は取得しない。
  */
+import { appConfig } from "../core/config.ts"
 import { localStamp } from "../core/time.ts"
 import { fetchRaw } from "./Web.ts"
 
@@ -65,7 +66,7 @@ interface Source {
   readonly accept?: string
   /**
    * 今は使えない理由。返せば既定から外れ、名指しされたらこの文言をそのまま返す。
-   * 呼ぶたびに評価する — 環境変数を書き換えて走らせ直す必要が無いように。
+   * 呼ぶたびに設置済みConfigを評価する。
    */
   readonly unavailable?: () => string | undefined
   /** `site:` などの検索エンジン構文が通る先か。通らない先へは落として渡す。 */
@@ -99,7 +100,7 @@ export function plainQuery(q: string): string {
  * 自前の SearXNG の在り処。既定は `~/Project/searxng/docker-compose.yml` が縛っている先。
  * 空にすると `web` の先が既定から外れる(コンテナを落として使わない日のため)。
  */
-const searxngBase = (): string => (process.env.OPEN_ZERO_SEARXNG ?? "http://127.0.0.1:8888").trim()
+const searxngBase = (): string => appConfig().web.searxngBase ?? ""
 
 const enc = encodeURIComponent
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined)
@@ -683,7 +684,7 @@ export const SOURCE_MENU: readonly { name: string; what: string; wide: boolean }
 
 /**
  * 先を指定しなかったときに出る先。使えない先は最初から混ぜない。
- * 呼ぶたびに環境変数を見る(定数にしない)。道具の説明文もここから作るので、
+ * 呼ぶたびに設置済みConfigを見る(定数にしない)。道具の説明文もここから作るので、
  * 説明に並ぶ先と実際の接続先が食い違わない。
  */
 export const defaultSources = (): readonly string[] =>

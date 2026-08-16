@@ -10,6 +10,7 @@
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { appConfig } from "../core/config.ts"
 import { DailyRunLimit, Halt, QuotaCooldown } from "../core/errors.ts"
 import { localDayRange } from "../core/time.ts"
 import { Db } from "./Db.ts"
@@ -40,34 +41,17 @@ export interface BudgetConfig {
   readonly autonomousRuns: number
 }
 
-const envInt = (key: string, fallback: number): number => {
-  const n = Number(process.env[key])
-  return Number.isFinite(n) && n > 0 ? n : fallback
-}
-
-/**
- * 既定値。
- *
- * `dailyRuns` は予算ではなく、異常反復の安全上限。1回ごとに課金されるなら run 数が金額の代理になるが、
- * 定額利用ではならない(USD 上限が無意味なのと同じ理由 — precheck の 4 番を見よ)。
- * 定額利用でも無料ではなく、消費しているのはユーザー自身の Claude クォータで、
- * それを測るのは run 数ではなく `quotaCooldown`(実際の使用率)。run 数は
- * 「同じことを無限に繰り返している」を止めるための上限として、実運用より十分高く置く。
- */
-export const BUDGET: BudgetConfig = {
-  dailyRuns: envInt("OPEN_ZERO_DAILY_RUNS", 2000),
-  // 探索を観点別に分割して委譲する cycle は1回で 20 run 使う(子の1ターンも1行として数えるため)。
-  autonomousRuns: envInt("OPEN_ZERO_AUTONOMOUS_RUNS", 500),
-}
-
 /** どちらの経路の run か。自走は別区分で数える。 */
 export type Lane = "interactive" | "autonomous"
 
 /** 自走 run の記録 role。日次の自走上限はこの role の行を数える。 */
 export const AUTONOMOUS_ROLE = "autonomous"
 
-export const currentLane = (): Lane =>
-  process.env.OPEN_ZERO_LANE === "autonomous" ? "autonomous" : "interactive"
+let lane: Lane = "interactive"
+export const setLane = (next: Lane): void => {
+  lane = next
+}
+export const currentLane = (): Lane => lane
 
 export const accountingRole = (role: string): string =>
   currentLane() === "autonomous" ? AUTONOMOUS_ROLE : role
@@ -176,7 +160,7 @@ const makeGovernance = () =>
      * run 前のゲート。拒否は失敗チャネルに載せて返す。
      * 成功したときだけ run に進める、というのを型で強制するのがここの目的。
      */
-    const precheck = (opts: PrecheckOptions, config: BudgetConfig = BUDGET) =>
+    const precheck = (opts: PrecheckOptions, config: BudgetConfig = appConfig().governance) =>
       Effect.gen(function* () {
         // 1. halt — 自動解除しない全停止。
         const halt = yield* readHalt

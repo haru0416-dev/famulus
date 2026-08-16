@@ -7,6 +7,7 @@
  */
 import * as Effect from "effect/Effect"
 import * as ManagedRuntime from "effect/ManagedRuntime"
+import { configureApp } from "../src/core/config.ts"
 import { RunnerStub, type StubReply } from "../src/model/Runner.ts"
 import { type AppServices, makeAppLayer } from "../src/runtime.ts"
 import { DbLive } from "../src/services/Db.ts"
@@ -19,6 +20,7 @@ export interface Harness {
 }
 
 export const harness = (script: readonly StubReply[] = [{ text: "ok" }]): Harness => {
+  configureApp()
   const stub = RunnerStub(script)
   const rt = ManagedRuntime.make(makeAppLayer(DbLive(":memory:"), stub.layer))
   return {

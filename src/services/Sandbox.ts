@@ -7,9 +7,10 @@
  */
 import { spawn } from "node:child_process"
 import { mkdirSync } from "node:fs"
-import { dirname, isAbsolute, join, resolve } from "node:path"
+import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { TZ } from "../core/time.ts"
+import { appConfig } from "../core/config.ts"
+import { timeZone } from "../core/time.ts"
 
 /**
  * 走らせるコンテナ。docker/run.Dockerfile で組む(素の `node:24-bookworm` に
@@ -60,7 +61,7 @@ export interface RunResult {
 }
 
 /** 走行の置き場。`.data/` の下に置くので gitignore 済みで、DB と同じく外には出ない。 */
-export const runsRoot = (): string => resolve(process.env.OPEN_ZERO_RUNS ?? ".data/runs")
+export const runsRoot = (): string => appConfig().paths.runs
 
 /**
  * 取得したパッケージの共有キャッシュ。workspace の外に置く。
@@ -69,7 +70,7 @@ export const runsRoot = (): string => resolve(process.env.OPEN_ZERO_RUNS ?? ".da
  * `runsRoot()` の下に置いてはいけない。`sweepRuns` は `.data/runs` の直下を全部
  * workspace として数えるので、キャッシュが workspace の一覧に出て、14日で消される側に回る。
  */
-export const cacheRoot = (): string => resolve(process.env.OPEN_ZERO_RUN_CACHE ?? ".data/run-cache")
+export const cacheRoot = (): string => appConfig().paths.runCache
 
 /**
  * 名前から workspace を1つ作って絶対パスを返す。
@@ -116,7 +117,7 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     "HOME=/work",
     // 設定タイムゾーンを渡し、ホスト側の検証と日付境界を揃える。
     "-e",
-    `TZ=${TZ}`,
+    `TZ=${timeZone()}`,
     // 取得キャッシュは workspace をまたいで使い回す。置き場は workspace の外(cacheRoot)。
     // イメージ側にも同じ値を設定してあるが、ここでも渡す — フォールバック先の素のイメージには入っていないので、
     // 組めなかった回だけキャッシュを使わない、という差ができる。
@@ -138,7 +139,7 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     `${cacheRoot()}:/cache`,
     "-w",
     "/work",
-    opts.image ?? process.env.OPEN_ZERO_RUN_IMAGE ?? RUN_IMAGE,
+    opts.image ?? appConfig().runImage ?? RUN_IMAGE,
     "bash",
     "-lc",
     command,
@@ -248,9 +249,10 @@ export async function runInSandbox(command: string, opts: RunOptions): Promise<R
   if (!isAbsolute(opts.workDir)) throw new Error(`workspace は絶対パスで渡す: ${opts.workDir}`)
   mkdirSync(cacheRoot(), { recursive: true })
   // image が明示されている場合は、自動ビルドせず指定されたイメージを使う。
-  const image = opts.image ?? process.env.OPEN_ZERO_RUN_IMAGE ?? (await ensureImage())
+  const configuredImage = appConfig().runImage
+  const image = opts.image ?? configuredImage ?? (await ensureImage())
   opts.signal?.throwIfAborted()
-  const fellBack = image === BASE_IMAGE && opts.image === undefined && !process.env.OPEN_ZERO_RUN_IMAGE
+  const fellBack = image === BASE_IMAGE && opts.image === undefined && configuredImage === undefined
   const startedAt = Date.now()
   // コンテナの名前は時刻で作る(同じ走行を続けて呼んでも衝突しない)。時間切れのとき外から消すのに要る。
   const name = `oz-run-${startedAt.toString(36)}-${process.pid}`

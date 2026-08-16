@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { appConfig } from "../core/config.ts"
 import { Conflict, NotFound } from "../core/errors.ts"
 import { localDayRange, localHour, nowIso } from "../core/time.ts"
 import { Db, type Row } from "./Db.ts"
@@ -172,7 +173,7 @@ export const MAX_COOLDOWN_HOURS = 24
  * 1日1本の下書きを出す時刻(ユーザーの時計)。これより前には出さない。
  * 早い時刻だと、その日の走行記録がまだ無く、材料が前日ぶんだけになる。
  */
-export const dailyDraftHour = (): number => Number(process.env.OPEN_ZERO_DAILY_HOUR ?? 20)
+export const dailyDraftHour = (): number => appConfig().schedule.dailyDraftHour
 
 const daysBetween = (fromIso: string, toMs: number) => (toMs - Date.parse(fromIso)) / 86_400_000
 
@@ -402,7 +403,7 @@ const makeAttention = () =>
      * 見た位置(cursor)は進めない — cycle が最後まで走り切ってから `completeCycle` で進める
      * (途中で失敗したら、次の cycle が同じ入力をもう一度見る = 未処理のまま保持する)。
      */
-    const planCycle = (nowMs: number = Date.now()) =>
+    const planCycle = (nowMs: number = Date.now(), draftHour: number = dailyDraftHour()) =>
       Effect.gen(function* () {
         const at = new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, "Z")
         const cursorRaw = yield* db.meta("cycle:cursor")
@@ -518,8 +519,7 @@ const makeAttention = () =>
           day.startIso,
           day.endIso,
         )
-        const draftDue =
-          Boolean(draftRow) || (localHour(at) >= dailyDraftHour() && !deliveredToday && !failedToday)
+        const draftDue = Boolean(draftRow) || (localHour(at) >= draftHour && !deliveredToday && !failedToday)
         if (draftDue) reasons.push("今日ぶんの下書きがまだ出ていない")
 
         return {

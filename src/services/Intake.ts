@@ -22,12 +22,12 @@
  * 別表を作らないので、DB を消さない限り二重取り込みは起きない。
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as v from "valibot"
+import { appConfig } from "../core/config.ts"
 import { nowIso } from "../core/time.ts"
 import { Runner } from "../model/Runner.ts"
 import { rs } from "../model/schema.ts"
@@ -36,10 +36,10 @@ import { buildFencedPrompt } from "./Governance.ts"
 import { Memory } from "./Memory.ts"
 
 /** ログの置き場。呼び出し時に読む(モジュール読み込み時に固めない) — 検査が別の場所を指せるように。 */
-const root = (): string => process.env.OPEN_ZERO_TRANSCRIPT_ROOT ?? join(homedir(), ".claude", "projects")
+const root = (): string => appConfig().paths.transcriptRoot
 
 /** Claude.ai の書き出しを展開した場所。zip のまま置かないのは、標準ライブラリだけで開けないから。 */
-const exportRoot = (): string => process.env.OPEN_ZERO_EXPORT_ROOT ?? ".data/claude-export"
+const exportRoot = (): string => appConfig().paths.exportRoot
 
 /**
  * 除外するディレクトリ。

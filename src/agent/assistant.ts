@@ -21,7 +21,6 @@ import * as Effect from "effect/Effect"
 import * as v from "valibot"
 import { appConfig } from "../core/config.ts"
 import { remainingLabel, remainingMs } from "../core/deadline.ts"
-import { loadEnv } from "../core/env.ts"
 import { causeReason } from "../core/errors.ts"
 import { localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
@@ -54,9 +53,6 @@ import {
   reviewOutcome,
 } from "./drafting.ts"
 import { soulInstruction } from "./soul.ts"
-
-// systemd やシェルを通らない経路からも起きるので、自分で `.env` を読む。
-loadEnv()
 
 /**
  * 作業役のモデル。語を変えて何度も検索する量の多い仕事なので軽量modelに固定する。
@@ -149,8 +145,9 @@ const recallTool = (state: TurnState) =>
  *
  * 接続先と、その選び方は src/services/Search.ts。
  */
-const searchTool = tool({
-  description: `語で探して、**題と URL の一覧**を返す。本文は返らない — 開くかどうかは見てから決める。
+const searchTool = () =>
+  tool({
+    description: `語で探して、**題と URL の一覧**を返す。本文は返らない — 開くかどうかは見てから決める。
 - **\`where\` は書かない**のが既定。省くと ${defaultSources().join("・")} へ**同時に**出る
   1つに絞ると、同じ時間で拾える数が減るだけ。
 - 名指しするのは、**そこにしか無いと分かっているとき**だけ:
@@ -178,44 +175,44 @@ ${SOURCE_MENU.map((s) => `  - \`${s.name}\` — ${s.what}`).join("\n")}
   ことになる。読み方は結果の \`## x\` の下に出る。
 - 0件で返る先がある。そのときは語を変えるか、別の先を名指しする。**埋めない。**
 - 「回数制限中」と出た先は、その時刻まで何度呼んでも返らない。**他の先で進める。**`,
-  inputSchema: vs(
-    v.object({
-      query: v.pipe(v.string(), v.description("探す語。空白で区切ると絞り込みになる。")),
-      where: v.optional(
-        v.pipe(
-          v.array(v.string()),
-          v.description(
-            `検索先の名前。**普通は省く**(既定の先へ同時に出る)。使えるのは ${SOURCE_MENU.map((s) => s.name).join("・")}。`,
+    inputSchema: vs(
+      v.object({
+        query: v.pipe(v.string(), v.description("探す語。空白で区切ると絞り込みになる。")),
+        where: v.optional(
+          v.pipe(
+            v.array(v.string()),
+            v.description(
+              `検索先の名前。**普通は省く**(既定の先へ同時に出る)。使えるのは ${SOURCE_MENU.map((s) => s.name).join("・")}。`,
+            ),
           ),
         ),
-      ),
-      perSource: v.optional(v.pipe(v.number(), v.description("1つの先から取る件数(既定 8、上限 20)。"))),
-    }),
-  ),
-  execute: async ({ query, where, perSource }) => {
-    try {
-      const results = await searchSources(query, {
-        ...(where ? { where } : {}),
-        ...(perSource !== undefined ? { perSource } : {}),
-      })
-      const found = results.reduce((n, r) => n + r.hits.length, 0)
-      if (found === 0) {
-        const why = results
-          .filter((r) => r.failed)
-          .map((r) => `${r.source}: ${r.failed}`)
-          .join(" / ")
-        return `「${query}」は 0 件。${why || "どの先にも無かった。語を変えるか、別の先を名指しする。"}`
+        perSource: v.optional(v.pipe(v.number(), v.description("1つの先から取る件数(既定 8、上限 20)。"))),
+      }),
+    ),
+    execute: async ({ query, where, perSource }) => {
+      try {
+        const results = await searchSources(query, {
+          ...(where ? { where } : {}),
+          ...(perSource !== undefined ? { perSource } : {}),
+        })
+        const found = results.reduce((n, r) => n + r.hits.length, 0)
+        if (found === 0) {
+          const why = results
+            .filter((r) => r.failed)
+            .map((r) => `${r.source}: ${r.failed}`)
+            .join(" / ")
+          return `「${query}」は 0 件。${why || "どの先にも無かった。語を変えるか、別の先を名指しする。"}`
+        }
+        return (
+          `「${query}」の検索結果(${found}件)。索引であって原文ではない。` +
+          `中身が要るものは URL を fetch で開く。\n\n${renderHits(results)}`
+        )
+      } catch (e) {
+        return `検索できなかった: ${e instanceof Error ? e.message : String(e)}`
       }
-      return (
-        `「${query}」の検索結果(${found}件)。索引であって原文ではない。` +
-        `中身が要るものは URL を fetch で開く。\n\n${renderHits(results)}`
-      )
-    } catch (e) {
-      return `検索できなかった: ${e instanceof Error ? e.message : String(e)}`
-    }
-  },
-  toModelOutput: untrustedToolOutput("search", "results"),
-})
+    },
+    toModelOutput: untrustedToolOutput("search", "results"),
+  })
 
 /**
  * researcher に渡す URL 取得道具。検索索引の値を一次資料で確認するために使う。
@@ -423,7 +420,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
         const generated = await new ToolLoopAgent({
           model: governedModel(researchModel()),
           instructions: RESEARCHER,
-          tools: gateTools({ search: searchTool, fetch: fetchTool(fetched) }, gate),
+          tools: gateTools({ search: searchTool(), fetch: fetchTool(fetched) }, gate),
           output: Output.object({
             schema: vs(
               v.object({

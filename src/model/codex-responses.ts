@@ -12,8 +12,6 @@
 
 import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
-import { homedir } from "node:os"
-import { join } from "node:path"
 import { createOpenAI } from "@ai-sdk/openai"
 import type {
   JSONObject,
@@ -23,6 +21,7 @@ import type {
   LanguageModelV4GenerateResult,
   LanguageModelV4StreamPart,
 } from "@ai-sdk/provider"
+import { appConfig } from "../core/config.ts"
 import {
   CODEX_POOL,
   ModelCallError,
@@ -44,8 +43,7 @@ export const CODEX_PROVIDER_META = "codex-oauth"
 const CODEX_USER_AGENT = `codex_cli_rs/0.144.6 (${process.platform}; ${process.arch}) open-zero`
 
 /** 資格情報のファイルパス。`CODEX_HOME` は Codex CLI 自身が読む変数なので、同じものを読む。 */
-const authPath = (): string =>
-  process.env.OPEN_ZERO_CODEX_AUTH ?? join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "auth.json")
+const authPath = (): string => appConfig().paths.codexAuth
 
 interface CodexAuth {
   readonly accessToken: string

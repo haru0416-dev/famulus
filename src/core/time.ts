@@ -8,19 +8,28 @@
  * `at >= ?AND at < ?` で引く。文字列 substr より DST にも強く、索引も使われる。
  */
 
-/** 集計に使うタイムゾーン。既定はこのホストの設定。 */
-export const TZ = process.env.OPEN_ZERO_TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+import { appConfig } from "./config.ts"
 
-const partsFmt = new Intl.DateTimeFormat("en-US", {
-  timeZone: TZ,
-  hour12: false,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-})
+/** 集計に使う、起動時に検証済みのタイムゾーン。 */
+export const timeZone = (): string => appConfig().timeZone
+
+let formatter: { readonly timeZone: string; readonly value: Intl.DateTimeFormat } | undefined
+const partsFormatter = (): Intl.DateTimeFormat => {
+  const zone = timeZone()
+  if (formatter?.timeZone === zone) return formatter.value
+  const value = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })
+  formatter = { timeZone: zone, value }
+  return value
+}
 
 interface LocalParts {
   readonly year: number
@@ -32,7 +41,7 @@ interface LocalParts {
 }
 
 function localParts(ms: number): LocalParts {
-  const p = partsFmt.formatToParts(new Date(ms))
+  const p = partsFormatter().formatToParts(new Date(ms))
   const n = (type: string) => Number(p.find((x) => x.type === type)?.value ?? 0)
   return {
     year: n("year"),

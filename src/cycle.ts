@@ -14,15 +14,15 @@
  * 2 が本体。「15分ごとに推論を1回実行する」形にすると、用件が無い回にも利用量を消費する。
  * 実行条件は Attention 側に集約し、ここは判定結果に従って実行するだけにしてある。
  *
- * `OPEN_ZERO_LANE=autonomous` で自律実行として計上する。日次 run 数の内訳が対話と分かれ、
- * cycle が過剰実行されても対話用の run 数は残る(Governance.BUDGET.autonomousRuns)。
+ * process-local laneをautonomousへ切り替えて自律実行として計上する。日次 run 数の内訳が対話と分かれ、
+ * cycle が過剰実行されても対話用の run 数は残る。
  */
 import * as Effect from "effect/Effect"
 import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
 import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
-import { appConfig } from "./core/config.ts"
+import { configureApp } from "./core/config.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
 import { ConnectorFailed, causeReason, describeRefusal } from "./core/errors.ts"
@@ -37,12 +37,12 @@ import { Attention, type CyclePlan, type ObservedEvent } from "./services/Attent
 import { CycleLease, type CycleLeaseToken } from "./services/CycleLease.ts"
 import { Db } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
-import { buildFencedPrompt, Governance, type UntrustedBlock } from "./services/Governance.ts"
+import { buildFencedPrompt, Governance, setLane, type UntrustedBlock } from "./services/Governance.ts"
 import { Memory } from "./services/Memory.ts"
 
-// モジュール直下の設定より先に読む。下の const は評価時に env を見るので、順番が意味を持つ。
+// static importは設定を読まない。入口で.envを反映し、検証済みConfigを設置してからruntimeを作る。
 loadEnv()
-const CONFIG = appConfig()
+const CONFIG = configureApp()
 
 /**
  * 1回の cycle に許す時間。上限を付けないと無限に待つ。
@@ -391,10 +391,6 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
   const spokenTo = d.newEvents.some((e) => e.source === "owner")
   log("実行条件:", d.reasons.join(" / "), spokenTo ? "(返信)" : "")
 
-  // 自律実行区分であることを、エージェントを組み立てる前に設定する。
-  // lane判定は呼び出し時評価なのでこれだけで足りるが、モデル id は createAssistant() の
-  // 時点で確定するので、差し替えるならこの順序でなければ反映されない。
-  process.env.OPEN_ZERO_LANE = "autonomous"
   // 道具一式を読み込むのは、モデル実行が必要と決まってから。idle の回(定期実行の大半)は
   // ここを通らないので、その回の起動は DB を1回引くだけで終わる。
   const { createAssistant } = await import("./agent/assistant.ts")
@@ -545,6 +541,8 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
 }
 
 export async function runCycle(): Promise<string> {
+  // dreamを含むcycle内の全モデル実行を、自走枠の検査と会計へ載せる。
+  setLane("autonomous")
   let token: CycleLeaseToken
   try {
     token = await run(

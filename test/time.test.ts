@@ -1,26 +1,25 @@
 /**
  * 日付境界の検査。ユーザーの1日で切れているかだけを見る。
- * TZ はモジュール読み込み時に確定するので、import より先に環境変数を差す。
+ * TZ は Config 境界で検証し、日付関数は設置済みConfigだけを読む。
  */
 
 import assert from "node:assert/strict"
 import fc from "fast-check"
-import { test, vi } from "vitest"
+import { test } from "vitest"
+import { configureApp } from "../src/core/config.ts"
+import { localDayRange, localMonthRange, localStamp, timeZone } from "../src/core/time.ts"
 
-const { localDayRange, localMonthRange, localStamp } = await import("../src/core/time.ts")
-
-test("OPEN_ZERO_TZ で既定と異なるtimezoneへ差し替えられる", async () => {
+test("OPEN_ZERO_TZ で既定と異なるtimezoneへ差し替えられる", () => {
   const previous = process.env.OPEN_ZERO_TZ
   process.env.OPEN_ZERO_TZ = "UTC"
-  vi.resetModules()
   try {
-    const utc = await import("../src/core/time.ts")
-    assert.equal(utc.TZ, "UTC")
-    assert.equal(utc.localDayRange("2026-08-07T16:55:00Z").key, "2026-08-07")
+    configureApp()
+    assert.equal(timeZone(), "UTC")
+    assert.equal(localDayRange("2026-08-07T16:55:00Z").key, "2026-08-07")
   } finally {
     if (previous === undefined) delete process.env.OPEN_ZERO_TZ
     else process.env.OPEN_ZERO_TZ = previous
-    vi.resetModules()
+    configureApp()
   }
 })
 

@@ -11,6 +11,7 @@
  */
 import { lookup } from "node:dns/promises"
 import { isIP } from "node:net"
+import { appConfig } from "../core/config.ts"
 import { decodeBody, isReadableType, toText } from "./WebContent.ts"
 
 export { decodeBody, isReadableType, renderFeed, toText } from "./WebContent.ts"
@@ -240,10 +241,10 @@ function githubDetour(u: URL, seg: readonly string[]): string | undefined {
  * 同じホストを続けて叩かない。プロセス内にしか残らないので、再起動でリセットされる
  * (それで困る規模では回さない)。
  *
- * 環境変数で縮められるのは検査のため。相手を差し替えた検査(fetch を stub したもの)は
+ * Configで縮められるのは検査のため。相手を差し替えた検査(fetch を stub したもの)は
  * 誰にも迷惑を掛けないのに、同じホストへ4回出す1件で 4 秒待つ。外へ出る既定は動かさない。
  */
-const hostIntervalMs = (): number => Number(process.env.OPEN_ZERO_HOST_INTERVAL_MS ?? 1_000)
+const hostIntervalMs = (): number => appConfig().web.hostIntervalMs
 const lastHit = new Map<string, number>()
 async function pace(host: string): Promise<void> {
   const prev = lastHit.get(host)

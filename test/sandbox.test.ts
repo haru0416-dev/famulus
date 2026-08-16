@@ -12,7 +12,8 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
 import { test } from "vitest"
-import { TZ } from "../src/core/time.ts"
+import { configureApp } from "../src/core/config.ts"
+import { timeZone } from "../src/core/time.ts"
 import {
   cacheRoot,
   dockerArgs,
@@ -26,10 +27,12 @@ const withRoot = (fn: () => void): void => {
   const prev = process.env.OPEN_ZERO_RUNS
   process.env.OPEN_ZERO_RUNS = mkdtempSync(join(tmpdir(), "oz-runs-"))
   try {
+    configureApp()
     fn()
   } finally {
     if (prev === undefined) delete process.env.OPEN_ZERO_RUNS
     else process.env.OPEN_ZERO_RUNS = prev
+    configureApp()
   }
 }
 
@@ -86,7 +89,7 @@ test("中の時計の帯はホストと同じ", () => {
   // コンテナ内で失敗した検査を読む側が、コードの不具合とタイムゾーン差を見分けられない。
   const args = dockerArgs("date", { workDir: "/tmp/w", name: "oz-run-test" })
   const env = args.filter((_, i) => args[i - 1] === "-e")
-  assert.ok(env.includes(`TZ=${TZ}`), `帯が渡っていない: ${env.join(" ")}`)
+  assert.ok(env.includes(`TZ=${timeZone()}`), `帯が渡っていない: ${env.join(" ")}`)
 })
 
 test("パッケージキャッシュは workspace の外で共有する", () => {

@@ -9,14 +9,14 @@
  *   /reset                … 会話を捨てて次から新しく始める
  *   /q(または Ctrl-D)   … 終わる
  *
- * 枠は対話側(`OPEN_ZERO_LANE` を立てない)。自走とは日次 run 数の内訳が分かれる。
+ * 枠は対話側。自走とは日次 run 数の内訳が分かれる。
  * 締切は付けない — 待っているのは人で、切る判断はその人がする(Ctrl-C)。
  */
 import { createInterface } from "node:readline/promises"
 import * as Effect from "effect/Effect"
 import { createAssistant } from "./agent/assistant.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
-import { appConfig } from "./core/config.ts"
+import { configureApp } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { causeReason } from "./core/errors.ts"
 import { run, runtime } from "./runtime.ts"
@@ -24,7 +24,7 @@ import { Attention } from "./services/Attention.ts"
 import { Memory } from "./services/Memory.ts"
 
 loadEnv()
-appConfig()
+configureApp()
 
 const rt = runtime()
 const assistant = createAssistant()

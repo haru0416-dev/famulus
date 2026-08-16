@@ -1,6 +1,11 @@
 /** 実ランタイムで1ターン走らせ、プロセス内の global fetch 呼び出しを記録する。 */
 import { createAssistant } from "./src/agent/assistant.ts"
+import { configureApp } from "./src/core/config.ts"
+import { loadEnv } from "./src/core/env.ts"
 import { runtime } from "./src/runtime.ts"
+
+loadEnv()
+configureApp()
 
 const hits: string[] = []
 const orig = globalThis.fetch

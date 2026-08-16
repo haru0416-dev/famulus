@@ -21,6 +21,8 @@ process.env.TZ = "Asia/Tokyo"
 // 同じホストへの間隔は既定 1 秒。ここは fetch を差し替えてあるので誰も接続していない —
 // 待つぶんがそのままゲートの所要になるので 0 にする(src/services/Web.ts の hostIntervalMs)。
 process.env.OPEN_ZERO_HOST_INTERVAL_MS = "0"
+const { configureApp } = await import("../src/core/config.ts")
+configureApp()
 const { defaultSources, parseFrom, plainQuery, renderHits, searchSources } = await import(
   "../src/services/Search.ts"
 )
@@ -230,6 +232,7 @@ test("使えない先は既定から外れる", () => {
   const saved = process.env.OPEN_ZERO_SEARXNG
   try {
     delete process.env.OPEN_ZERO_SEARXNG
+    configureApp()
     const on = defaultSources()
     assert.ok(on.includes("web"), "既定の在り処があるのに web が既定に入らない")
     assert.ok(on.includes("zenn") && on.includes("github"))
@@ -239,10 +242,12 @@ test("使えない先は既定から外れる", () => {
 
     // 空にすると SearXNG を使わない設定になる(容器を落としている日)。
     process.env.OPEN_ZERO_SEARXNG = "  "
+    configureApp()
     assert.ok(!defaultSources().includes("web"), "空にしたのに web が既定に残っている")
   } finally {
     if (saved === undefined) delete process.env.OPEN_ZERO_SEARXNG
     else process.env.OPEN_ZERO_SEARXNG = saved
+    configureApp()
   }
 })
 

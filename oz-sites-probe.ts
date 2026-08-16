@@ -5,7 +5,12 @@
  *
  * `want` はその頁を開いた目的の語。**入っていなければ、200 で返っていても読めていない。**
  */
+import { configureApp } from "./src/core/config.ts"
+import { loadEnv } from "./src/core/env.ts"
 import { fetchPage } from "./src/services/Web.ts"
+
+loadEnv()
+configureApp()
 
 type Site = readonly [cat: string, name: string, url: string, want?: string]
 

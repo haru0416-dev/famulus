@@ -16,6 +16,7 @@
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { appConfig } from "../core/config.ts"
 import { Conflict, ConnectorFailed, type DbFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { canonicalJson, digestOf } from "../model/kernel-spec.ts"
@@ -23,7 +24,7 @@ import { Db } from "./Db.ts"
 import type { DraftDecision } from "./Drafts.ts"
 
 /** API の base URL。テストだけ差し替える。 */
-const api = (): string => process.env.OPEN_ZERO_DISCORD_API ?? "https://discord.com/api/v10"
+const api = (): string => appConfig().discord.api
 
 /** 1通の上限。Discord は 2000 字で弾くので、超えるぶんは分けて出す。 */
 const LIMIT = 2000
@@ -113,20 +114,11 @@ export interface Batch {
   readonly heard?: string
 }
 
-const token = (): string | undefined => process.env.OPEN_ZERO_DISCORD_TOKEN
-const ownerId = (): string | undefined => process.env.OPEN_ZERO_DISCORD_OWNER_ID
+const token = (): string | undefined => appConfig().discord.token
+const ownerId = (): string | undefined => appConfig().discord.ownerId
 
-/** 用途ごとの出し先。空文字は「指していない」と読む(env を消さずに空にすることがある)。 */
-const ENV_CHANNEL: Readonly<Record<Desk, string>> = {
-  talk: "OPEN_ZERO_DISCORD_CH_TALK",
-  draft: "OPEN_ZERO_DISCORD_CH_DRAFT",
-  log: "OPEN_ZERO_DISCORD_CH_LOG",
-}
-
-const fixedChannel = (to: Desk): string | undefined => {
-  const raw = process.env[ENV_CHANNEL[to]]
-  return raw === undefined || raw.trim() === "" ? undefined : raw.trim()
-}
+/** 用途ごとの出し先。Config境界で空文字は「指していない」として除かれる。 */
+const fixedChannel = (to: Desk): string | undefined => appConfig().discord.channels[to]
 
 /** 待っているリアクション。`{ メッセージid: { 絵文字: 返る文 } }` を schema_meta に置く。 */
 interface PendingTap {
@@ -909,7 +901,7 @@ const makeDiscord = () =>
 
     /**
      * いまどのチャンネルに出るか。CLI の表示にだけ使う。
-     * `talk` は最後に話しかけられたチャンネルで動くので、env を読むだけでは分からない。
+     * `talk` は最後に話しかけられたチャンネルで動くので、固定Configだけでは分からない。
      */
     const where = (): Effect.Effect<{ talk?: string; draft?: string; log?: string; dm?: string }, DbFailed> =>
       Effect.gen(function* () {

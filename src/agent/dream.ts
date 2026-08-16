@@ -16,6 +16,7 @@
  * 同じ材料を毎晩読み直すと、同じ値が毎晩再保存され、有効期間が1日だけの履歴行が増え続ける。
  */
 import * as Effect from "effect/Effect"
+import { appConfig } from "../core/config.ts"
 import { localDayRange, localHour, nowIso } from "../core/time.ts"
 import { Db } from "../services/Db.ts"
 import { KEEP_MS, keep } from "./keeper.ts"
@@ -38,8 +39,6 @@ export const DREAM_DAILY = "daily:dream"
  * 前日ぶんの発言が出揃っていて、かつユーザーがモデルを使っていない時間帯に置く。
  * 日付の境界(0 時)より後でなければ、その日ぶんの目印とずれる。
  */
-export const DREAM_HOUR = Number(process.env.OPEN_ZERO_DREAM_HOUR ?? 4)
-
 /**
  * この cycle で回すかどうか。1日1回。
  *
@@ -48,7 +47,7 @@ export const DREAM_HOUR = Number(process.env.OPEN_ZERO_DREAM_HOUR ?? 4)
  */
 export const dreamDue = (atIso: string) =>
   Effect.gen(function* () {
-    if (localHour(atIso) < DREAM_HOUR) return false
+    if (localHour(atIso) < appConfig().schedule.dreamHour) return false
     const db = yield* Db
     return (yield* db.meta(DREAM_DAILY)) !== localDayRange(atIso).key
   })

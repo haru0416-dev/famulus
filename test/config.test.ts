@@ -1,19 +1,37 @@
 import assert from "node:assert/strict"
+import { readdirSync, readFileSync } from "node:fs"
 import { isAbsolute, join } from "node:path"
 import { test } from "vitest"
-import { ConfigError, parseConfig } from "../src/core/config.ts"
+import { ConfigError, PROJECT_ROOT, parseConfig } from "../src/core/config.ts"
 
 test("相対パスはcwdではなく設定rootを基準に絶対化する", () => {
   const root = "/tmp/open-zero-config-root"
-  const config = parseConfig({ OPEN_ZERO_DB: "state/open-zero.db", OPEN_ZERO_RUNS: "runs" }, root)
+  const config = parseConfig(
+    { OPEN_ZERO_DB: "state/open-zero.db", OPEN_ZERO_RUNS: "runs", CODEX_HOME: "codex-home" },
+    root,
+  )
   assert.equal(config.paths.db, join(root, "state/open-zero.db"))
   assert.equal(config.paths.runs, join(root, "runs"))
   assert.ok(isAbsolute(config.paths.backups))
+  assert.equal(config.paths.runCache, join(root, ".data/run-cache"))
+  assert.equal(config.paths.exportRoot, join(root, ".data/claude-export"))
+  assert.ok(isAbsolute(config.paths.transcriptRoot))
+  assert.equal(config.paths.codexAuth, join(root, "codex-home/auth.json"))
 })
 
 test("SQLiteのmemory pathと空のcycle unitを保持する", () => {
-  const config = parseConfig({ OPEN_ZERO_DB: ":memory:", OPEN_ZERO_CYCLE_UNIT: "" }, "/tmp/open-zero")
+  const config = parseConfig(
+    {
+      OPEN_ZERO_DB: ":memory:",
+      OPEN_ZERO_RUNS: ":memory:",
+      OPEN_ZERO_CODEX_AUTH: ":memory:",
+      OPEN_ZERO_CYCLE_UNIT: "",
+    },
+    "/tmp/open-zero",
+  )
   assert.equal(config.paths.db, ":memory:")
+  assert.equal(config.paths.runs, "/tmp/open-zero/:memory:")
+  assert.equal(config.paths.codexAuth, "/tmp/open-zero/:memory:")
   assert.equal(config.cycle.unit, "")
 })
 
@@ -75,4 +93,33 @@ test("TZとURLを境界で検証する", () => {
     parseConfig({ OPEN_ZERO_SEARXNG: "http://127.0.0.1:8888/" }, "/tmp/open-zero").web.searxngBase,
     "http://127.0.0.1:8888",
   )
+  assert.equal(
+    parseConfig({ OPEN_ZERO_DISCORD_API: "http://[::1]:8080/" }, "/tmp/open-zero").discord.api,
+    "http://[::1]:8080",
+  )
+  assert.equal(parseConfig({ OPEN_ZERO_SEARXNG: "" }, "/tmp/open-zero").web.searxngBase, undefined)
+})
+
+test("Discordの秘密値とchannelは空白を除き、空値は未設定にする", () => {
+  const config = parseConfig(
+    {
+      OPEN_ZERO_DISCORD_TOKEN: " token ",
+      OPEN_ZERO_DISCORD_OWNER_ID: " owner ",
+      OPEN_ZERO_DISCORD_CH_TALK: " talk ",
+      OPEN_ZERO_DISCORD_CH_DRAFT: " ",
+    },
+    "/tmp/open-zero",
+  )
+  assert.equal(config.discord.token, "token")
+  assert.equal(config.discord.ownerId, "owner")
+  assert.deepEqual(config.discord.channels, { talk: "talk" })
+})
+
+test("deployment configはConfig境界以外からprocess environmentを読まない", () => {
+  const src = join(PROJECT_ROOT, "src")
+  const violations = readdirSync(src, { recursive: true })
+    .filter((entry): entry is string => typeof entry === "string" && entry.endsWith(".ts"))
+    .filter((entry) => entry !== "core/config.ts" && entry !== "core/env.ts")
+    .filter((entry) => /(?:process|Bun)\.env/.test(readFileSync(join(src, entry), "utf8")))
+  assert.deepEqual(violations, [])
 })

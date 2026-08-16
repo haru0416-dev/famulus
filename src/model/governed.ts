@@ -28,12 +28,8 @@ import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal } from
 import { traceOf } from "./trace.ts"
 
 /**
- * この経路がどちらのクォータを消費するか。プロセス単位で決まる。
- * cycle(src/cycle.ts)は systemd から別プロセスで起きるので、環境変数で仕切る
- * (1プロセスの中で対話と自走が混ざることがない、という事実をそのまま配置で表している)。
- *
- * 読み込み時ではなく呼び出し時に見る。const にすると import の順序が意味を持ってしまい、
- * 「cycle.ts が env を設定する前に評価されていたので対話用クォータを消費していた」が起きる。
+ * この経路がどちらのクォータを消費するかはプロセス単位で決まる。
+ * cycle(src/cycle.ts)はモデルを組み立てる前にprocess-local laneを切り替える。
  */
 /** 呼ぶ前の検査。拒否は Error にして投げる — 道具ループの外まで理由付きで出る。 */
 async function gate(model: string): Promise<void> {

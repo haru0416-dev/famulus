@@ -33,35 +33,17 @@ import { join } from "node:path"
 import * as Effect from "effect/Effect"
 import { Db } from "../services/Db.ts"
 import { cacheRoot, runsRoot, sweepOrphans } from "../services/Sandbox.ts"
+import { appConfig } from "./config.ts"
 import { localDayRange, localHour, nowIso } from "./time.ts"
 import { forgetWorkspaces, keptNames, mb, scanTree } from "./workspaces.ts"
-
-/**
- * これより古いものを削除する。続きをやる workspace を消さない期間を取る。
- *
- * 環境変数で縮められるようにしてあるのは、端から端まで通して確かめるため —
- * 既定の 14 日だと、確かめたい日に落ちるものが無い。
- */
-export const CLEANUP_DAYS = Number(process.env.OPEN_ZERO_CLEANUP_DAYS ?? 14)
 
 /** その日ぶんを済ませたかどうかを置く場所。 */
 export const CLEANUP_DAILY = "daily:cleanup"
 
-/** ユーザーの時計でこの時刻を過ぎてから回す。見直し(dream)と同じ時間帯。 */
-export const CLEANUP_HOUR = Number(process.env.OPEN_ZERO_CLEANUP_HOUR ?? 4)
-
-/**
- * 共有キャッシュの上限(MB)。超えたらまるごと削除する。
- *
- * 2GB にしたのは、走行 30回ぶんの workspace が合計 1.4GB で、その中で重複していたのが
- * 184MB だったから。同じ調子で溜まっても月単位で届かない幅。
- */
-export const CACHE_MAX_MB = Number(process.env.OPEN_ZERO_CACHE_MAX_MB ?? 2048)
-
 /** この cycle で回すかどうか。1日1回。印を付けるのは呼び出し側(src/cycle.ts)。 */
 export const cleanupDue = (atIso: string) =>
   Effect.gen(function* () {
-    if (localHour(atIso) < CLEANUP_HOUR) return false
+    if (localHour(atIso) < appConfig().schedule.cleanupHour) return false
     const db = yield* Db
     return (yield* db.meta(CLEANUP_DAILY)) !== localDayRange(atIso).key
   })
@@ -123,10 +105,10 @@ export const cleanup = (opts?: {
 }) =>
   Effect.gen(function* () {
     const at = opts?.at ?? nowIso()
-    const days = opts?.days ?? CLEANUP_DAYS
+    const days = opts?.days ?? appConfig().cleanup.days
     const cutoffMs = Date.parse(at) - days * 86_400_000
     const dry = opts?.dry === true
-    const maxMb = opts?.cacheMaxMb ?? CACHE_MAX_MB
+    const maxMb = opts?.cacheMaxMb ?? appConfig().cleanup.cacheMaxMb
 
     const runs = sweepRuns(cutoffMs, dry, yield* keptNames)
     // 実体を消したら説明も削除する。順はこちらが後 — 先に消すと、rmSync が失敗した回に

@@ -36,8 +36,8 @@ import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import { DREAM_DAYS, dream } from "./agent/dream.ts"
-import { CLEANUP_DAYS, cleanup } from "./core/cleanup.ts"
-import { appConfig } from "./core/config.ts"
+import { cleanup } from "./core/cleanup.ts"
+import { appConfig, configureApp } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { describeRefusal } from "./core/errors.ts"
 import { selfdev } from "./core/selfdev.ts"
@@ -51,7 +51,7 @@ import { Attention, type NextMove } from "./services/Attention.ts"
 import { CycleLease } from "./services/CycleLease.ts"
 import { Db } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
-import { AUTONOMOUS_ROLE, BUDGET, Governance } from "./services/Governance.ts"
+import { AUTONOMOUS_ROLE, Governance } from "./services/Governance.ts"
 import { Intake } from "./services/Intake.ts"
 import { Ledger } from "./services/Ledger.ts"
 import { Memory, renderRecall, STALE_BELIEF_DAYS } from "./services/Memory.ts"
@@ -252,7 +252,7 @@ const program = (argv: readonly string[]) =>
         return [
           halt ? `停止中: ${halt.reason}(${halt.at}) — oz resume で解除` : "停止: なし",
           ...pools,
-          `${t.day}: run ${t.runs} 回(うち自走 ${Number(a?.n ?? 0)}/${BUDGET.autonomousRuns})` +
+          `${t.day}: run ${t.runs} 回(うち自走 ${Number(a?.n ?? 0)}/${appConfig().governance.autonomousRuns})` +
             ` / 入力 ${fmtTok(t.inTok)} 出力 ${fmtTok(t.outTok)}`,
           // 自動処理は通知なしに停止しうる。最後に呼ばれた時刻を出しておかないと、
           // 「静かなのは用が無いからか、止まっているからか」がユーザーに区別できない。
@@ -475,7 +475,7 @@ const program = (argv: readonly string[]) =>
       case "cleanup": {
         // 消すほうは取り消せないので、既定の確認手段は --dry。
         const dry = rest.includes("--dry")
-        const days = Number(rest.find((a) => /^\d+$/.test(a)) ?? CLEANUP_DAYS)
+        const days = Number(rest.find((a) => /^\d+$/.test(a)) ?? appConfig().cleanup.days)
         return yield* cleanup({ days, ...(dry ? { dry: true } : {}) })
       }
 
@@ -576,9 +576,9 @@ function describe(e: unknown): string {
 
 const main = async (): Promise<void> => {
   loadEnv()
-  let config: ReturnType<typeof appConfig>
+  let config: ReturnType<typeof configureApp>
   try {
-    config = appConfig()
+    config = configureApp()
   } catch (error) {
     console.error(describe(error))
     process.exitCode = 1

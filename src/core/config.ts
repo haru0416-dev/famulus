@@ -58,12 +58,17 @@ export interface AppConfig {
   }
   readonly web: {
     readonly hostIntervalMs: number
-    readonly searxngBase: string
+    readonly searxngBase?: string
   }
   readonly discord: {
     readonly api: string
     readonly token?: string
     readonly ownerId?: string
+    readonly channels: {
+      readonly talk?: string
+      readonly draft?: string
+      readonly log?: string
+    }
   }
   readonly runImage?: string
 }
@@ -104,8 +109,8 @@ const integer = (
   return value
 }
 
-const absolutePath = (root: string, value: string): string => {
-  if (value === ":memory:") return value
+const absolutePath = (root: string, value: string, allowMemory = false): string => {
+  if (allowMemory && value === ":memory:") return value
   return isAbsolute(value) ? value : resolve(root, value)
 }
 
@@ -120,7 +125,10 @@ const endpoint = (
   try {
     const parsed = new URL(value)
     const loopback =
-      parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "::1"
+      parsed.hostname === "127.0.0.1" ||
+      parsed.hostname === "localhost" ||
+      parsed.hostname === "::1" ||
+      parsed.hostname === "[::1]"
     if (
       parsed.protocol !== "https:" &&
       !(options.allowLoopbackHttp && parsed.protocol === "http:" && loopback)
@@ -133,6 +141,17 @@ const endpoint = (
     issues.push(`${key}: HTTPS URLが必要です${options.allowLoopbackHttp ? "(loopback HTTPは可)" : ""}`)
     return fallback
   }
+}
+
+const optionalEndpoint = (
+  env: Env,
+  key: string,
+  fallback: string,
+  issues: string[],
+  options: { readonly allowLoopbackHttp: boolean },
+): string | undefined => {
+  if (textAllowEmpty(env, key, fallback) === "") return undefined
+  return endpoint(env, key, fallback, issues, options)
 }
 
 export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_ROOT): AppConfig {
@@ -174,12 +193,19 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
   }
   const discordToken = optional(env, "OPEN_ZERO_DISCORD_TOKEN")
   const discordOwnerId = optional(env, "OPEN_ZERO_DISCORD_OWNER_ID")
+  const discordTalk = optional(env, "OPEN_ZERO_DISCORD_CH_TALK")
+  const discordDraft = optional(env, "OPEN_ZERO_DISCORD_CH_DRAFT")
+  const discordLog = optional(env, "OPEN_ZERO_DISCORD_CH_LOG")
   const runImage = optional(env, "OPEN_ZERO_RUN_IMAGE")
+  const codexHome = absolutePath(root, text(env, "CODEX_HOME", resolve(homedir(), ".codex")))
+  const searxngBase = optionalEndpoint(env, "OPEN_ZERO_SEARXNG", "http://127.0.0.1:8888", issues, {
+    allowLoopbackHttp: true,
+  })
   const config: AppConfig = {
     rootDir: root,
     paths: {
       dataDir,
-      db: absolutePath(root, text(env, "OPEN_ZERO_DB", resolve(dataDir, "open-zero.db"))),
+      db: absolutePath(root, text(env, "OPEN_ZERO_DB", resolve(dataDir, "open-zero.db")), true),
       backups: absolutePath(root, text(env, "OPEN_ZERO_BACKUPS", resolve(dataDir, "backups"))),
       runs: absolutePath(root, text(env, "OPEN_ZERO_RUNS", resolve(dataDir, "runs"))),
       runCache: absolutePath(root, text(env, "OPEN_ZERO_RUN_CACHE", resolve(dataDir, "run-cache"))),
@@ -188,14 +214,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
         root,
         text(env, "OPEN_ZERO_TRANSCRIPT_ROOT", resolve(homedir(), ".claude/projects")),
       ),
-      codexAuth: absolutePath(
-        root,
-        text(
-          env,
-          "OPEN_ZERO_CODEX_AUTH",
-          resolve(text(env, "CODEX_HOME", resolve(homedir(), ".codex")), "auth.json"),
-        ),
-      ),
+      codexAuth: absolutePath(root, text(env, "OPEN_ZERO_CODEX_AUTH", resolve(codexHome, "auth.json"))),
     },
     timeZone,
     models,
@@ -223,16 +242,19 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     },
     web: {
       hostIntervalMs: integer(env, "OPEN_ZERO_HOST_INTERVAL_MS", 1_000, issues, { min: 0, max: 300_000 }),
-      searxngBase: endpoint(env, "OPEN_ZERO_SEARXNG", "http://127.0.0.1:8888", issues, {
-        allowLoopbackHttp: true,
-      }),
+      ...(searxngBase ? { searxngBase } : {}),
     },
     discord: {
       api: endpoint(env, "OPEN_ZERO_DISCORD_API", "https://discord.com/api/v10", issues, {
-        allowLoopbackHttp: false,
+        allowLoopbackHttp: true,
       }),
       ...(discordToken ? { token: discordToken } : {}),
       ...(discordOwnerId ? { ownerId: discordOwnerId } : {}),
+      channels: {
+        ...(discordTalk ? { talk: discordTalk } : {}),
+        ...(discordDraft ? { draft: discordDraft } : {}),
+        ...(discordLog ? { log: discordLog } : {}),
+      },
     },
     ...(runImage ? { runImage } : {}),
   }
@@ -244,6 +266,12 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
 }
 
 let current: AppConfig | undefined
+
+/** Validate and install the process-wide deployment config before constructing runtime services. */
+export function configureApp(env: Env = process.env, rootDir: string = PROJECT_ROOT): AppConfig {
+  current = parseConfig(env, rootDir)
+  return current
+}
 
 export function appConfig(): AppConfig {
   current ??= parseConfig()
