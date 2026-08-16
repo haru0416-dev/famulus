@@ -538,6 +538,10 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         }
       }),
     )
+    // 返信は書けた瞬間に出す。flush は poll の中にしか無いので、ここで呼ばないと
+    // 次の poll tick(最大30秒後)まで queued のまま待つ(実測: 完成 05:05:22 → 配送 05:05:35)。
+    // 失敗しても投げない — queue は永続で、次の poll が再送する。commit は上で済んでいる。
+    await run(Effect.flatMap(Discord, (d) => d.flushQueued())).catch(() => {})
     if (cutOff) return `止まった(${cutOff})— 走った跡は DB に残っている`
     return text ? `動いた: ${text.slice(0, 400)}` : "動いた(発話なし)"
   } finally {
