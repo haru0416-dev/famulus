@@ -23,11 +23,13 @@ export const drainInbox: Effect.Effect<number, DbFailed | ConnectorFailed, Disco
     const batch = yield* discord.pollInbound()
     for (const m of batch.items) {
       if (m.draft) yield* drafts.applyDecision(m.draft.id, m.draft.decision, m.id)
+      const location = batch.locations?.[m.id]
       yield* mem.remember({
         source: "owner",
         content: m.text,
         at: nowIso(),
         origin: { kind: "discord", id: m.id },
+        ...(location ? { provenance: [{ kind: "discord", ref: location }] } : {}),
       })
     }
     // 記録してから cursor を進める。逆順だと `remember` が失敗した回の項目が cursor より前に

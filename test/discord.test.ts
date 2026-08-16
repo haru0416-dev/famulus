@@ -16,6 +16,7 @@ import { Attention } from "../src/services/Attention.ts"
 import { Db } from "../src/services/Db.ts"
 import { Discord, type Enqueue } from "../src/services/Discord.ts"
 import { Drafts } from "../src/services/Drafts.ts"
+import { Memory } from "../src/services/Memory.ts"
 import { Research } from "../src/services/Research.ts"
 import { withHarness } from "./helpers.ts"
 
@@ -104,10 +105,27 @@ const fakeDiscord = async (
         if (m) {
           m.reactions ??= []
           m.reactions.push({ emoji: { name }, count: 1, me: true })
+          return res.writeHead(204).end()
         }
-        return res.writeHead(204).end()
+        return res.writeHead(404).end("{}")
       }
-      if (ch && path.startsWith(`/channels/${ch}/messages?`)) return json(at(ch))
+      const [, messageChannel, messageId] = /^\/channels\/(\d+)\/messages\/(\d+)$/.exec(path) ?? []
+      if (messageChannel && messageId && req.method === "GET") {
+        const message = at(messageChannel).find((candidate) => candidate.id === messageId)
+        return message ? json(message) : res.writeHead(404).end("{}")
+      }
+      if (ch && path.startsWith(`/channels/${ch}/messages?`)) {
+        const query = new URL(path, "http://discord.test")
+        const before = query.searchParams.get("before")
+        const after = query.searchParams.get("after")
+        const limit = Number(query.searchParams.get("limit") ?? "50")
+        const listed = [...at(ch)]
+          .sort((a, b) => (BigInt(a.id) > BigInt(b.id) ? -1 : 1))
+          .filter((message) => before === null || BigInt(message.id) < BigInt(before))
+          .filter((message) => after === null || BigInt(message.id) > BigInt(after))
+          .slice(0, limit)
+        return json(listed)
+      }
       return res.writeHead(404).end("{}")
     })
   })
@@ -335,6 +353,27 @@ test("初回は自由文を取り込まない — DM に残っている過去の
   }
 })
 
+test("owner自由文のeventには返信先channelをprovenanceとして残す", async () => {
+  const dc = await fakeDiscord([{ id: "80", content: "位置合わせ", author: { id: OWNER } }])
+  wire(dc.url, { talk: CH })
+  try {
+    await withHarness(async (h) => {
+      await h.run(pollInbound)
+      dc.at(CH).unshift({ id: "81", content: "ここで続けて", author: { id: OWNER } })
+      assert.equal(await h.run(drainInbox), 1)
+      const event = await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.get("SELECT provenance FROM events WHERE origin_kind='discord' AND origin_id='81'"),
+        ),
+      )
+      assert.deepEqual(JSON.parse(String(event?.provenance)), [{ kind: "discord", ref: CH }])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
 test("記録完了前に終了した回の項目は、次の回にもう一度取得する", async () => {
   const dc = await fakeDiscord([{ id: "70", content: "位置合わせ", author: { id: OWNER } }])
   wire(dc.url)
@@ -353,6 +392,200 @@ test("記録完了前に終了した回の項目は、次の回にもう一度�
     wire(undefined)
     await dc.close()
   }
+})
+
+test("未読が100件を超えても全件を古い順に取得してからcursorを進める", async () => {
+  const dc = await fakeDiscord([{ id: "1000", content: "位置合わせ", author: { id: OWNER } }])
+  wire(dc.url)
+  try {
+    await withHarness(async (h) => {
+      await h.run(pollInbound)
+      for (let id = 1001; id <= 1125; id++) {
+        dc.msgs.unshift({ id: String(id), content: `指示${id}`, author: { id: OWNER } })
+      }
+
+      const items = await h.run(pollInbound)
+      assert.equal(items.length, 125)
+      assert.deepEqual(items.at(0), { id: "1001", text: "指示1001" })
+      assert.deepEqual(items.at(-1), { id: "1125", text: "指示1125" })
+      assert.equal(
+        dc.hits.filter((hit) => hit.method === "GET" && hit.path.includes("/messages?")).length,
+        3,
+        "初回の位置合わせ1回と、未読を回収する2ページ",
+      )
+      assert.deepEqual(await h.run(pollInbound), [])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("後続ページの取得失敗では取得済みページより先へcursorを進めない", async () => {
+  let failSecondPage = false
+  let page = 0
+  const dc = await fakeDiscord([{ id: "2000", content: "位置合わせ", author: { id: OWNER } }], (hit) => {
+    if (!failSecondPage || hit.method !== "GET" || !hit.path.includes("/messages?")) return undefined
+    page++
+    return page === 2 ? { status: 503 } : undefined
+  })
+  wire(dc.url)
+  try {
+    await withHarness(async (h) => {
+      await h.run(pollInbound)
+      for (let id = 2001; id <= 2125; id++) {
+        dc.msgs.unshift({ id: String(id), content: `指示${id}`, author: { id: OWNER } })
+      }
+
+      failSecondPage = true
+      const failed = await h.run(Effect.result(peek))
+      assert.equal(failed._tag, "Failure")
+      assert.equal(await h.run(Effect.flatMap(Db, (db) => db.meta(`discord:last:${CH}`))), "2000")
+
+      failSecondPage = false
+      const recovered = await h.run(pollInbound)
+      assert.equal(recovered.length, 125)
+      assert.equal(recovered[0]?.id, "2001")
+      assert.equal(recovered.at(-1)?.id, "2125")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("cursorより古いリアクション待ちはmessage IDで直接確認する", async () => {
+  const dc = await fakeDiscord(
+    Array.from({ length: 201 }, (_, index) => {
+      const id = String(300 - index)
+      return {
+        id,
+        content: `投稿${id}`,
+        author: { id: "bot" },
+        ...(id === "100" ? { reactions: [{ emoji: { name: "✅" }, count: 2, me: true }] } : {}),
+      }
+    }),
+  )
+  wire(dc.url, { talk: CH })
+  try {
+    await withHarness(async (h) => {
+      await h.run(
+        Effect.gen(function* () {
+          const db = yield* Db
+          yield* db.setMeta(`discord:last:${CH}`, "300")
+          yield* db.setMeta("discord:taps", JSON.stringify({ "100": { "✅": "古い投稿への返事" } }))
+        }),
+      )
+      assert.deepEqual(await h.run(pollInbound), [{ id: "100:✅", text: "古い投稿への返事" }])
+      assert.equal(
+        dc.hits.some((hit) => hit.method === "GET" && hit.path === `/channels/${CH}/messages/100`),
+        true,
+      )
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("権限を失った過去channelのtapは破棄して現在channelの受信を続ける", async () => {
+  const oldChannel = "7999"
+  const dc = await fakeDiscord([], (hit) =>
+    hit.method === "GET" && hit.path === `/channels/${oldChannel}/messages/100` ? { status: 403 } : undefined,
+  )
+  dc.at(CH).unshift(
+    { id: "301", content: "現在の指示", author: { id: OWNER } },
+    { id: "300", content: "位置合わせ", author: { id: OWNER } },
+  )
+  wire(dc.url, { talk: CH })
+  try {
+    await withHarness(async (h) => {
+      await h.run(
+        Effect.gen(function* () {
+          const db = yield* Db
+          yield* db.setMeta(`discord:last:${CH}`, "300")
+          yield* db.setMeta(
+            "discord:taps",
+            JSON.stringify({ "100": { "✅": { reply: "旧tap", channelId: oldChannel } } }),
+          )
+        }),
+      )
+      assert.deepEqual(await h.run(pollInbound), [{ id: "301", text: "現在の指示" }])
+      assert.equal(await h.run(Effect.flatMap(Db, (db) => db.meta("discord:taps"))), "{}")
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("古いbatchを後からcommitしてもcursorと返信先を巻き戻さない", async () => {
+  wire(undefined)
+  await withHarness(async (h) => {
+    const result = await h.run(
+      Effect.gen(function* () {
+        const discord = yield* Discord
+        const db = yield* Db
+        const memory = yield* Memory
+        yield* db.setMeta(`discord:last:${TALK}`, "500")
+        yield* db.setMeta("discord:heard_in", TALK)
+        yield* db.setMeta("discord:heard_at", "100")
+        yield* memory.remember({
+          source: "owner",
+          content: "最後のowner発言",
+          at: "2026-08-16T00:00:00Z",
+          origin: { kind: "discord", id: "600" },
+          provenance: [{ kind: "discord", ref: CH }],
+        })
+        yield* memory.remember({
+          source: "owner",
+          content: "遅れて保存された古い発言",
+          at: "2026-08-16T00:01:00Z",
+          origin: { kind: "discord", id: "500" },
+          provenance: [{ kind: "discord", ref: TALK }],
+        })
+        yield* discord.commitInboundBatch({
+          items: [],
+          marks: { [TALK]: "700", [CH]: "200" },
+          consumedTapIds: [],
+          heard: CH,
+          heardAt: "200",
+        })
+        const afterOld = {
+          heard: yield* db.meta("discord:heard_in"),
+          heardAt: yield* db.meta("discord:heard_at"),
+        }
+        yield* discord.commitInboundBatch({
+          items: [],
+          marks: { [CH]: "600" },
+          consumedTapIds: [],
+          heard: CH,
+          heardAt: "600",
+        })
+        yield* discord.commitInboundBatch({
+          items: [],
+          marks: { [TALK]: "500" },
+          consumedTapIds: [],
+          heard: TALK,
+          heardAt: "500",
+        })
+        return {
+          afterOld,
+          talkCursor: yield* db.meta(`discord:last:${TALK}`),
+          dmCursor: yield* db.meta(`discord:last:${CH}`),
+          heard: yield* db.meta("discord:heard_in"),
+          heardAt: yield* db.meta("discord:heard_at"),
+        }
+      }),
+    )
+    assert.deepEqual(result, {
+      afterOld: { heard: CH, heardAt: "600" },
+      talkCursor: "700",
+      dmCursor: "600",
+      heard: CH,
+      heardAt: "600",
+    })
+  })
 })
 
 test("押されたリアクションも、記録し終えるまでは消えない", async () => {
@@ -989,6 +1222,348 @@ test("別workerが送信中のactionをreceiptなしでsentにしない", async 
       const stillSending = await h.run(Effect.flatMap(Discord, (d) => d.getOutbound(outbound.id)))
       assert.equal(stillSending?.state, "sending")
       assert.equal(stillSending?.actions[0]?.state, "sending")
+      assert.equal(dc.hits.length, 0)
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("receipt永続化後に停止したoutboundは残りのactionから再開する", async () => {
+  const dc = await fakeDiscord()
+  dc.at(TALK).unshift({ id: "4242", content: "本文", author: { id: "bot" } })
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const outbound = await h.run(
+        Effect.flatMap(Discord, (d) =>
+          d.enqueue({
+            purpose: "reply",
+            dedupeKey: "resume-after-receipt",
+            text: "本文",
+            taps: [{ emoji: "✅", reply: "了解" }],
+          }),
+        ),
+      )
+      assert.ok(outbound)
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.withImmediateTransaction("simulate restart after receipt", (tx) => {
+            tx.run(
+              "UPDATE discord_outbound SET state='sending',updated_at='2000-01-01T00:00:00Z' WHERE id=?",
+              outbound.id,
+            )
+            tx.run(
+              `UPDATE discord_outbound_actions
+                  SET state='succeeded',receipt=?,updated_at='2000-01-01T00:00:00Z'
+                WHERE outbound_id=? AND ordinal=0`,
+              JSON.stringify({ channelId: TALK, messageId: "4242" }),
+              outbound.id,
+            )
+          }),
+        ),
+      )
+
+      const [done] = await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      assert.equal(done?.state, "sent")
+      assert.deepEqual(
+        done?.actions.map((action) => action.state),
+        ["succeeded", "succeeded"],
+      )
+      assert.equal(dc.hits.length, 1)
+      assert.equal(
+        decodeURIComponent(dc.hits[0]?.path ?? ""),
+        `/channels/${TALK}/messages/4242/reactions/✅/@me`,
+      )
+      const pending = JSON.parse(
+        (await h.run(Effect.flatMap(Db, (db) => db.meta("discord:taps")))) ?? "{}",
+      ) as Record<string, unknown>
+      assert.deepEqual(pending["4242"], {
+        "✅": { reply: "了解", outboundId: outbound.id, channelId: TALK },
+      })
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("旧版が安全な中間状態をunknownにしたoutboundもaction状態から再開する", async () => {
+  const dc = await fakeDiscord()
+  dc.at(TALK).unshift({ id: "4343", content: "本文", author: { id: "bot" } })
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const outbound = await h.run(
+        Effect.flatMap(Discord, (d) =>
+          d.enqueue({
+            purpose: "reply",
+            dedupeKey: "recover-legacy-unknown",
+            text: "本文",
+            taps: [{ emoji: "✅", reply: "了解" }],
+          }),
+        ),
+      )
+      assert.ok(outbound)
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.withImmediateTransaction("simulate legacy broad unknown", (tx) => {
+            tx.run(
+              `UPDATE discord_outbound
+                  SET state='unknown',error='interrupted during HTTP',updated_at='2000-01-01T00:00:00Z'
+                WHERE id=?`,
+              outbound.id,
+            )
+            tx.run(
+              `UPDATE discord_outbound_actions
+                  SET state='succeeded',receipt=?,updated_at='2000-01-01T00:00:00Z'
+                WHERE outbound_id=? AND ordinal=0`,
+              JSON.stringify({ channelId: TALK, messageId: "4343" }),
+              outbound.id,
+            )
+          }),
+        ),
+      )
+
+      const [done] = await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      assert.equal(done?.state, "sent")
+      assert.deepEqual(
+        done?.actions.map((action) => action.state),
+        ["succeeded", "succeeded"],
+      )
+      assert.equal(
+        decodeURIComponent(dc.hits[0]?.path ?? ""),
+        `/channels/${TALK}/messages/4343/reactions/✅/@me`,
+      )
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("旧版で全receipt後に停止したoutboundはtap metadataを補修してsentになる", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const outbound = await h.run(
+        Effect.flatMap(Discord, (d) =>
+          d.enqueue({
+            purpose: "reply",
+            dedupeKey: "recover-completed-tap",
+            text: "本文",
+            taps: [{ emoji: "✅", reply: "了解" }],
+          }),
+        ),
+      )
+      assert.ok(outbound)
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.withImmediateTransaction("simulate legacy completed actions", (tx) => {
+            tx.run(
+              "UPDATE discord_outbound SET state='sending',updated_at='2000-01-01T00:00:00Z' WHERE id=?",
+              outbound.id,
+            )
+            tx.run(
+              `UPDATE discord_outbound_actions
+                  SET state='succeeded',receipt=?,updated_at='2000-01-01T00:00:00Z'
+                WHERE outbound_id=? AND ordinal=0`,
+              JSON.stringify({ channelId: TALK, messageId: "5252" }),
+              outbound.id,
+            )
+            tx.run(
+              `UPDATE discord_outbound_actions
+                  SET state='succeeded',receipt=?,updated_at='2000-01-01T00:00:00Z'
+                WHERE outbound_id=? AND ordinal=1`,
+              JSON.stringify({ status: 204 }),
+              outbound.id,
+            )
+          }),
+        ),
+      )
+
+      assert.deepEqual(await h.run(Effect.flatMap(Discord, (d) => d.flushQueued())), [])
+      const done = await h.run(Effect.flatMap(Discord, (d) => d.getOutbound(outbound.id)))
+      assert.equal(done?.state, "sent")
+      const pending = JSON.parse(
+        (await h.run(Effect.flatMap(Db, (db) => db.meta("discord:taps")))) ?? "{}",
+      ) as Record<string, unknown>
+      assert.deepEqual(pending["5252"], {
+        "✅": { reply: "了解", outboundId: outbound.id, channelId: TALK },
+      })
+      assert.equal(dc.hits.length, 0)
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("一部のtap配送に失敗したoutboundでは成功済みtapも入力にしない", async () => {
+  let reactions = 0
+  const dc = await fakeDiscord([], (hit) => {
+    if (hit.method === "PUT" && ++reactions === 2) return { status: 429 }
+    return undefined
+  })
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const retained = Object.fromEntries(
+        Array.from({ length: 20 }, (_, index) => [
+          String(9_000_000_000_000_000_000n + BigInt(index)),
+          { "✅": { reply: `既存${index}` } },
+        ]),
+      )
+      await h.run(Effect.flatMap(Db, (db) => db.setMeta("discord:taps", JSON.stringify(retained))))
+      const messageId = await h.run(
+        post({
+          text: "選んで",
+          taps: [
+            { emoji: "✅", reply: "了解" },
+            { emoji: "🛑", reply: "停止" },
+          ],
+        }),
+      )
+      assert.ok(messageId)
+      const outbound = await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.get(
+            "SELECT state FROM discord_outbound WHERE purpose='discord-test' ORDER BY created_at DESC LIMIT 1",
+          ),
+        ),
+      )
+      assert.equal(outbound?.state, "partial")
+      const pending = JSON.parse(
+        (await h.run(Effect.flatMap(Db, (db) => db.meta("discord:taps")))) ?? "{}",
+      ) as Record<string, unknown>
+      assert.deepEqual(pending, retained, "失敗したoutboundが既存の有効tapを追い出さない")
+      const reaction = dc.at(TALK).find((message) => message.id === messageId)?.reactions?.[0]
+      assert.ok(reaction)
+      reaction.count = 2
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.setMeta("discord:taps", JSON.stringify({ ...retained, [messageId]: { "✅": "了解" } })),
+        ),
+      )
+      assert.deepEqual(await h.run(pollInbound), [])
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("別outboundの完了時も送信中tapは有効tap20件の枠を奪わない", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const retained = Object.fromEntries(
+        Array.from({ length: 20 }, (_, index) => [
+          String(8_000_000_000_000_000_000n + BigInt(index)),
+          { "✅": { reply: `既存${index}` } },
+        ]),
+      )
+      const interrupted = await h.run(
+        Effect.gen(function* () {
+          const discord = yield* Discord
+          const db = yield* Db
+          const outbound = yield* discord.enqueue({
+            purpose: "reply",
+            dedupeKey: "deferred-tap-capacity",
+            text: "送信中",
+          })
+          assert.ok(outbound)
+          yield* db.withImmediateTransaction("simulate worker between actions", (tx) => {
+            tx.run(
+              "UPDATE discord_outbound SET state='sending',updated_at='2099-01-01T00:00:00Z' WHERE id=?",
+              outbound.id,
+            )
+            tx.run(
+              "INSERT OR REPLACE INTO schema_meta(key,value)VALUES('discord:taps',?)",
+              JSON.stringify({
+                "7777777777777777777": {
+                  "✅": {
+                    reply: "送信中",
+                    outboundId: outbound.id,
+                    channelId: TALK,
+                  },
+                },
+                ...retained,
+              }),
+            )
+          })
+          return outbound
+        }),
+      )
+
+      await h.run(post({ text: "別outbound" }))
+      const during = JSON.parse(
+        (await h.run(Effect.flatMap(Db, (db) => db.meta("discord:taps")))) ?? "{}",
+      ) as Record<string, unknown>
+      assert.equal(Object.keys(during).length, 21)
+      for (const id of Object.keys(retained)) assert.deepEqual(during[id], retained[id])
+
+      await h.run(
+        Effect.gen(function* () {
+          const db = yield* Db
+          yield* db.withImmediateTransaction("complete old deferred outbound", (tx) => {
+            tx.run("UPDATE discord_outbound SET updated_at='2000-01-01T00:00:00Z' WHERE id=?", interrupted.id)
+            tx.run(
+              `UPDATE discord_outbound_actions
+                  SET state='succeeded',receipt=?,updated_at='2000-01-01T00:00:00Z'
+                WHERE outbound_id=?`,
+              JSON.stringify({ channelId: TALK, messageId: "7777777777777777777" }),
+              interrupted.id,
+            )
+          })
+          const discord = yield* Discord
+          yield* discord.flushQueued()
+        }),
+      )
+      const after = JSON.parse(
+        (await h.run(Effect.flatMap(Db, (db) => db.meta("discord:taps")))) ?? "{}",
+      ) as Record<string, unknown>
+      assert.deepEqual(after, retained)
+    })
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+})
+
+test("HTTP中に停止した古いactionはunknownで閉じて再送しない", async () => {
+  const dc = await fakeDiscord()
+  wire(dc.url, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      const outbound = await h.run(
+        Effect.flatMap(Discord, (d) =>
+          d.enqueue({ purpose: "reply", dedupeKey: "interrupted-http", text: "本文" }),
+        ),
+      )
+      assert.ok(outbound)
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.withImmediateTransaction("simulate interrupted HTTP", (tx) => {
+            tx.run(
+              "UPDATE discord_outbound SET state='sending',updated_at='2000-01-01T00:00:00Z' WHERE id=?",
+              outbound.id,
+            )
+            tx.run(
+              "UPDATE discord_outbound_actions SET state='sending',updated_at='2000-01-01T00:00:00Z' WHERE outbound_id=?",
+              outbound.id,
+            )
+          }),
+        ),
+      )
+
+      await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      const done = await h.run(Effect.flatMap(Discord, (d) => d.getOutbound(outbound.id)))
+      assert.equal(done?.state, "unknown")
+      assert.equal(done?.actions[0]?.state, "unknown")
       assert.equal(dc.hits.length, 0)
     })
   } finally {
