@@ -1,5 +1,5 @@
 /**
- * 実行主体(直接モデルを持つ経路)の全数登録(.ward/plans/011 Phase A step 1)。
+ * 実行主体(直接モデルを持つ経路)の全数登録。
  *
  * 直接モデルを持つ経路を足すときは、まず `AgentProfileId` に名前を足さないと
  * `AGENT_PROFILES` の Record が型で落ちる — 登録漏れのまま経路だけ増える形を塞ぐ。
@@ -12,7 +12,7 @@ import { appConfig } from "../core/config.ts"
 import { digestOf, type GenerationRef } from "./kernel-spec.ts"
 import { ROLE_MODEL } from "./Runner.ts"
 
-/** ループの役割(plan 011 の分類)。coordinator / synthesizer は 006 で使う予約。 */
+/** ループの役割。coordinator / synthesizer は複数枝の統合が入るまでの予約。 */
 export type LoopRole = "interactive" | "autonomous" | "coordinator" | "worker" | "reviewer" | "synthesizer"
 
 export type AgentProfileId =
@@ -34,7 +34,7 @@ export interface AgentProfile {
   readonly model: () => string
   /**
    * この主体のモデルに見える道具名の全数。空 = 道具なし(素の構造化推論)。
-   * ここに無い道具が見えたら分類漏れ(plan 007 の deny-by-default の前段)。
+   * ここに無い道具が見えたら分類漏れ(deny-by-default の前段)。
    */
   readonly tools: readonly string[]
 }

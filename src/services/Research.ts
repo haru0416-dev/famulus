@@ -490,13 +490,13 @@ const makeResearch = () =>
       })
 
     /**
-     * explore(fan-out)1回ぶんを1つのdossierに固定する(.ward/plans/005 step 6)。
+     * explore(fan-out)1回ぶんを1つのdossierに固定する。
      *
      * webのdossierと違う点は2つ:
      * - 分岐の状態(空振り・失敗・重複)を evidence 無しの observation として残す。
      *   空振りは結果であって欠損ではない — 記録しないと同じ方向をもう一度掘る。
      * - 親の予想と除外予定を**分岐の結果より先に**固定する。結果を見てから予想を書くと、
-     *   「予想を外した」の判定が後知恵になる(assessment §15)。呼ぶ側は分岐実行前に
+     *   「予想を外した」の判定が後知恵になる。呼ぶ側は分岐実行前に
      *   この引数を確定させる。
      *
      * 実体のあるclaim(evidence付き)の検証はwebと同じ: quoteは取得snapshotに実在すること。

@@ -1,5 +1,5 @@
 /**
- * Skill 登録と SkillPlan 合成(.ward/plans/011 Phase A step 4)の検査。
+ * Skill 登録と SkillPlan 合成の検査。
  * 合成はホストの規則で決まり、Skill を足しても指示以外(道具・権限)は変わらない。
  * kernel への固定は「同じ計画は同じ hash、違う計画は Conflict」を loop_specs の行で確かめる。
  */

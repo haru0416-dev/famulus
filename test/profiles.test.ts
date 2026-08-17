@@ -1,9 +1,9 @@
 /**
- * 実行主体の全数登録と scope 交差(.ward/plans/011 Phase A step 1〜3)の検査。
+ * 実行主体の全数登録と scope 交差の検査。
  *
  * - 登録(宣言)と assistant の実体が食い違ったら落ちる — 宣言だけ増える形も、
  *   経路だけ増える形も、ここで見える。
- * - provider-native の外部 I/O 道具が profile に紛れ込んだら落ちる(plan 009 の回帰網)。
+ * - provider-native の外部 I/O 道具が profile に紛れ込んだら落ちる。
  * - 委譲は交差で減るだけ — どの次元も親を超えられない。
  */
 
@@ -27,7 +27,7 @@ test("親 profile の道具全数は assistant の登録と一致する", () => 
     if (children.has(name)) continue
     assert.ok(
       PARENT_TOOLS.includes(name),
-      `assistant の ${name} が profile に未分類(plan 011: 未分類の道具は増やせない)`,
+      `assistant の ${name} が profile に未分類(未分類の道具は増やせない)`,
     )
   }
 })
@@ -39,7 +39,7 @@ test("全 profile の道具はローカル実装の閉じた集合に収まり�
       assert.ok(local.has(tool), `${profile.id} の ${tool} はローカル道具ではない`)
     }
   }
-  // plan 009 の回帰網: provider 側で実行される道具名は、委譲先(worker / reviewer)のモデルに見えない。
+  // 回帰網: provider 側で実行される道具名は、委譲先(worker / reviewer)のモデルに見えない。
   // 親の `x_search` はローカル道具名(実体は独立呼び出しへの隔離 — src/model/x-search.ts)なので対象外。
   for (const profile of Object.values(AGENT_PROFILES)) {
     if (profile.loopRole === "interactive" || profile.loopRole === "autonomous") continue
@@ -53,7 +53,10 @@ test("モデル呼び出しの実装が provider 側 tools を注入しない(x-
   // Responses の body に tools を積むのは x-search.ts だけ。xai-responses(全モデル呼び出しの実体)に
   // tools が現れたら、provider 実行の外部 I/O がモデル経路に入った可能性がある。
   const adapter = read("src/model/xai-responses.ts")
-  assert.ok(!/\btools\s*:/.test(adapter), "xai-responses に tools 注入が現れた(plan 009 違反の疑い)")
+  assert.ok(
+    !/\btools\s*:/.test(adapter),
+    "xai-responses に tools 注入が現れた(provider 実行道具は使わない方針への違反の疑い)",
+  )
   const xsearch = read("src/model/x-search.ts")
   assert.ok(/type: "x_search"/.test(xsearch), "x-search の隔離実装が変わった — 逸脱記録を見直す")
 })

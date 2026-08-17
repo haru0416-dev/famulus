@@ -360,7 +360,7 @@ const DIGGER = `検索役。DB を検索して、要る行を**原文のまま**
 /** 委譲の結果契約。自由文で返る委譲(digger / explore の描画済み本文)に共通。 */
 const TEXT_CONTRACT = resultContractRef("delegate-text-v1", rs(v.string()))
 
-/** 委譲1回ぶんの予算の天井。実行を止める線ではなく、監査と同一性の器(plan 011 Phase A)。 */
+/** 委譲1回ぶんの予算の天井。実行を止める線ではなく、監査と同一性の器。 */
 const DELEGATION_BUDGET = {
   researcher: { modelCalls: 12, toolCalls: 24, tokens: 400_000, costMicrousd: 2_000_000 },
   digger: { modelCalls: 10, toolCalls: 16, tokens: 200_000, costMicrousd: 1_000_000 },
@@ -368,7 +368,7 @@ const DELEGATION_BUDGET = {
 } as const
 
 /**
- * 委譲を kernel の ExecutionRoot/LoopSpec として固定する(.ward/plans/011 Phase A step 6)。
+ * 委譲を kernel の ExecutionRoot/LoopSpec として固定する。
  *
  * ここで固定するのは同一性(owner・stable slot・profile・SkillPlan・task 入力の hash)と
  * 予算の器。モデル呼び出しごとの統治と会計は governed middleware が今までどおり持つ。
@@ -488,7 +488,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
         }),
       ),
       execute: async ({ task, mode, target_count, prediction, exclusions }, { abortSignal }) => {
-        // ── explore: コード側の決められた fan-out(.ward/plans/005)。親の自発的な分割に依存しない。
+        // ── explore: コード側の決められた fan-out。親の自発的な分割に依存しない。
         if (mode === "explore") {
           // 分岐7本 × 最大6手は長い。締めの時間を残せない回は始めない — 途中で切ると全分岐が消える。
           if (remainingMs() < 240_000) {

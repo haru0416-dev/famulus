@@ -1,5 +1,5 @@
 /**
- * SKILL.md の取り込み(.ward/plans/010 の前倒し許可範囲 — no-exec validator と読み込みだけ)。
+ * SKILL.md の取り込み(no-exec validator と読み込みだけ)。
  *
  * 正本は `~/.famulus/skills/`(`FAMULUS_SKILLS`)— famulus の家。他ベンダーには属さない。
  * famulus は実体を直接読み、Claude Code は `~/.claude/skills` からの symlink で同じ正本を読む。
@@ -8,7 +8,7 @@
  * 実行はしない。読み込みは frontmatter(name / description)と本文の抽出、サイズ上限、
  * root 外への symlink 脱出の拒否だけ。**どの skill をどのスロットで使ってよいかは
  * ホスト側の分類(src/agent/skills.ts)が決める** — SKILL.md 自身の記述は untrusted な
- * 主張であって、権限も道具も運ばない(plan 010 の信頼模型)。
+ * 主張であって、権限も道具も運ばない。
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -67,7 +67,7 @@ export function parseSkillMd(content: string): { name: string; description: stri
 
 /**
  * `<root>/<dir>/SKILL.md` を全部読む。壊れたものは落として理由を残す —
- * 1つの不正が全体の読み込みを止めない(plan 010 の component-level failure isolation)。
+ * 1つの不正が全体の読み込みを止めない。
  */
 export function importSkillsFrom(root: string): SkillImportResult {
   const skills: ImportedSkill[] = []

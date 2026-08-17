@@ -23,7 +23,7 @@ import { nowIso } from "../core/time.ts"
 import { isRefusal, run } from "../runtime.ts"
 import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
-import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal } from "./models.ts"
+import { assertKnownModel, ModelCallError, poolForModel } from "./models.ts"
 import { traceOf } from "./trace.ts"
 import { XAI_PROVIDER_META, xaiResponsesModel } from "./xai-responses.ts"
 
@@ -60,7 +60,6 @@ async function account(
   const at = nowIso()
   await run(
     Effect.gen(function* () {
-      const gov = yield* Governance
       const ledger = yield* Ledger
       yield* ledger.record({
         kind: "turn",

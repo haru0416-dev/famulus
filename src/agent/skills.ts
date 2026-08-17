@@ -1,11 +1,11 @@
 /**
- * 組み込み Skill の世代固定登録と SkillPlan の合成(.ward/plans/011 Phase A step 4)。
+ * 組み込み Skill の世代固定登録と SkillPlan の合成。
  *
  * Skill は**1枚の指示層**だけを持つ。道具・モデル・予算・権限・状態は持たない —
  * Skill を足して変わるのは指示だけで、authority は profile と scope の交差からしか出ない。
  * 合成はホスト側の規則(このファイル)で決まり、モデルにも Skill 本文にも決めさせない。
  *
- * 登録は明示選択のみ(routing は plan 011 Phase B で、曖昧な実例が出てから)。
+ * 登録は明示選択のみ(routing は曖昧な実例が出てから)。
  * スロットは method / presentation の2つまで。exclusive な Skill は単独で走る。
  */
 import { appConfig } from "../core/config.ts"
@@ -108,7 +108,7 @@ const importedDefinition = (id: string, root?: string): SkillDefinition | undefi
   }
 }
 
-/** 組み込みと取り込みを同じ型に揃えて引く(plan 011: 両者は同じ内部型・同じ実行経路)。 */
+/** 組み込みと取り込みを同じ型に揃えて引く(両者は同じ内部型・同じ実行経路)。 */
 export function resolveSkill(id: string, root?: string): SkillDefinition | undefined {
   return (SKILLS as Record<string, SkillDefinition>)[id] ?? importedDefinition(id, root)
 }
@@ -207,7 +207,7 @@ export function compileSkillPlan(input: {
 }
 
 /**
- * 合成済み計画から指示の重ねを描画する。順序は method → presentation(plan 011 の層順)。
+ * 合成済み計画から指示の重ねを描画する。順序は method → presentation。
  * パラメータは placeholder の置換だけ — 文面の追加はできない。
  */
 export function renderSkillOverlay(

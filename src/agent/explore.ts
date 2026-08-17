@@ -1,12 +1,12 @@
 /**
- * 調査モード(.ward/plans/005)。`wide` / `deep` は researcher と同じループへの指示の重ね、
+ * 調査モード。`wide` / `deep` は researcher と同じループへの指示の重ね、
  * `explore` は決められた fan-out — コード側が変形別の独立分岐を起動する。
  *
  * 分岐が受け取るのは**種となる問いと自分の変形だけ**。兄弟の結果も親の予想も渡さない —
  * 渡すと2件目が1件目の語彙を引き継いで、同じ観点しか見なくなる(観測済みの失敗)。
  * 予想と除外予定は親が dossier に observation として先に固定する(src/services/Research.ts)。
  *
- * 変形の7種は docs/assessment-2026-08-14.md §13.2 の表そのまま。全方向を毎回走らせるかは
+ * 全方向を毎回走らせるかは
  * 呼ぶ側が決める(既定は全7 — 比較評価が終わるまで explore は opt-in のまま)。
  */
 import type { LanguageModelV4 } from "@ai-sdk/provider"
@@ -34,7 +34,7 @@ export const EXPLORE_TRANSFORMS: readonly ExploreTransform[] = [
   "human",
 ]
 
-/** 変形 → 探すもの。assessment §13.2 の表の写し。文言を変えるときは表の側も変える。 */
+/** 変形 → 探すもの。 */
 export const TRANSFORM_GOAL: Record<ExploreTransform, string> = {
   direct: "同じ問題の別製品、別実装、別研究",
   structural: "名前は違うが入力、失敗、評価の構造が同じもの",
@@ -174,7 +174,7 @@ export function findDuplicates(
 }
 
 /**
- * 締切に応じて道具を絞る(plan 005 step 4)。残りが少ない分岐は fetch(1回20秒級)を
+ * 締切に応じて道具を絞る。残りが少ない分岐は fetch(1回20秒級)を
  * 止めて search だけにし、さらに少なければ道具を全部止めて手持ちで書かせる。
  */
 export function activeToolsFor(leftMs: number): readonly string[] | undefined {

@@ -1,5 +1,5 @@
 /**
- * 実効 scope の交差(.ward/plans/011 Phase A step 2)。
+ * 実効 scope の交差。
  *
  * 委譲で渡せる権限は**交差で減るだけ**。子の要求が親を超える次元は親の値へ切り詰め、
  * 親に無い道具は子から落ちる。ここは純関数 — 授権の実体(道具の構築・統治)は呼ぶ側が持ち、
@@ -33,7 +33,7 @@ export class DelegationDenied extends Error {
  *
  * - budget: 次元ごとに min。親の残りを別勘定で渡したい場合も、ここを通した値しか渡せない。
  * - deadline: min。子が親より長く生きる形を作らない。
- * - tools: 交差。親に見えない道具は子にも見えない(Skill のヒントでも増えない — plan 011)。
+ * - tools: 交差。親に見えない道具は子にも見えない(Skill のヒントでも増えない)。
  * - depth: 親から1減らし、子の要求とで小さいほう。親が 0(葉)なら委譲そのものを拒否する。
  */
 export function intersectScope(parent: EffectiveScope, request: Partial<EffectiveScope>): EffectiveScope {

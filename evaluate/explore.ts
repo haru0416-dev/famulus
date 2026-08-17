@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 /**
- * plan 005 の比較評価(現行経路 vs explore fan-out)。`bun run evaluate:explore -- <cmd>`。
+ * 調査モードの比較評価(現行経路 vs explore fan-out)。`bun run evaluate:explore -- <cmd>`。
  *
  *   list                  … 固定fixture(実際に過去に調べた問い)の一覧
  *   contract <n>          … 評価契約(語彙・予想・除外・rubric)をファイルに固定する。
  *                           **実行より先に呼ぶ。既にあれば上書きしない** — 結果を見てから
- *                           基準を書くと候補経路に有利な分類になる(assessment §15)。
+ *                           基準を書くと候補経路に有利な分類になる。
  *   run <n> current       … 現行経路(researcher 1本)で実行し、生の結果を保存する
  *   run <n> explore       … explore fan-out(7方向)で実行し、生の結果と dossier を保存する
  *   compare <n>           … 機械で数えられる指標を並べ、判定欄が空の比較表を書き出す
@@ -159,7 +159,7 @@ async function runExplorePath(seed: string) {
   }
 }
 
-/** explore の分岐を実DBの dossier に固定する(plan 005 step 6)。捏造 quote は記録側の検証で落ちる。 */
+/** explore の分岐を実DBの dossier に固定する。捏造 quote は記録側の検証で落ちる。 */
 const recordExplore = (
   f: (typeof FIXTURES)[number],
   branches: readonly BranchOutcome[],

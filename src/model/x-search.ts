@@ -9,11 +9,11 @@
  * 統治は Runner と同じ順(precheck → 実行 → クォータ状態更新 → 会計)を通す。
  * ここを通らない x_search の経路を作らない。
  *
- * これは .ward/plans/009 の「provider 実行の外部 I/O 道具を使わない」からの意図的な逸脱。
- * 009 が provider の web_search を外せたのはホスト側の代替(search+fetch)があったからで、
+ * これは「provider 実行の外部 I/O 道具を使わない」方針からの意図的な逸脱。
+ * provider の web_search を外せたのはホスト側の代替(search+fetch)があったからで、
  * X には代替が無い(本文の取れる API が全滅 — src/services/Search.ts)。代わりに、
  * エージェントのモデル呼び出しへ注入せず独立呼び出しに隔離し、precheck を I/O に先行させる。
- * plan 007(Capability)が入ったら、この道具はそこへ登録して分類を受ける。
+ * Capability 登録が入ったら、この道具はそこへ登録して分類を受ける。
  */
 import * as Effect from "effect/Effect"
 import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown } from "../core/errors.ts"

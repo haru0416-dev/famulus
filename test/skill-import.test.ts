@@ -1,5 +1,5 @@
 /**
- * SKILL.md 取り込み(plan 010 の no-exec 前倒し)の検査。
+ * SKILL.md 取り込み(no-exec)の検査。
  * 読み込み・封じ込め・分類 deny-by-default・世代の内容固定を見る。実行は何もしない。
  */
 
