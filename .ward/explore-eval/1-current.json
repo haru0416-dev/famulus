@@ -1,0 +1,33 @@
+{
+  "path": "current",
+  "elapsedMs": 28829,
+  "steps": 4,
+  "fetches": 2,
+  "output": {
+    "limitations": "No primary sources found for AI product, model, or OSS releases dated 2026-08-09 to 2026-08-16. Searches returned only arXiv preprints. No GitHub releases, npm packages, or official announcements matched the date window after fetching candidate pages.",
+    "claims": [
+      {
+        "statement": "arXiv:2608.08437 'AI and the Research Team' submitted 9 Aug 2026",
+        "kind": "observation",
+        "evidence": [
+          {
+            "url": "https://arxiv.org/abs/2608.08437",
+            "quote": "[Submitted on 9 Aug 2026] ... From: Johan Fourie [ view email ] [v1] Sun, 9 Aug 2026 03:09:22 UTC",
+            "polarity": "support"
+          }
+        ]
+      },
+      {
+        "statement": "Multiple AI papers posted to arXiv on 10–14 Aug 2026 (cs.AI category)",
+        "kind": "observation",
+        "evidence": [
+          {
+            "url": "https://arxiv.org/list/cs.AI/recent",
+            "quote": "Fri, 14 Aug 2026 (showing first 50 of 204 entries) ... Mon, 10 Aug 2026",
+            "polarity": "support"
+          }
+        ]
+      }
+    ]
+  }
+}

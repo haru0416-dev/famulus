@@ -1,0 +1,104 @@
+{
+  "path": "explore",
+  "elapsedMs": 54145,
+  "duplicates": [],
+  "branches": [
+    {
+      "transform": "direct",
+      "output": {
+        "empty": true,
+        "summary": "Searched web/arxiv/github for AI model/paper/release/OSS dated 2026-08-09..2026-08-16; 0 primary sources found in range.",
+        "limitations": "arXiv rate-limited; date-range operator may miss some pages.",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 3,
+      "elapsedMs": 14539
+    },
+    {
+      "transform": "structural",
+      "output": {
+        "empty": true,
+        "summary": "Date-range searches (web/arxiv/github) for AI releases matching the input/failure/evaluation structure yielded zero candidates.",
+        "limitations": "arXiv rate-limited during search; no candidate URLs emerged to fetch.",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 3,
+      "elapsedMs": 20241
+    },
+    {
+      "transform": "distant",
+      "output": {
+        "empty": true,
+        "summary": "2026-08-09〜08-16 の範囲で該当する AI リリース・論文等を web/arxiv で探したが、isomorphism/duality/analogy を絡めた一次資料は 0 件。7 月の arXiv:2607.13190 は範囲外のため除外。",
+        "limitations": "arxiv 検索が rate limit で不完全。8 月中旬の新着は索引にまだ反映されていない可能性あり。",
+        "claims": []
+      },
+      "snapshots": [
+        {
+          "url": "https://arxiv.org/abs/2607.13190",
+          "content": "[2607.13190] Reliable isomorphic physics problem generation with large language models\n\nPhysics > Physics Education\n\narXiv:2607.13190 (physics)\n\n[Submitted on 14 Jul 2026]\n\nTitle: Reliable isomorphic physics problem generation with large language models\n\nAuthors: Xian Wu , Lindim Ismaili\n\nView PDF\n\nAbstract: This study presents an AI-powered system for generating isomorphic physics problems using large language model (LLM)-based agent workflows. The system is designed around three practical goals: preserving the same conceptual and problem-solving structure as the original problems, varying construct-irrelevant features such as scenarios and numerical values, and producing questions that are directly usable without expert revision. The workflow combines prompt chaining, agent-based verification, and automated LaTeX compilation within a publicly accessible website hosted on a Raspberry Pi. To evaluate the system, we developed an eight-item rubric and tested the system using 13 multiple-choice questions from a calculus-based introductory Newtonian mechanics course. The evaluation results showed that 89% of the questions generated were rated as fully specified and directly usable. However, the system also showed limitations. The results suggest that LLM-based systems have significant potential for reliable instructional problem generation while also highlighting important challenges for future development.\n\nSubjects:\n\nPhysics Education (physics.ed-ph)\n\nCite as:\narXiv:2607.13190 [physics.ed-ph]\n\n(or\narXiv:2607.13190v1 [physics.ed-ph] for this version)\n\nhttps://doi.org/10.48550/arXiv.2607.13190\n\narXiv-issued DOI via DataCite\n\nSubmission history\nFrom: Xian Wu [ view email ]\n[v1]\nTue, 14 Jul 2026 18:42:14 UTC (383 KB)\n\nFull-text links:\nAccess Paper:\n\nView PDF\n\nview license\n\nCurrent browse context:\n\nphysics.ed-ph\n\n< prev\n\nnext >\n\nnew\n\nrecent\n2026-07\n\nChange to browse by:\n\nphysics\n\nReferences & Citations\n\nNASA ADS\nGoogle Scholar\n\nSemantic Scholar\n\nData provided by:\n\nBookmark\n\nBibliographic Tools\n\nBibliographic and Citation Tools\n\nBibliographic Explorer Toggle\n\nBibliographic Explorer ( What is the Explorer? )\n\nConnected Papers Toggle\n\nConnected Papers ( What is Connected Papers? )\n\nLitmaps Toggle\n\nLitmaps ( What is Litmaps? )\n\nscite.ai Toggle\n\nscite Smart Citations ( What are Smart Citations? )\n\nCode, Data, Media\n\nCode, Data and Media Associated with this Article\n\nalphaXiv Toggle\n\nalphaXiv ( What is alphaXiv? )\n\nLinks to Code Toggle\n\nCatalyzeX Code Finder for Papers ( What is CatalyzeX? )\n\nDagsHub Toggle\n\nDagsHub ( What is DagsHub? )\n\nGotitPub Toggle\n\nGotit.pub ( What is GotitPub? )\n\nHuggingface Toggle\n\nHugging Face ( What is Huggingface? )\n\nScienceCast Toggle\n\nScienceCast ( What is ScienceCast? )\n\nDemos\n\nDemos\n\nReplicate Toggle\n\nReplicate ( What is Replicate? )\n\nSpaces Toggle\n\nHugging Face Spaces ( What is Spaces? )\n\nSpaces Toggle\n\nTXYZ.AI ( What is TXYZ.AI? )\n\nRelated Papers\n\nRecommenders and Search Tools\n\nLink to Influence Flower\n\nInfluence Flower ( What are Influence Flowers? )\n\nCore recommender toggle\n\nCORE Recommender ( What is CORE? )\n\nAuthor\n\nVenue\n\nInstitution\n\nTopic\n\nAbout arXivLabs\n\narXivLabs: experimental projects with community collaborators\n\narXivLabs is a framework that allows collaborators to develop and share new arXiv features directly on our website.\n\nBoth individuals and organizations that work with arXivLabs have embraced and accepted our values of openness, community, excellence, and user data privacy. arXiv is committed to these values and only works with partners that adhere to them.\n\nHave an idea for a project that will add value for arXiv's community? Learn more about arXivLabs .\n\nWhich authors of this paper are endorsers? |\nDisable MathJax ( What is MathJax? )",
+          "status": 200
+        }
+      ],
+      "steps": 3,
+      "elapsedMs": 13386
+    },
+    {
+      "transform": "invert",
+      "output": {
+        "empty": true,
+        "summary": "2026-08-09〜16 の一次資料で、主語・因果・成功失敗・除去保持反転に関する記述は見つからず。",
+        "limitations": "arxiv は回数制限で未取得。DeepSeek-V4-Pro-0813 の公式ページ (api-docs.deepseek.com) は未 fetch。",
+        "claims": []
+      },
+      "snapshots": [
+        {
+          "url": "https://aireleasetracker.com/latest",
+          "content": "「DeepSeek」は全 1981字の中に 4か所。前後 300字を見せる。\n\n[0字目]\nLatest AI Model Releases — August 2026\n\nLatest AI Model Releases\nRelease date\n\nQwen3.8-27B\nFri, Aug 14 2026\nGLM-5.3\nFri, Aug 14 2026\nGemini 3.7 Flash\nThu, Aug 13 2026\nDeepSeek-V4-Pro-0813\nThu, Aug 13 2026\nGrok 4.6\nWed, Aug 12 2026\nGPT-5.6-Cyber\nMon, Aug 10 2026\nMuse Glimmer\nMon, Aug 10 2026\nMuse Spark 1.2\nWed, Aug 5 2026\nQwen3.8-Max\nMon, Aug 3 2026\nDeepSeek-V4-Flash-0731\nFri, Jul 31 2026\nClaude Opus 5\nFri, Jul 24 2026\nGemini 3.5 Flash Cyber\nTue, Jul 21 2026\nGemini 3.5 Fl\n\n[51字目]\nodel Releases\nRelease date\n\nQwen3.8-27B\nFri, Aug 14 2026\nGLM-5.3\nFri, Aug 14 2026\nGemini 3.7 Flash\nThu, Aug 13 2026\nDeepSeek-V4-Pro-0813\nThu, Aug 13 2026\nGrok 4.6\nWed, Aug 12 2026\nGPT-5.6-Cyber\nMon, Aug 10 2026\nMuse Glimmer\nMon, Aug 10 2026\nMuse Spark 1.2\nWed, Aug 5 2026\nQwen3.8-Max\nMon, Aug 3 2026\nDeepSeek-V4-Flash-0731\nFri, Jul 31 2026\nClaude Opus 5\nFri, Jul 24 2026\nGemini 3.5 Flash Cyber\nTue, Jul 21 2026\nGemini 3.5 Flash-Lite\nTue, Jul 21 2026\nGemini 3.6 Flash\nTue, Jul 21 2026\nKimi K3\nThu, Jul 16 2026\nMuse Spark 1.1\nThu, Jul 9 2026\nGrok 4.5\nWed, Jul 8 2026\nClaude Sonnet 5\nTue, Jun 30 2026\nGPT-5.6 Lu\n\n[1094字目]\nk or in the past 24 hours? AI Release Tracker updates within hours of every major lab's announcement. The table above is sorted newest-first — the top entries are the most recent frontier models as of August 2026.\nWhich companies are tracked? Releases from Anthropic, OpenAI, Google, Meta, SpaceXAI, DeepSeek, Mistral, Moonshot AI, Cursor, Z.ai, Qwen. Each company has a dedicated timeline linked from the homepage.\nHow often is this list updated? New frontier model releases are added within hours of the official announcement. The page itself revalidates hourly so titles and snippets always reflect the cu\n\n[1625字目]\ne page itself revalidates hourly so titles and snippets always reflect the current month and most recent release.\nThe most recent frontier AI model is Qwen3.8-27B by Qwen , released on Aug 14 2026 . Above: the 25 most recent AI model releases from OpenAI, Anthropic, Google DeepMind, Meta, SpaceXAI, DeepSeek, Mistral, and Moonshot AI, sorted newest first.",
+          "status": 200
+        }
+      ],
+      "steps": 3,
+      "elapsedMs": 14600
+    },
+    {
+      "transform": "variable",
+      "output": {
+        "empty": true,
+        "summary": "2026-08-09〜16の固定環境・言語・主体・時間・評価方法変更に関する一次資料はweb/arxiv検索で0件、該当DBページにも該当語なし。",
+        "limitations": "arxivはrate limitで未取得。ai-data-base.comはキーワード該当なし。",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 3,
+      "elapsedMs": 10350
+    },
+    {
+      "transform": "falsify",
+      "output": {
+        "empty": true,
+        "summary": "Searched web/arxiv for primary AI model/paper/OSS releases dated 2026-08-09..16; no primary sources found in range.",
+        "limitations": "arxiv index unavailable due to rate limit; two NVIDIA blog posts fetched but contained no date strings matching the window.",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 4,
+      "elapsedMs": 19302
+    },
+    {
+      "transform": "human",
+      "output": {
+        "empty": true,
+        "summary": "Searched web for organizational psychology/sociology/OB papers or releases dated 2026-08-09 to 2026-08-16; no matching primary sources found.",
+        "limitations": "Date-range search returned only timeless or off-date pages; no primary sources opened.",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 3,
+      "elapsedMs": 13919
+    }
+  ],
+  "dossier": "02e465bb-880e-4d5d-8693-5a764961e005"
+}

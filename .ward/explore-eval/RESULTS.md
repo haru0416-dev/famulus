@@ -1,19 +1,30 @@
-# plan 005 比較評価の記録
+# plan 005 比較評価の記録(最終・n=3)
 
-## 実施済み
+## 実施
 
-- fixture 2(deep 形の実問い「Discord Gateway の再接続でセッションを捨てるとき、シーケンス番号も捨てるべきか」)
-  - 契約固定 → current → explore → 比較の順(2026-08-17)。raw は 2-*.json、比較は 2-comparison.md。
-  - current: 5手 / 2取得 / 15秒で一次確認つき claim 1件と正直な limitations。
-  - explore: 23手 / 1取得 / 57秒で **7方向すべて明示的な空振り**。実体の claim 0件。
-    dossier 291c3450 に空振りごと固定済み(oz dossier で見える)。
+3 fixtures(いずれも実際に過去に調べた問い)で契約固定 → current / explore の対を実走(2026-08-17)。
 
-## 受け入れ判断(plan 005 step 9 / done criteria)
+| fixture | 形 | current(claim/一次確認/手数/秒) | explore(claim/空振り方向/手数/秒) |
+|---|---|---|---|
+| 1 週内の AI リリース | wide | 2 / 2 / 4手 / 12s | 0 / 7 / 22手 / 61s |
+| 2 Gateway 再接続と seq | deep | 1 / 1 / 5手 / 15s | 0 / 7 / 23手 / 57s |
+| 3 net無し sandbox の DNS | debug | 2 / 2 / 3手 / 10s | 0 / 7 / 18手 / 47s |
 
-**explore は opt-in のまま**(researcher の mode=explore)。この fixture では
-どの変形も accepted evidence を足さず、コストは手数 4.6 倍・実時間 3.8 倍。
-done criteria の「差が出なければ常設の overhead にしない」に該当する。
+raw は `<n>-{contract,current,explore}.json`、判定済み比較表は `<n>-comparison.md`。
+explore の dossier は実DBに固定済み(空振りごと)。fixture 3 の explore は1回目が
+原因不明で失敗し再実行で成功(エラー文の取り逃しは実行側の tail の手落ち)。
 
-ただし n=1 で、deep 形の種は explore に最も不利な形。fixture 1(wide 形)と
-fixture 3 の対は未実施 — 契約は固定してから回すこと。空振り7件が「種の枠の外は
-空だと確認できた」という副産物価値を持つかは、この評価では測っていない。
+## 受け入れ判断(最終)
+
+**explore は opt-in のまま。既定経路にしない。**21分岐・3種類の問いの形で、
+accepted evidence への寄与が0件、手数は約5倍。予想を外した発見は3件中2件が
+**current 側**から出た(予想より具体的な一次確認)。
+
+## 副産物: 分岐の失敗の型(未検証の仮説として記録)
+
+分岐は変形を「探す方向の変更」ではなく**検索語の制約**として直訳している
+(例: human 分岐が「組織心理学 論文 8/09-16」を検索して0件)。probspace の原型では
+変形を当てるのは人間で、検索語への翻訳も人間がやっていた。候補仮説:
+(a) ブリーフに変形の適用**例**(悪い翻訳と良い翻訳の対)を足す、
+(b) 分岐モデルを上位(grok-4.6)にする、(c) 変形の翻訳だけ親にやらせて検索は分岐に残す。
+どれも**測っていない**。試すなら同じ契約・同じ fixtures で対を取り直す。

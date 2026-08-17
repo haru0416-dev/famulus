@@ -1,0 +1,92 @@
+{
+  "path": "explore",
+  "elapsedMs": 46383,
+  "duplicates": [],
+  "branches": [
+    {
+      "transform": "direct",
+      "output": {
+        "empty": true,
+        "summary": "web/github/stackoverflow で sandbox/container 環境のネットワーク隔離による DNS/name resolution 依存テスト失敗の別製品・別実装・別研究事例は 0 件。",
+        "limitations": "検索語を複数回変えても該当する一次資料が得られず。Wikipedia や arxiv も未検索のため未確認。",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 3,
+      "elapsedMs": 12652
+    },
+    {
+      "transform": "structural",
+      "output": {
+        "empty": true,
+        "summary": "2回の検索で sandbox/network/dependency 関連のページを10件前後得たが、入力・失敗・評価の構造が同じ別事例は一切見つからなかった",
+        "limitations": "web/stackoverflow/github の索引のみ使用。fetch 未実施のため deeper claim なし",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 2,
+      "elapsedMs": 10593
+    },
+    {
+      "transform": "distant",
+      "output": {
+        "empty": true,
+        "summary": "Searched web for named isomorphic problems in unrelated fields (e.g., flaky test isolation, sandbox dependency failures, offline name resolution analogs); zero matches outside software testing domain.",
+        "limitations": "Searches limited to web index; no arxiv/wikipedia-specific hits on named cross-domain phenomena.",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 3,
+      "elapsedMs": 15346
+    },
+    {
+      "transform": "invert",
+      "output": {
+        "empty": true,
+        "summary": "search for sandbox + 名前解決 + テスト失敗 + 因果/除去/保持/反転/success failure across web/qiita/zenn/github returned 0 relevant hits",
+        "limitations": "",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 2,
+      "elapsedMs": 8791
+    },
+    {
+      "transform": "variable",
+      "output": {
+        "empty": true,
+        "summary": "web検索で「sandbox テスト 環境変更 言語変更 評価方法変更」および同等英語語を試したが、Salesforce/Windows Sandboxの一般説明のみで該当方向のページは0件。",
+        "limitations": "2回の検索で関連候補が出ず、fetch対象なし。",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 2,
+      "elapsedMs": 10009
+    },
+    {
+      "transform": "falsify",
+      "output": {
+        "empty": true,
+        "summary": "sandbox DNS resolution test failure refute 関連の検索で一次資料候補0件。反証資料なし。",
+        "limitations": "web検索で関連ページが一切ヒットせず、fetch対象なし。",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 3,
+      "elapsedMs": 11219
+    },
+    {
+      "transform": "human",
+      "output": {
+        "empty": true,
+        "summary": "Searched web for organizational psychology/sociology links to sandbox/network-dependent test failures; only unrelated I/O psychology overviews and one inaccessible IT post-mortem abstract appeared.",
+        "limitations": "ResearchGate page returned 403; no content retrieved. No other candidate URLs matched the assigned direction.",
+        "claims": []
+      },
+      "snapshots": [],
+      "steps": 3,
+      "elapsedMs": 14930
+    }
+  ],
+  "dossier": "63f47f83-71e5-4384-8eba-184aeaf7a1bf"
+}
