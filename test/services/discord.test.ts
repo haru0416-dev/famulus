@@ -113,10 +113,24 @@ const fakeDiscord = async (
         }
         return res.writeHead(404).end("{}")
       }
+      if (/^\/channels\/\d+\/typing$/.test(path) && req.method === "POST") return res.writeHead(204).end()
       const [, messageChannel, messageId] = /^\/channels\/(\d+)\/messages\/(\d+)$/.exec(path) ?? []
       if (messageChannel && messageId && req.method === "GET") {
         const message = at(messageChannel).find((candidate) => candidate.id === messageId)
         return message ? json(message) : res.writeHead(404).end("{}")
+      }
+      if (messageChannel && messageId && req.method === "PATCH") {
+        const message = at(messageChannel).find((candidate) => candidate.id === messageId)
+        if (!message) return res.writeHead(404).end("{}")
+        message.content = String(body?.content ?? "")
+        return json({ id: messageId })
+      }
+      if (messageChannel && messageId && req.method === "DELETE") {
+        const room = at(messageChannel)
+        const found = room.findIndex((candidate) => candidate.id === messageId)
+        if (found < 0) return res.writeHead(404).end("{}")
+        room.splice(found, 1)
+        return res.writeHead(204).end()
       }
       if (ch && path.startsWith(`/channels/${ch}/messages?`)) {
         const query = new URL(path, "http://discord.test")
@@ -377,6 +391,116 @@ test("済んだ合図は見た合図を外す — ✅ を付けてから 👀 �
         ["succeeded", "succeeded"],
       )
       assert.deepEqual(reactions(), ["✅"])
+    })
+  })
+})
+
+test("進行表示は台帳を通さない直接送信 — typing / post / edit / delete", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, { talk: TALK }, async () => {
+    await withHarness(async (h) => {
+      const { id, afterEdit, outbound } = await h.run(
+        Effect.gen(function* () {
+          const discord = yield* Discord
+          const db = yield* Db
+          yield* discord.typing(CH)
+          const id = yield* discord.statusPost(CH, "🛠 recall(病院)×2")
+          assert.ok(id)
+          yield* discord.statusEdit(CH, id, "🛠 recall(病院)×2 · digger")
+          const afterEdit = dc.msgs.find((m) => m.id === id)?.content
+          yield* discord.statusDelete(CH, id)
+          return { id, afterEdit, outbound: yield* db.all("SELECT id FROM discord_outbound") }
+        }),
+      )
+      assert.ok(dc.hits.some((x) => x.method === "POST" && x.path === `/channels/${CH}/typing`))
+      assert.equal(afterEdit, "🛠 recall(病院)×2 · digger")
+      assert.equal(
+        dc.msgs.find((m) => m.id === id),
+        undefined,
+      )
+      // 台帳に行が増えていない — 進行表示は配送記録ではない
+      assert.deepEqual(outbound, [])
+
+      // 失敗は握りつぶして処理を止めない(実在しない message の edit / delete)
+      await h.run(
+        Effect.flatMap(Discord, (discord) =>
+          Effect.gen(function* () {
+            yield* discord.statusEdit(CH, "9999", "x")
+            yield* discord.statusDelete(CH, "9999")
+          }),
+        ),
+      )
+    })
+  })
+})
+
+test("進行表示は相手が落ちていても失敗しない — 表示が出ないだけ", async () => {
+  const dc = await fakeDiscord()
+  const dead = dc.url
+  await dc.close()
+  wire(dead, { talk: TALK })
+  try {
+    await withHarness(async (h) => {
+      await h.run(
+        Effect.flatMap(Discord, (discord) =>
+          Effect.gen(function* () {
+            yield* discord.typing(CH)
+            assert.equal(yield* discord.statusPost(CH, "x"), undefined)
+            yield* discord.statusEdit(CH, "1", "x")
+            yield* discord.statusDelete(CH, "1")
+          }),
+        ),
+      )
+    })
+  } finally {
+    wire(undefined)
+  }
+})
+
+test("progressFor は変化があるときだけ送り、post 失敗は次の tick で再試行する", async () => {
+  let failNextPost = true
+  const dc = await fakeDiscord([], (hit) => {
+    if (failNextPost && hit.method === "POST" && hit.path === `/channels/${CH}/messages`) {
+      failNextPost = false
+      return { status: 500 }
+    }
+    return undefined
+  })
+  await wired(dc, { talk: TALK }, async () => {
+    await withHarness(async (h) => {
+      const posts = () =>
+        dc.hits.filter((x) => x.method === "POST" && x.path === `/channels/${CH}/messages`).length
+      const display = await h.run(Effect.map(Discord, (d) => d.progressFor(CH)))
+
+      // 1通も出していないうちの stop は何もしない
+      await h.run(display.stop())
+      assert.equal(dc.hits.length, 0)
+
+      // 内容が無いうちは typing だけ
+      await h.run(display.tick())
+      assert.equal(posts(), 0)
+      assert.ok(dc.hits.some((x) => x.path === `/channels/${CH}/typing`))
+
+      // post が失敗した tick は次の tick で同じ内容を再試行する
+      display.want("🛠 recall(病院)×2")
+      await h.run(display.tick())
+      assert.equal(dc.msgs.length, 0)
+      await h.run(display.tick())
+      assert.equal(posts(), 2)
+      assert.equal(dc.msgs[0]?.content, "🛠 recall(病院)×2")
+
+      // 同じ内容では送らない。変わったら同じ1通を edit
+      await h.run(display.tick())
+      assert.equal(posts(), 2)
+      display.want("🛠 recall(病院)×2 · digger")
+      await h.run(display.tick())
+      assert.equal(posts(), 2)
+      assert.equal(dc.msgs.length, 1)
+      assert.equal(dc.msgs[0]?.content, "🛠 recall(病院)×2 · digger")
+
+      // stop は作った1通だけを消す
+      await h.run(display.stop())
+      assert.equal(dc.msgs.length, 0)
     })
   })
 })

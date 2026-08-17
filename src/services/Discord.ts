@@ -359,6 +359,77 @@ const makeDiscord = () =>
       })
     }
 
+    // ── 進行表示。台帳(discord_outbound)を通さない直接送信。進行中にだけ意味がある表示で、
+    // 受領証も再送も要らない — 失敗しても表示が出ないだけで、処理には関わらせない。
+    const typing = (channelId: string): Effect.Effect<void> =>
+      call(`/channels/${channelId}/typing`, { method: "POST" }).pipe(
+        Effect.map(() => undefined),
+        Effect.catch(() => Effect.void),
+      )
+
+    const statusPost = (channelId: string, content: string): Effect.Effect<string | undefined> =>
+      call(`/channels/${channelId}/messages`, { method: "POST", body: JSON.stringify({ content }) }).pipe(
+        Effect.flatMap((r) =>
+          r.ok
+            ? Effect.tryPromise(() => r.json() as Promise<{ id?: unknown }>)
+            : Effect.succeed({} as { id?: unknown }),
+        ),
+        Effect.map((j) => (typeof j.id === "string" && j.id !== "" ? j.id : undefined)),
+        Effect.catch(() => Effect.succeed(undefined)),
+      )
+
+    const statusEdit = (channelId: string, messageId: string, content: string): Effect.Effect<void> =>
+      call(`/channels/${channelId}/messages/${messageId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ content }),
+      }).pipe(
+        Effect.map(() => undefined),
+        Effect.catch(() => Effect.void),
+      )
+
+    const statusDelete = (channelId: string, messageId: string): Effect.Effect<void> =>
+      call(`/channels/${channelId}/messages/${messageId}`, { method: "DELETE" }).pipe(
+        Effect.map(() => undefined),
+        Effect.catch(() => Effect.void),
+      )
+
+    /**
+     * 進行表示の1本化。typing を打ち続け、内容が変わったときだけ1通を post→edit で更新し、
+     * 終わりに delete する。post に失敗した tick は shown を進めない — 次の tick が再試行になる。
+     * tick の重なりは捨てる(遅い HTTP の上に次の tick を積まない)。
+     */
+    const progressFor = (channelId: string) => {
+      let wanted = ""
+      let shown = ""
+      let id: string | undefined
+      let busy = false
+      return {
+        want(content: string): void {
+          wanted = content
+        },
+        tick: (): Effect.Effect<void> =>
+          Effect.gen(function* () {
+            if (busy) return
+            busy = true
+            try {
+              yield* typing(channelId)
+              if (wanted !== "" && wanted !== shown) {
+                const body = wanted
+                if (id === undefined) id = yield* statusPost(channelId, body)
+                else yield* statusEdit(channelId, id, body)
+                if (id !== undefined) shown = body
+              }
+            } finally {
+              busy = false
+            }
+          }),
+        stop: (): Effect.Effect<void> =>
+          Effect.gen(function* () {
+            if (id !== undefined) yield* statusDelete(channelId, id)
+          }),
+      } as const
+    }
+
     const meta = <T>(key: string, fallback: T): Effect.Effect<T, DbFailed> =>
       db.meta(key).pipe(
         Effect.map((raw) => {
@@ -1383,7 +1454,20 @@ const makeDiscord = () =>
         }
       })
 
-    return { enqueue, getOutbound, flushQueued, pollInbound, commitInboundBatch, configured, where } as const
+    return {
+      enqueue,
+      getOutbound,
+      flushQueued,
+      pollInbound,
+      commitInboundBatch,
+      configured,
+      where,
+      typing,
+      statusPost,
+      statusEdit,
+      statusDelete,
+      progressFor,
+    } as const
   })
 
 export class Discord extends Context.Service<Discord, Effect.Success<ReturnType<typeof makeDiscord>>>()(

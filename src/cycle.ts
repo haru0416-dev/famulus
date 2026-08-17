@@ -27,7 +27,7 @@ import { ConnectorFailed, causeReason, describeRefusal } from "./core/errors.ts"
 import { localDayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
-import { logPost, readJournal } from "./journal.ts"
+import { logPost, readJournal, tally } from "./journal.ts"
 import { digestOf } from "./model/kernel-spec.ts"
 import { poolForModel } from "./model/models.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
@@ -446,11 +446,16 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
   // ここを通らないので、その回の起動は DB を1回引くだけで終わる。
   const { createAssistant } = await import("./agent/assistant.ts")
 
+  // 話しかけられた回の進行表示。typing は即時、道具の経過は最初の道具から1通を編集で更新する。
+  // 台帳は通さない(Discord.ts の注記)。自律実行の回には出さない — 誰も待っていない。
+  const display = acked ? await run(Effect.map(Discord, (dc) => dc.progressFor(acked.channelId))) : undefined
+
   try {
     const assistant = createAssistant({
       model: cycleModel(),
       leaseToken: token,
       onLeaseLost: (reason) => leaseAbort.abort(reason),
+      ...(display ? { onToolStep: (tools, targets) => display.want(`🛠 ${tally(tools, targets)}`) } : {}),
     })
     // 道具に締切を見せる。プロンプトに書くだけでは足りない — 起動時の文は、9回目を
     // 走らせるかどうかを決める時点では過去の話になっている(src/core/deadline.ts)。
@@ -475,7 +480,16 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
     }
     const began = Date.now()
     await assertLease(token)
-    const turn = await assistant.respond(prompt, { signal: AbortSignal.any([deadline, leaseSignal]) })
+    const ticker = display ? setInterval(() => void run(display.tick()).catch(() => {}), 5_000) : undefined
+    if (display) void run(display.tick()).catch(() => {})
+    let turn: Awaited<ReturnType<typeof assistant.respond>>
+    try {
+      turn = await assistant.respond(prompt, { signal: AbortSignal.any([deadline, leaseSignal]) })
+    } finally {
+      if (ticker) clearInterval(ticker)
+      // 進行表示は返事と入れ替わりで消す。切られた回も消す — ⚠️ の合図が残る。
+      if (display) await run(display.stop()).catch(() => {})
+    }
     const ms = Date.now() - began
     // 時間切れと、それ以外の止まり方を混ぜない。混ぜると「420秒で切られた」だけが DB に残り、
     // 自律実行上限への到達もモデル側の失敗も同じ文言になる。次回に何を直せばいいか読めなくなる。

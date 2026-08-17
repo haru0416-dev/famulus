@@ -1486,6 +1486,10 @@ export interface AssistantOptions {
   readonly model?: string | undefined
   readonly leaseToken?: CycleLeaseToken | undefined
   readonly onLeaseLost?: ((reason: unknown) => void) | undefined
+  /** 道具を呼んだ step ごとに、ここまでの道具の並びを受け取る(進行表示用)。 */
+  readonly onToolStep?:
+    | ((tools: readonly string[], targets: Readonly<Record<string, string>>) => void)
+    | undefined
 }
 
 /** ツールを呼ぶ step の文は経過なので、利用者向けの最終本文には入れない。 */
@@ -1584,6 +1588,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
                 if (target) toolTargets[c.toolName] = target
               }
             }
+            if ((s.toolCalls ?? []).length > 0) opts.onToolStep?.(tools, toolTargets)
             const t = replyStepText(s.text, s.toolCalls ?? [])
             if (t && t !== said.at(-1)) said.push(t)
           },

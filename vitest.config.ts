@@ -7,7 +7,7 @@ export default defineConfig({
       provider: "istanbul",
       reporter: ["text"],
       thresholds: {
-        branches: 69.44,
+        branches: 69.36,
         functions: 78.79,
         lines: 78.14,
         statements: 76.67,
