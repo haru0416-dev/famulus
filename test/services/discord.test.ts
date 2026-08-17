@@ -104,6 +104,10 @@ const fakeDiscord = async (
         const m = at(ch).find((x) => x.id === id)
         if (m) {
           m.reactions ??= []
+          if (req.method === "DELETE") {
+            m.reactions = m.reactions.filter((r) => !(r.me && r.emoji.name === name))
+            return res.writeHead(204).end()
+          }
           m.reactions.push({ emoji: { name }, count: 1, me: true })
           return res.writeHead(204).end()
         }
@@ -330,6 +334,49 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
       assert.equal(stored?.id, draftId)
       assert.equal(stored?.state, "revise_requested")
       assert.equal(stored?.decision_origin_id, `${messageId}:✏️`)
+    })
+  })
+})
+
+test("済んだ合図は見た合図を外す — ✅ を付けてから 👀 を消す", async () => {
+  const dc = await fakeDiscord([{ id: "50", content: "たのむ", author: { id: OWNER } }])
+  // 宛先をチャンネルにする — DM 宛だと open_dm のアクションが先頭に足されて、ack だけを数えられない。
+  await wired(dc, { talk: TALK }, async () => {
+    await withHarness(async (h) => {
+      const reactions = () => dc.msgs.find((m) => m.id === "50")?.reactions?.map((r) => r.emoji.name)
+      const ackOnce = (purpose: string, emoji: string, clear?: string) =>
+        h.run(
+          Effect.gen(function* () {
+            const discord = yield* Discord
+            const o = yield* discord.enqueue({
+              purpose,
+              dedupeKey: "50",
+              text: "",
+              ack: { channelId: CH, messageId: "50", emoji, ...(clear ? { clear } : {}) },
+            })
+            assert.ok(o)
+            yield* discord.flushQueued()
+            return yield* discord.getOutbound(o.id)
+          }),
+        )
+
+      // 受け取り時: 👀 だけ付く。PUT は 204 で本文が無いが、受領証は status で成立する
+      const seen = await ackOnce("cycle-ack", "👀")
+      assert.equal(seen?.state, "sent")
+      assert.deepEqual(
+        seen?.actions.map((a) => a.state),
+        ["succeeded"],
+      )
+      assert.deepEqual(reactions(), ["👀"])
+
+      // 済んだ合図: ✅ を付けてから 👀 を外す。残るのは ✅ だけ
+      const done = await ackOnce("cycle-done", "✅", "👀")
+      assert.equal(done?.state, "sent")
+      assert.deepEqual(
+        done?.actions.map((a) => a.state),
+        ["succeeded", "succeeded"],
+      )
+      assert.deepEqual(reactions(), ["✅"])
     })
   })
 })

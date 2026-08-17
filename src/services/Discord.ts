@@ -70,7 +70,13 @@ export interface Enqueue {
    * `taps` と違い自分の投稿ではなくユーザーの発言に付くので、本文を1通も増やさずに
    * 「見えている・動いている」だけを出せる。数分かかる回の沈黙を埋めるのが用途。
    */
-  readonly ack?: { readonly channelId: string; readonly messageId: string; readonly emoji: string }
+  readonly ack?: {
+    readonly channelId: string
+    readonly messageId: string
+    readonly emoji: string
+    /** 付けるのと同時に外す絵文字(進行中の印の置き換え)。付けてから外す — 逆だと失敗時に印が全部消える。 */
+    readonly clear?: string
+  }
 }
 
 export type OutboundState = "queued" | "sending" | "sent" | "failed" | "partial" | "unknown"
@@ -415,6 +421,8 @@ const makeDiscord = () =>
           readonly channelId: string
           readonly messageId: string
           readonly emoji: string
+          /** true なら自分のリアクションを外す(DELETE)。 */
+          readonly remove?: true
         }
 
     const parse = (raw: unknown): unknown => JSON.parse(String(raw)) as unknown
@@ -557,13 +565,22 @@ const makeDiscord = () =>
         const head = p.ping && !destination.dm ? `<@${owner}>\n` : ""
         const actionSpecs: ActionSpec[] = []
         if (!destination.id) actionSpecs.push({ kind: "open_dm", recipientId: owner })
-        if (p.ack)
+        if (p.ack) {
           actionSpecs.push({
             kind: "ack",
             channelId: p.ack.channelId,
             messageId: p.ack.messageId,
             emoji: p.ack.emoji,
           })
+          if (p.ack.clear)
+            actionSpecs.push({
+              kind: "ack",
+              channelId: p.ack.channelId,
+              messageId: p.ack.messageId,
+              emoji: p.ack.clear,
+              remove: true,
+            })
+        }
         const parts = p.text === "" ? [] : chunks(head + p.text)
         const messageOrdinals: number[] = []
         for (const [partIndex, content] of parts.entries()) {
@@ -904,7 +921,7 @@ const makeDiscord = () =>
               }
             } else if (spec.kind === "ack") {
               path = `/channels/${spec.channelId}/messages/${spec.messageId}/reactions/${encodeURIComponent(spec.emoji)}/@me`
-              init = { method: "PUT" }
+              init = { method: spec.remove ? "DELETE" : "PUT" }
             } else if (spec.kind === "reaction" && channelId && messageId) {
               path = `/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(spec.emoji)}/@me`
               init = { method: "PUT" }
@@ -924,7 +941,8 @@ const makeDiscord = () =>
               outcome =
                 requested.success.status >= 400 && requested.success.status < 500 ? "failed" : "unknown"
               error = `HTTP ${requested.success.status}`
-            } else if (spec.kind === "reaction") {
+            } else if (spec.kind === "reaction" || spec.kind === "ack") {
+              // リアクションの PUT / DELETE は 204 で本文が無い。受領証は status で足りる。
               outcome = "succeeded"
               receipt = { status: requested.success.status }
             } else {

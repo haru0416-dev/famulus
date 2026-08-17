@@ -573,14 +573,14 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         // 書いた記録をそのまま読み直して出す。ここで数え直すと、画面で見る値と
         // `fam journal` の値が別々に変わっていって、食い違ったときにどちらが本当か決められなくなる。
         // 最後に置いてあるのは、enqueue に失敗しても commit まで済んでいるようにするため。
-        // 済んだ合図。👀 は消さない — 「見た」と「終わった」は別の事実で、両方残るほうが読める。
+        // 済んだ合図に置き換える。👀 は進行中の印なので、終わりの合図と同時に外す。
         if (acked)
           yield* discord
             .enqueue({
               purpose: "cycle-done",
               dedupeKey: acked.messageId,
               text: "",
-              ack: { ...acked, emoji: cutOff ? "⚠️" : "✅" },
+              ack: { ...acked, emoji: cutOff ? "⚠️" : "✅", clear: "👀" },
             })
             .pipe(Effect.catch(() => Effect.void))
         const [entry] = yield* readJournal(1)
