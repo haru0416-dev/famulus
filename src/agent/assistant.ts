@@ -87,10 +87,12 @@ const experimentResult = (result: RunResult) => ({
 })
 
 /**
- * 精査役1回の上限。実測 31 秒(1200字の下書きに対して指摘3件、出力 1759 token)で、
- * 指摘を多く返した回で 3366 token。倍を見て 90 秒に置いた。
+ * 精査役1回の上限。grok-4.6 は同一入力(682字+dossier 1146字)の実測で 164〜223 秒
+ * (n=2、推論 10.4k〜12.8k token)。倍を取ると cycle の持ち時間(既定 420 秒)に入らないため、
+ * 実測最大の 1.35 倍。下のゲート(REVIEW_MS + RUN_RESERVE_MS = 345 秒)は、cycle 冒頭
+ * 30〜45 秒での呼び出し(実測)なら通る位置 — これ以上伸ばすと呼べる回が無くなる。
  */
-const REVIEW_MS = 90_000
+const REVIEW_MS = 300_000
 
 /**
  * 道具ループの上限。モデル呼び出しの回数であって時間ではない(時間は呼ぶ側が `signal` で切る)。
@@ -1540,6 +1542,8 @@ function buildTools(state: TurnState, gate: ToolGate) {
                   { source: "research-dossier", label: draft.dossier_id, content: evidenceBundle },
                 ]),
                 schema: REVIEW_SCHEMA,
+                // xai 経路の既定締切(180 秒)は REVIEW_MS より短いので、明示で上書きする。
+                timeoutMs: REVIEW_MS,
                 signal: abortSignal
                   ? AbortSignal.any([
                       AbortSignal.timeout(Math.min(REVIEW_MS, left - RUN_RESERVE_MS)),

@@ -59,6 +59,8 @@ export interface RunnerRequest {
   /** 画像入力。512ピクセル未満は API が拒否する。 */
   readonly images?: readonly { readonly data: Uint8Array; readonly mediaType: string }[]
   readonly signal?: AbortSignal
+  /** 呼び出し1回の締切。未指定だと xai 経路の既定 180 秒で切られる — それを超えて待つ呼び出しだけ渡す。 */
+  readonly timeoutMs?: number
   readonly kind: string
   readonly execution?: KernelLoopContext
 }
@@ -286,6 +288,7 @@ export const RunnerLive = Layer.effect(
             ...(req.schema !== undefined ? { jsonSchema: req.schema.jsonSchema } : {}),
             ...(req.onText ? { onText: req.onText } : {}),
             ...(req.images ? { images: req.images } : {}),
+            ...(req.timeoutMs !== undefined ? { timeoutMs: req.timeoutMs } : {}),
             signal: req.signal ?? abort,
           }),
         catch: (e) =>
