@@ -191,8 +191,6 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
   }
 
   const model = text(env, "FAMULUS_MODEL", "grok-4.6")
-  // 埋め込みは LLM ではなくローカル ONNX。"ruri-v3-30m"(既定)/ "stub"(検査用の決定的埋め込み)/
-  // "off"(意味検索を使わない)。isKnownModel の対象外。
   const embedding = text(env, "FAMULUS_EMBEDDING", "ruri-v3-30m")
   const models = {
     default: model,

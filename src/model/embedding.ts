@@ -1,9 +1,7 @@
 /**
  * recall の意味検索に使うローカル埋め込み。推論は完全にこの箱の中で行う —
  * 私的データを外に出さないという制約が先にあり、API 埋め込みは選択肢にない。
- *
- * モデルは ruri-v3-30m(q8 ONNX・256次元)。ONNX 配布側に tokenizer が同梱されていないため、
- * tokenizer は本家 cl-nagoya から別に読み、mean pooling を自前で行う。
+ * モデルは ruri-v3-30m(q8 ONNX・256次元)。実ロードの詳細は embedding-ruri.ts。
  * プレフィックスは ruri v3 の規約(検索クエリ: / 検索文書:)。
  *
  * 失敗はすべて undefined に落とす。埋め込みが無くても recall は FTS で動く —

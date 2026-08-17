@@ -22,7 +22,7 @@ beforeAll(() => {
   configureApp()
 })
 
-/** doGenerate が成功する素体。providerMetadata の有無で notionalUsd の読み分けを見る。 */
+/** doGenerate が成功する応答。providerMetadata の有無で notionalUsd の読み分けを見る。 */
 const okModel = (meta: boolean): LanguageModelV4 => ({
   specificationVersion: "v4",
   provider: "test",

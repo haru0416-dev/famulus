@@ -116,8 +116,7 @@ const REAL_PROBES: readonly RealProbe[] = [
   { q: "web.test", truthLike: "web.test" },
   { q: "再接続", truthLike: "再接続" },
   { q: "dream 見直し", truthLike: "dream" },
-  // 2026-08-17 の全量取り込みで観測した paraphrase 型の実DB miss。scout が言い換えて要約するため
-  // 語では届かない — 意味系の実DB probe として固定する(sqlite-vec 判断の分母)。
+  // 全量取り込みで観測した paraphrase 型の実DB miss。scout が言い換えて要約するため語では届かない。
   { q: "誤前提", truthLike: "誤定義" },
   { q: "誤前提シリーズの実験", truthLike: "誤定義" },
   { q: "カードゲームの通販", truthLike: "ポケカ" },
@@ -157,7 +156,7 @@ async function partB() {
   const run = <A, E>(e: Effect.Effect<A, E, AppServices>) => rt.runPromise(e)
   try {
     // 複製には埋め込みが無い(本番でまだ埋めていない行も含む)。probe の前に埋める —
-    // 意味検索込みの recall を測るのがこの評価の目的。埋め込み off の構成ではそのまま素通り。
+    // 意味検索込みの recall を測るのがこの評価の目的。埋め込み off の構成では何もしない。
     let embedded = 0
     for (;;) {
       const batch = await run(Effect.flatMap(Memory, (m) => m.embedMissing(200)))

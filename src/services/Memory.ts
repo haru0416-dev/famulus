@@ -27,7 +27,7 @@ const toBlob = (v: Float32Array): Uint8Array => new Uint8Array(v.buffer, v.byteO
 
 /**
  * FTS と意味検索の合流。BM25 と cosine 距離はスケールが違うので順位だけを使う(RRF、k=60)。
- * 片方が空ならもう片方の順序がそのまま残る — 埋め込みが無い構成では従来の FTS 順に一致する。
+ * 片方が空ならもう片方の順序がそのまま残る — 埋め込みが無い構成では FTS だけの順になる。
  */
 export const rrfMerge = <T extends { readonly id: string }>(
   fts: readonly T[],
@@ -300,7 +300,7 @@ const makeMemory = () =>
         const meta = input.origin
           ? { ...EMPTY_META, originKind: input.origin.kind, originId: input.origin.id }
           : EMPTY_META
-        // 埋め込みは tx の外で作る(モデル呼び出しは非同期)。off・失敗は undefined で素通し —
+        // 埋め込みは tx の外で作る(モデル呼び出しは非同期)。off・失敗は undefined —
         // 記憶の書き込みを埋め込みの都合で止めない。取りこぼしは embedMissing が埋め直す。
         const text = input.text ?? deriveText(input.content)
         const vec = text.length > 0 ? yield* Effect.promise(() => embedPassage(text)) : undefined
@@ -480,7 +480,7 @@ const makeMemory = () =>
      * (溜まらないと引けるようにならない)ので、除外は検索の側でやる。
      */
     /**
-     * 意味検索。埋め込みが無い構成では空を返し、recall は FTS だけの従来動作に一致する。
+     * 意味検索。埋め込みが無い構成では空を返し、recall は FTS だけで動く。
      * KNN は事前フィルタできない(vec0 の制約)ので多めに引き、events 側の条件で絞る。
      */
     const semanticRows = (query: string, wide: number, exclude?: string) =>

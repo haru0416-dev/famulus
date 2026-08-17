@@ -423,7 +423,7 @@ test("zenn — 長すぎる語は 100 文字で切る(101 文字だと 400 が�
   )
 })
 
-test("hatena と hfpapers — 投げる URL の形(正規の入口・下限・limit)", async () => {
+test("hatena と hfpapers — 送る URL の形(正規の入口・下限・limit)", async () => {
   const called: string[] = []
   await withFetch(
     async (input: unknown) => {
@@ -434,7 +434,7 @@ test("hatena と hfpapers — 投げる URL の形(正規の入口・下限・li
       await searchSources("Claude Code", { where: ["hatena", "hfpapers"], perSource: 4 })
       const hatena = called.find((u) => u.includes("b.hatena.ne.jp"))
       const hf = called.find((u) => u.includes("huggingface.co"))
-      // /search/text は 301 で往復が増えるので /q/ を直に叩く。users=10 が「読まれている」の下限
+      // /search/text は 301 で往復が増えるので /q/ を直に呼ぶ。users=10 が「読まれている」の下限
       assert.match(hatena ?? "", /b\.hatena\.ne\.jp\/q\/Claude%20Code\?mode=rss/)
       assert.match(hatena ?? "", /users=10/)
       assert.match(hf ?? "", /api\/papers\/search\?q=Claude%20Code&limit=4/)
