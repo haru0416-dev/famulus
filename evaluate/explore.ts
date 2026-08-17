@@ -80,7 +80,9 @@ const fixture = (n: number) => {
 }
 
 const contractPath = (n: number) => `${OUT}${n}-contract.json`
-const resultPath = (n: number, path: string) => `${OUT}${n}-${path}.json`
+// FAMULUS_EVAL_TAG を付けると別ファイルに書く。モデル差し替えの対を取るとき、既存の raw を上書きしない。
+const resultPath = (n: number, path: string) =>
+  `${OUT}${n}-${path}${process.env.FAMULUS_EVAL_TAG ? `-${process.env.FAMULUS_EVAL_TAG}` : ""}.json`
 
 function writeContract(n: number): string {
   const p = contractPath(n)

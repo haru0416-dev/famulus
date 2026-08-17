@@ -20,7 +20,8 @@
     "cycle": "bun src/cycle.ts",
     "evaluate:explore": "bun evaluate/explore.ts",
     "eval:keeper": "bun evaluate/keeper-fidelity.ts",
-    "eval:recall": "bun evaluate/recall-miss.ts"
+    "eval:recall": "bun evaluate/recall-miss.ts",
+    "eval:exploration": "bun evaluate/exploration-metrics.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.41",
