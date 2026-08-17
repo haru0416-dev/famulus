@@ -28,7 +28,7 @@ import { ConnectorFailed, causeReason, describeRefusal } from "./core/errors.ts"
 import { localDayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
 import { drainInbox } from "./inbox.ts"
-import { logPost, readJournal, tally } from "./journal.ts"
+import { dailyLogWindow, dailyPost, readJournalRange, tally } from "./journal.ts"
 import { digestOf } from "./model/kernel-spec.ts"
 import { poolForModel } from "./model/models.ts"
 import { isRefusal, run, runtime } from "./runtime.ts"
@@ -618,13 +618,6 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
           reasonKey: d.reasonKey,
           upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
         })
-        // ── 進み具合を1行だけ出す。呼びかけない。
-        // 動くたびに出るものなので、名指しを付けると通知が鳴り続けて、鳴っても見なくなる。
-        // 出す先が指してなければ何も起きない(`Desk` の "log" は DM に落ちない)。
-        //
-        // 書いた記録をそのまま読み直して出す。ここで数え直すと、画面で見る値と
-        // `fam journal` の値が別々に変わっていって、食い違ったときにどちらが本当か決められなくなる。
-        // 最後に置いてあるのは、enqueue に失敗しても commit まで済んでいるようにするため。
         // 済んだ合図に置き換える。👀 は進行中の印なので、終わりの合図と同時に外す。
         if (acked)
           yield* discord
@@ -635,19 +628,30 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
               ack: { ...acked, emoji: cutOff ? "⚠️" : "✅", clear: "👀" },
             })
             .pipe(Effect.catch(() => Effect.void))
-        const [entry] = yield* readJournal(1)
-        if (entry) {
-          yield* lease.assertCurrent(token)
-          const logText = logPost(entry)
-          yield* discord.enqueue({
-            purpose: "cycle-log",
-            // 鍵は journal entry の識別(記録時刻)。deliveryKey(実行条件+cursor)を使うと、
-            // 入力の無い overdue 起動が2回続いたとき同じ鍵で違う本文を enqueue して Conflict になる
-            // (実測 2026-08-17)。entry 由来なら、同じ記録の再送だけが重複として弾かれる。
-            dedupeKey: digestOf({ cycleLog: entry.at }),
-            text: logText,
-            to: "log",
-          })
+        // ── 進み具合は1日1通。日付が変わった後の最初に動いた回が、前の日ぶんをまとめて出す。
+        // 呼びかけない。出す先が指してなければ何も起きない(`Desk` の "log" は DM に落ちない)。
+        //
+        // 書いた記録をそのまま読み直して出す。ここで数え直すと、画面で見る値と
+        // `fam journal` の値が別々に変わっていって、食い違ったときにどちらが本当か決められなくなる。
+        // 最後に置いてあるのは、enqueue に失敗しても commit まで済んでいるようにするため。
+        // enqueue の後に境界(meta)を書く順 — 逆だと、enqueue に失敗した日ぶんが二度と出ない。
+        // 同じ窓の再 enqueue はラベル鍵の重複として弾かれる。
+        const db = yield* Db
+        const w = dailyLogWindow(yield* db.meta("log:upto"), nowIso())
+        if (w) {
+          if (w.post) {
+            const entries = yield* readJournalRange(w.post.fromIso, w.post.toIso)
+            if (entries.length > 0) {
+              yield* lease.assertCurrent(token)
+              yield* discord.enqueue({
+                purpose: "cycle-log",
+                dedupeKey: digestOf({ dailyLog: w.post.label }),
+                text: dailyPost(entries, w.post.label),
+                to: "log",
+              })
+            }
+          }
+          yield* db.setMeta("log:upto", w.set)
         }
       }),
     )

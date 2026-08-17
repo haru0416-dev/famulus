@@ -9,7 +9,16 @@
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
-import { logPost, readJournal, renderJournal, runs, tally } from "../src/journal.ts"
+import { localDayRange } from "../src/core/time.ts"
+import {
+  dailyLogWindow,
+  dailyPost,
+  readJournal,
+  readJournalRange,
+  renderJournal,
+  runs,
+  tally,
+} from "../src/journal.ts"
 import { Db } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
 import { withHarness } from "./helpers.ts"
@@ -50,7 +59,7 @@ test("呼んだ道具の並びは、締めの文と別に残る", async () => {
     // 報告文はそのまま持つが、道具の並びはそこから作っていない。
     assert.match(e.said, /watch を1本回した/)
     // Discord は幅が無いので数だけ、`fam journal` は並びごと。どちらも報告文からは作っていない。
-    assert.match(logPost(e), /- 道具 shell×2 · record_watch_run · workspaces/)
+    assert.match(dailyPost([e], "2026-08-13"), /- 道具 shell×2 · record_watch_run · workspaces/)
     assert.match(renderJournal([e]), /道具 {4}shell×2 → record_watch_run → workspaces/)
   })
 })
@@ -81,7 +90,7 @@ test("道具を呼んでも何も残らなかった回は、残った行が全�
       beliefs: 0,
       watchRuns: 0,
     })
-    assert.match(logPost(e), /- 残った なし/)
+    assert.match(dailyPost([e], "2026-08-13"), /- 残った なし/)
     assert.match(renderJournal([e]), /残った {2}何も残らなかった/)
   })
 })
@@ -149,7 +158,7 @@ test("run 数と出力tokenは窓の中の ledger だけを足す", async () => 
     assert.ok(e)
     assert.equal(e.runs, 2)
     assert.equal(e.outTok, 1200)
-    assert.match(logPost(e), /- 推論 2run \/ 出力1\.2k/)
+    assert.match(dailyPost([e], "2026-08-13"), /- 推論 2run \/ 出力1\.2k/)
   })
 })
 
@@ -168,7 +177,7 @@ test("金額欄を持たず、出したトークンを出す", async () => {
     )
     const [e] = await h.run(readJournal(5))
     assert.ok(e)
-    const one = logPost(e)
+    const one = dailyPost([e], "2026-08-13")
     assert.match(one, /- 推論 1run \/ 出力830/)
     assert.doesNotMatch(one, /\$/)
   })
@@ -187,11 +196,11 @@ test("道具の記録を持たない古い回は「—」で出る(0手とは書
     assert.ok(e)
     assert.equal(e.tools, undefined)
     assert.equal(e.steps, undefined)
-    const one = logPost(e)
+    const one = dailyPost([e], "2026-08-12")
     assert.match(one, /- 道具 記録なし/)
-    // 「呼ばなかった」と書かない。0手と出すと、走ったのに何もしなかった回に見える。
-    assert.match(one, /手数の記録なし/)
-    assert.doesNotMatch(one, /\d手/)
+    // 時間の記録が無い回だけの日は、合計時間を出さない。0秒と出すと一瞬で終わった日に見える。
+    assert.match(one, /- 動いた 1回$/m)
+    assert.doesNotMatch(one, /計0秒/)
   })
 })
 
@@ -214,9 +223,9 @@ test("止まった回は、そのことが記録に残る — 締めの文に書
     const [e] = await h.run(readJournal(5))
     assert.ok(e)
     assert.equal(e.cutOff, "420秒で時間切れ")
-    // 止まったことは上に出す。下に置くと、上だけ読んで最後まで走った回と見分けが付かない。
-    const lines = logPost(e).split("\n")
-    assert.match(lines[1] ?? "", /^- \*\*止まった\*\* 420秒で時間切れ$/)
+    // 止まったことは上に出す。下に置くと、上だけ読んで全部走り切った日と見分けが付かない。
+    const lines = dailyPost([e], "2026-08-13").split("\n")
+    assert.match(lines[1] ?? "", /^- \*\*止まった 1回\*\* 420秒で時間切れ$/)
   })
 })
 
@@ -291,10 +300,10 @@ test("Discord に出す行は、携帯の幅に収まる", () => {
     runs: 17,
     outTok: 33_700,
   }
-  const over = logPost(e)
+  const over = dailyPost([e], "2026-08-13")
     .split("\n")
-    .filter((l) => !l.startsWith("- 理由 "))
-    .filter((l) => cols(l) > 40)
+    .filter((l: string) => !l.startsWith("- 理由 "))
+    .filter((l: string) => cols(l) > 40)
   assert.deepEqual(over, [], `40桁を超えた行がある(携帯で折り返す):\n${over.join("\n")}`)
 })
 
@@ -337,6 +346,82 @@ test("戸惑い(confusion)は残した回の journal にだけ出て、Discord �
         .split("\n")
         .some((l) => l.includes("戸惑い") && l.includes("08:00")),
     )
-    for (const e of entries) assert.doesNotMatch(logPost(e), /戸惑い/)
+    assert.doesNotMatch(dailyPost([...entries], "2026-08-14"), /戸惑い/)
+  })
+})
+
+test("1日ぶんは合計して1通に畳む — 道具は上位6種+他n種", () => {
+  const base = {
+    reasons: ["watch"],
+    said: "",
+    left: { proposals: 0, drafts: 1, tells: 0, shells: 0, beliefs: 1, watchRuns: 0 },
+    runs: 5,
+    outTok: 1_000,
+  }
+  const a = { ...base, at: "2026-08-17T01:00:00Z", ms: 60_000, tools: ["recall", "recall", "draft"] }
+  const b = {
+    ...base,
+    at: "2026-08-17T02:00:00Z",
+    ms: 90_000,
+    tools: ["recall", "search", "fetch", "shell", "tell", "ask", "belief"],
+  }
+  const post = dailyPost([a, b], "2026-08-17")
+  assert.match(post, /^### 2026-08-17 のまとめ$/m)
+  assert.match(post, /- 動いた 2回 \/ 計2分30秒/)
+  assert.match(post, /- 推論 10run \/ 出力2\.0k/)
+  // 8種のうち上位6種だけ並び、残りは数になる。
+  assert.match(post, /- 道具 recall×3 · draft · search · fetch · shell · tell · 他2種/)
+  assert.match(post, /- 残った 下書き 2本 \/ 確定した事実 2件/)
+  assert.doesNotMatch(post, /止まった/)
+})
+
+test("出しどきの判定 — 初回は境界を置くだけで出さない", () => {
+  const now = "2026-08-18T03:00:00Z"
+  const today = localDayRange(now)
+  assert.deepEqual(dailyLogWindow(undefined, now), { set: today.startIso })
+})
+
+test("出しどきの判定 — 同じ日のうちは出さない", () => {
+  const now = "2026-08-18T03:00:00Z"
+  const today = localDayRange(now)
+  assert.equal(dailyLogWindow(today.startIso, now), undefined)
+})
+
+test("出しどきの判定 — 日が変わったら前の日ぶんの窓が返る", () => {
+  const yesterday = localDayRange("2026-08-17T12:00:00Z")
+  const now = yesterday.endIso // 今日の頭ちょうど
+  const w = dailyLogWindow(yesterday.startIso, now)
+  assert.ok(w?.post)
+  assert.equal(w.post.fromIso, yesterday.startIso)
+  assert.equal(w.post.toIso, yesterday.endIso)
+  assert.equal(w.post.label, yesterday.key)
+  assert.equal(w.set, yesterday.endIso)
+})
+
+test("出しどきの判定 — 空白日を跨いだら1通にまとめ、ラベルが期間になる", () => {
+  const d15 = localDayRange("2026-08-15T12:00:00Z")
+  const now = "2026-08-18T01:00:00Z"
+  const today = localDayRange(now)
+  const w = dailyLogWindow(d15.startIso, now)
+  assert.ok(w?.post)
+  assert.equal(w.post.fromIso, d15.startIso)
+  assert.equal(w.post.toIso, today.startIso)
+  assert.match(w.post.label, /^2026-08-15〜2026-08-1[67]$/)
+})
+
+test("窓の中の回だけ読む — readJournalRange は書いた時刻で切る", async () => {
+  await withHarness(async (h) => {
+    for (const [cycle, wrote] of [
+      ["2026-08-16T23:00:00Z", "2026-08-16T23:01:00Z"],
+      ["2026-08-17T01:00:00Z", "2026-08-17T01:01:00Z"],
+      ["2026-08-18T01:00:00Z", "2026-08-18T01:01:00Z"],
+    ] as const) {
+      await h.run(cycleRow({ cycle, reasons: ["watch"], said: "" }, wrote))
+    }
+    const got = await h.run(readJournalRange("2026-08-17T00:00:00Z", "2026-08-18T00:00:00Z"))
+    assert.deepEqual(
+      got.map((e) => e.at),
+      ["2026-08-17T01:00:00Z"],
+    )
   })
 })

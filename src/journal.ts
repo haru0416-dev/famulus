@@ -18,7 +18,7 @@
  */
 import * as Effect from "effect/Effect"
 import type { DbFailed } from "./core/errors.ts"
-import { localStamp } from "./core/time.ts"
+import { localDayRange, localStamp } from "./core/time.ts"
 import { Db } from "./services/Db.ts"
 
 /** 1回ぶん。`said` と、それ以外を混ぜない。 */
@@ -90,7 +90,35 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
         ORDER BY at DESC LIMIT ?`,
       n,
     )
+    return yield* entriesOf(rows)
+  })
 
+/**
+ * 記録を書いた時刻が [fromIso, toIso) の回。1日ぶんの Discord まとめが読む。
+ * 窓の鍵は書いた時刻 — 日付を跨いで書き終えた回は、書き終えた日の側に入る。
+ */
+export const readJournalRange = (
+  fromIso: string,
+  toIso: string,
+): Effect.Effect<readonly Entry[], DbFailed, Db> =>
+  Effect.gen(function* () {
+    const db = yield* Db
+    const rows = yield* db.all(
+      `SELECT at, content FROM events
+        WHERE kind = 'observe' AND source = 'system'
+          AND content IS NOT NULL
+          AND COALESCE(json_extract(content, '$.cycle'), json_extract(content, '$.tick'))IS NOT NULL
+          AND at >= ?AND at < ?
+        ORDER BY at`,
+      fromIso,
+      toIso,
+    )
+    return yield* entriesOf(rows)
+  })
+
+const entriesOf = (rows: readonly Record<string, unknown>[]): Effect.Effect<readonly Entry[], DbFailed, Db> =>
+  Effect.gen(function* () {
+    const db = yield* Db
     const out: Entry[] = []
     for (const row of rows) {
       const wroteAt = String(row.at)
@@ -183,13 +211,20 @@ const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed
  * 「10回呼んで0本残っていない」というずれは数だけでも見えるので、そちらを取った。
  * 順番は `runs()` が持っていて、`fam journal` から読める。
  */
-export const tally = (tools: readonly string[], targets: Readonly<Record<string, string>> = {}): string => {
+export const tally = (
+  tools: readonly string[],
+  targets: Readonly<Record<string, string>> = {},
+  top = Number.POSITIVE_INFINITY,
+): string => {
   const seen = new Map<string, number>()
   for (const t of tools) seen.set(t, (seen.get(t) ?? 0) + 1)
-  return [...seen]
-    .sort((a, b) => b[1] - a[1]) // 同数なら先に呼んだ順(Map が挿入順を持っている)
+  const sorted = [...seen].sort((a, b) => b[1] - a[1]) // 同数なら先に呼んだ順(Map が挿入順を持っている)
+  const head = sorted
+    .slice(0, top)
     .map(([name, n]) => `${label(name, targets)}${n > 1 ? `×${n}` : ""}`)
     .join(" · ")
+  // 1日ぶんを畳むと種類が多くて幅を超えるので、上位だけ出して残りは数にする。
+  return sorted.length > top ? `${head} · 他${sorted.length - top}種` : head
 }
 
 /** 道具名に対象を1つ添える。何に対して呼んだかは、名前と回数だけでは残らない。 */
@@ -225,12 +260,6 @@ const leftLine = (l: Left, none = "何も残らなかった"): string => {
   return got.length === 0 ? none : got.join(" / ")
 }
 
-/** 時刻だけ取り出す。読めない値は切らずに返す — `localStamp` は解釈できない文字列をそのまま返す。 */
-const clock = (atIso: string): string => {
-  const s = localStamp(atIso)
-  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s) ? s.slice(11) : s
-}
-
 /** 桁が見えれば足りるので k で丸める。 */
 const tok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
 
@@ -260,27 +289,74 @@ const saidLine = (said: string, max = 140): string => {
 }
 
 /**
- * 1回ぶんを Discord に出す形。幅の狭い画面を先に見て決めた。
+ * 1日ぶんを Discord に1通で出す形。回ごとには出さない — 動くたびに出る行は
+ * そのうち読まれなくなる。回ごとの並びと報告文は `fam journal` に残っている。
  *
- * 読むのはたいてい携帯で、本文に使える幅はおよそ 40 桁(全角20文字)しかない。
- * 空白で桁を揃える形は1行折り返した時点で崩れるので、`- ` のリスト項目にしている。
- * リストは折り返しても中身の側にぶら下がるので、
- * 長い行が入っても項目の切れ目が残る。それでも道具の並びは 92 桁あって3行に折れるため、
- * ここだけは並びを捨てて数にした(`tally`)。
+ * 幅の規律は従来どおり: 読むのはたいてい携帯で、本文に使える幅はおよそ 40 桁
+ * (全角20文字)しかない。空白で桁を揃える形は1行折り返した時点で崩れるので、
+ * `- ` のリスト項目にしている。道具は1日ぶんを畳むと種類が増えるので上位6種まで。
  *
- * 見出しに置くのは時刻だけ。日付は Discord 自身が持っている。
+ * 自己申告(`said`)と対象(`toolTargets`)は載せない — 数えた記録だけを出す。
  */
-export const logPost = (e: Entry): string =>
-  [
-    `### ${clock(e.at)} の実行`,
-    // 止まった回はここに出す。下に置くと、上だけ読んで終わった回と見分けが付かない。
-    ...(e.cutOff ? [`- **止まった** ${e.cutOff}`] : []),
-    `- 実行条件 ${e.reasons.join(" / ") || "記録なし"}`,
-    `- 実働 ${e.steps === undefined ? "手数の記録なし" : `${e.steps}手`}${e.ms === undefined ? "" : ` / ${took(e.ms)}`}`,
-    `- 推論 ${e.runs}run / 出力${tok(e.outTok)}`,
-    `- 道具 ${e.tools?.length ? tally(e.tools, e.toolTargets ?? {}) : "記録なし"}`,
-    `- 残った ${leftLine(e.left, "なし")}`,
+export const dailyPost = (entries: readonly Entry[], label: string): string => {
+  const cut = entries.filter((e) => e.cutOff !== undefined)
+  const ms = entries.reduce((a, e) => a + (e.ms ?? 0), 0)
+  const runCount = entries.reduce((a, e) => a + e.runs, 0)
+  const outTok = entries.reduce((a, e) => a + e.outTok, 0)
+  const tools = entries.flatMap((e) => e.tools ?? [])
+  const left = entries.reduce<Left>(
+    (a, e) => ({
+      proposals: a.proposals + e.left.proposals,
+      drafts: a.drafts + e.left.drafts,
+      tells: a.tells + e.left.tells,
+      shells: a.shells + e.left.shells,
+      beliefs: a.beliefs + e.left.beliefs,
+      watchRuns: a.watchRuns + e.left.watchRuns,
+    }),
+    { proposals: 0, drafts: 0, tells: 0, shells: 0, beliefs: 0, watchRuns: 0 },
+  )
+  return [
+    `### ${label} のまとめ`,
+    // 止まった回はここに出す。下に置くと、上だけ読んで全部走り切った日と見分けが付かない。
+    ...(cut.length > 0 ? [`- **止まった ${cut.length}回** ${tally(cut.map((c) => c.cutOff ?? ""))}`] : []),
+    `- 動いた ${entries.length}回${ms > 0 ? ` / 計${took(ms)}` : ""}`,
+    `- 推論 ${runCount}run / 出力${tok(outTok)}`,
+    `- 道具 ${tools.length > 0 ? tally(tools, {}, 6) : "記録なし"}`,
+    `- 残った ${leftLine(left, "なし")}`,
   ].join("\n")
+}
+
+/**
+ * 1日1回の出しどきの判定。meta には「ここより前の日は出した」の境界(ISO)を置く。
+ *
+ * 初回は境界を今日の頭に置くだけで出さない — 導入した日に過去ぶんをまとめて流さない。
+ * 境界が今日の頭より前なら、そこから今日の頭までを1通ぶんの窓として返す。
+ * 空白日を跨いだときは窓が複数日になり、ラベルが「開始日〜終了日」になる。
+ */
+export const dailyLogWindow = (
+  upto: string | undefined,
+  atIso: string,
+):
+  | {
+      readonly set: string
+      readonly post?: { readonly fromIso: string; readonly toIso: string; readonly label: string }
+    }
+  | undefined => {
+  const today = localDayRange(atIso)
+  if (upto === undefined) return { set: today.startIso }
+  if (upto >= today.startIso) return undefined
+  const fromKey = localDayRange(upto).key
+  // 窓の最終日 = 今日の頭の1秒前が属する日。
+  const lastKey = localDayRange(new Date(Date.parse(today.startIso) - 1000).toISOString()).key
+  return {
+    set: today.startIso,
+    post: {
+      fromIso: upto,
+      toIso: today.startIso,
+      label: fromKey === lastKey ? fromKey : `${fromKey}〜${lastKey}`,
+    },
+  }
+}
 
 /**
  * 人が読む形に。自己申告(`言った`)を最後に置く。
