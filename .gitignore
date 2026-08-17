@@ -1,5 +1,8 @@
 node_modules/
 
+# test:coverage が毎回作り直す生成物。
+coverage/
+
 # 状態は ~/.famulus/data に移動済み。旧配置や FAMULUS_DATA=.data の実験で repo 内にできても追跡しない。
 .data/
 
