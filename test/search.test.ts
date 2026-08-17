@@ -23,7 +23,7 @@ process.env.TZ = "Asia/Tokyo"
 process.env.OPEN_ZERO_HOST_INTERVAL_MS = "0"
 const { configureApp } = await import("../src/core/config.ts")
 configureApp()
-const { defaultSources, parseFrom, plainQuery, renderHits, searchSources } = await import(
+const { defaultSources, parseFrom, plainQuery, renderHits, repoPath, searchSources } = await import(
   "../src/services/Search.ts"
 )
 const { resetAtMs } = await import("../src/services/Web.ts")
@@ -880,4 +880,65 @@ test("x と showhn と job は既定に入れない(1問あたりの外向きを
   assert.ok(parseFrom("x", '{"results":[]}'), "x を名指しで呼べない")
   assert.ok(parseFrom("showhn", '{"hits":[]}'), "showhn を名指しで呼べない")
   assert.ok(parseFrom("job", '{"results":[]}'), "job を名指しで呼べない")
+})
+
+/** docs(Context7)。索引だけ返し、実体 URL は llms.txt に向く(実測 2026-08-17 の応答形)。 */
+test("docs は Context7 の索引を llms.txt の URL に起こす", () => {
+  const hits = parse("docs", {
+    results: [
+      {
+        id: "/vercel/ai",
+        title: "Vercel AI SDK",
+        description: "The AI Toolkit for TypeScript.",
+        lastUpdateDate: "2026-08-15T08:56:29.790Z",
+      },
+      { id: "", title: "壊れた行は落とす" },
+    ],
+  })
+  assert.equal(hits.length, 1)
+  assert.equal(hits[0]?.title, "Vercel AI SDK(/vercel/ai)")
+  assert.equal(hits[0]?.url, "https://context7.com/vercel/ai/llms.txt?tokens=3000")
+  assert.equal(hits[0]?.at, "2026-08-15T08:56:29.790Z")
+})
+
+/** release / advisory(GitHub 一次情報)。実測 2026-08-17 の応答形。 */
+test("release はタグ・公表日・本文の先頭を返す", () => {
+  const hits = parse("release", [
+    {
+      tag_name: "bun-v1.3.14",
+      name: "Bun v1.3.14",
+      html_url: "https://github.com/oven-sh/bun/releases/tag/bun-v1.3.14",
+      published_at: "2026-05-13T03:48:28Z",
+      prerelease: false,
+      draft: false,
+      body: "改行を\n含む\n本文",
+    },
+    { tag_name: "", html_url: "" },
+  ])
+  assert.equal(hits.length, 1)
+  assert.equal(hits[0]?.title, "bun-v1.3.14 Bun v1.3.14")
+  assert.equal(hits[0]?.at, "2026-05-13T03:48:28Z")
+  assert.ok(hits[0]?.note?.includes("改行を 含む 本文"))
+})
+
+test("advisory は severity と CVE を note に返す", () => {
+  const hits = parse("advisory", [
+    {
+      summary: "XSS in dev server",
+      html_url: "https://github.com/vitejs/vite/security/advisories/GHSA-x",
+      severity: "high",
+      cve_id: "CVE-2026-0001",
+      published_at: "2026-07-01T00:00:00Z",
+    },
+  ])
+  assert.equal(hits[0]?.title, "XSS in dev server")
+  assert.equal(hits[0]?.note, "high / CVE-2026-0001")
+})
+
+/** `owner/repo` の取り出し。URL で渡されても受け、形にならなければ encode して API の 404 に任せる。 */
+test("repoPath は owner/repo を語からも URL からも取り出す", () => {
+  assert.equal(repoPath("oven-sh/bun"), "oven-sh/bun")
+  assert.equal(repoPath("https://github.com/openclaw/openclaw/releases"), "openclaw/openclaw")
+  assert.equal(repoPath(" NousResearch/hermes-agent "), "NousResearch/hermes-agent")
+  assert.equal(repoPath("bun とは"), encodeURIComponent("bun とは"))
 })

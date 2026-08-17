@@ -97,6 +97,19 @@ export function plainQuery(q: string): string {
 }
 
 /**
+ * `owner/repo` を語から取り出す。URL(github.com/owner/repo)で渡されても受ける。
+ * 形にならない語はそのまま encode して渡す — API が 404 で「無い」と言うほうが、
+ * こちらで黙って落とすより読める。
+ */
+export const repoPath = (q: string): string => {
+  const m = q
+    .trim()
+    .replace(/^https?:\/\/github\.com\//, "")
+    .match(/^([\w.-]+)\/([\w.-]+)/)
+  return m ? `${m[1]}/${m[2]}` : encodeURIComponent(q.trim())
+}
+
+/**
  * 自前の SearXNG の在り処。既定は `~/Project/searxng/docker-compose.yml` が縛っている先。
  * 空にすると `web` の先が既定から外れる(コンテナを落として使わない日のため)。
  */
@@ -626,6 +639,86 @@ const SOURCES: readonly Source[] = [
             ...(authors.length ? { by: authors.join(", ") } : {}),
             ...(one("published") ? { at: one("published") } : {}),
             ...(summary ? { note: summary.slice(0, 160) } : {}),
+          },
+        ]
+      }),
+  },
+  {
+    name: "docs",
+    what:
+      "ライブラリの最新ドキュメント索引(Context7)。**学習時の知識が古い恐れのある API を使う前に引く**。" +
+      "語はライブラリ名(「vercel ai sdk」「valibot」)",
+    reading:
+      "返るのは索引で、実体は URL を `fetch` で開く(最新ソースから起こした llms.txt)。" +
+      "公式が llms.txt を出している場合(`https://<docsドメイン>/llms.txt`)はそちらが一次。",
+    wide: false,
+    // 2026-08-17 実測: 鍵なしで 200。有料化・鍵必須化したら unavailable に理由を書いて外す。
+    url: (q) => `https://context7.com/api/v1/search?query=${enc(q)}`,
+    parse: (b) =>
+      rows(obj(JSON.parse(b)).results)
+        .slice(0, 8)
+        .flatMap((r) => {
+          const id = str(r.id)
+          const title = str(r.title)
+          if (!id || !title) return []
+          return [
+            {
+              title: `${title}(${id})`,
+              // tokens は取り分の上限。大きくすると fetch の1MB上限に当たる。
+              url: `https://context7.com${id}/llms.txt?tokens=3000`,
+              ...(str(r.lastUpdateDate) ? { at: str(r.lastUpdateDate) as string } : {}),
+              ...(str(r.description) ? { note: (str(r.description) as string).slice(0, 120) } : {}),
+            },
+          ]
+        }),
+  },
+  {
+    name: "release",
+    what: "GitHub リポジトリの公式リリース。**語は `owner/repo` をそのまま渡す**(「oven-sh/bun」)",
+    reading: "一次情報。note は本文の先頭だけ — 全文はURLを開く。追跡系の watch はここから始める。",
+    wide: false,
+    url: (q, n) => `https://api.github.com/repos/${repoPath(q)}/releases?per_page=${Math.min(n, 10)}`,
+    accept: "application/vnd.github+json",
+    parse: (b) =>
+      rows(JSON.parse(b)).flatMap((r) => {
+        const url = str(r.html_url)
+        const tag = str(r.tag_name)
+        if (!url || !tag) return []
+        const name = str(r.name)
+        const flags = [r.prerelease === true ? "prerelease" : "", r.draft === true ? "draft" : ""]
+          .filter(Boolean)
+          .join(",")
+        const body = str(r.body)?.replace(/\s+/g, " ").slice(0, 140)
+        return [
+          {
+            title: name && name !== tag ? `${tag} ${name}` : tag,
+            url,
+            ...(str(r.published_at) ? { at: str(r.published_at) as string } : {}),
+            ...(flags || body ? { note: [flags, body].filter(Boolean).join(" / ") } : {}),
+          },
+        ]
+      }),
+  },
+  {
+    name: "advisory",
+    what: "GitHub リポジトリの security advisory。**語は `owner/repo` をそのまま渡す**",
+    reading: "公式の脆弱性公表。二次記事の数字ではなくここを引く(CVE・深刻度・公表日が一次)。",
+    wide: false,
+    url: (q, n) =>
+      `https://api.github.com/repos/${repoPath(q)}/security-advisories?per_page=${Math.min(n, 10)}`,
+    accept: "application/vnd.github+json",
+    parse: (b) =>
+      rows(JSON.parse(b)).flatMap((r) => {
+        const url = str(r.html_url)
+        const summary = str(r.summary)
+        if (!url || !summary) return []
+        const note = [str(r.severity), str(r.cve_id)].filter(Boolean).join(" / ")
+        return [
+          {
+            title: summary,
+            url,
+            ...(str(r.published_at) ? { at: str(r.published_at) as string } : {}),
+            ...(note ? { note } : {}),
           },
         ]
       }),
