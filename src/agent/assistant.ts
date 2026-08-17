@@ -106,6 +106,8 @@ interface TurnState {
   lastInputEventId: string | undefined
   /** このターンで開いた委譲の通し番号。kernel の owner id に入る。 */
   delegations: number
+  /** 指示や仕組みへの戸惑い(1行)。読むのは人間だけ — プロンプトにも recall にも還流させない。 */
+  confusion: string | undefined
 }
 
 /** 自由文のツール結果を、親モデルへの指示ではなく参照データとして渡す。 */
@@ -456,6 +458,19 @@ export const gateTools = <T extends Record<string, unknown>>(tools: T, gate: Too
 
 function buildTools(state: TurnState, gate: ToolGate) {
   const tools = {
+    // ── 指示への戸惑いを残す。読み手は人間だけ — プロンプト・recall へ還流させない(自家中毒の防止)。
+    confusion: tool({
+      description:
+        "指示や記録の仕組みで分かりにくかった点を1行残す。タスク自体の難しさは書かない。" +
+        "読むのはユーザーだけで、返事は来ない。無ければ呼ばない。",
+      inputSchema: vs(
+        v.object({ note: v.pipe(v.string(), v.description("何がどう分かりにくかったか。1行。")) }),
+      ),
+      execute: async ({ note }) => {
+        state.confusion = note.replace(/\s+/g, " ").trim().slice(0, 300)
+        return "残した。読まれるのは次にユーザーが journal を見るとき。"
+      },
+    }),
     // ── web を調べる役。明示的な search / fetch だけを使う。
     researcher: tool({
       description:
@@ -1432,6 +1447,8 @@ export interface AssistantTurnResult {
   readonly tools: readonly string[]
   /** 止まった理由。最後まで書けていれば undefined。 */
   readonly cutOff?: string
+  /** 指示や仕組みへの戸惑い(confusion 道具の自己申告)。 */
+  readonly confusion?: string
 }
 
 export interface AssistantOptions {
@@ -1451,7 +1468,7 @@ export const replyStepText = (text: string, toolCalls: readonly unknown[]): stri
  */
 export function createAssistant(opts: AssistantOptions = {}) {
   const modelId = opts.model ?? appConfig().models.default
-  const state: TurnState = { lastInputEventId: undefined, delegations: 0 }
+  const state: TurnState = { lastInputEventId: undefined, delegations: 0, confusion: undefined }
   let history: ModelMessage[] = []
   const token = opts.leaseToken
   const gate: ToolGate = token
@@ -1536,6 +1553,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
           text: said.join("\n\n"),
           steps: res.steps.length,
           tools,
+          ...(state.confusion ? { confusion: state.confusion } : {}),
           ...(inputEventId ? { inputEventId } : {}),
         }
       } catch (e) {
@@ -1546,6 +1564,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
           steps,
           tools,
           cutOff: causeReason(e),
+          ...(state.confusion ? { confusion: state.confusion } : {}),
           ...(inputEventId ? { inputEventId } : {}),
         }
       }

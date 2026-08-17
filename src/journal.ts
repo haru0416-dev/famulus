@@ -35,6 +35,8 @@ export interface Entry {
   readonly cutOff?: string
   /** 自分で書いた締めの文。報告であって記録ではない。 */
   readonly said: string
+  /** 指示や仕組みへの戸惑い(自己申告)。fam journal でだけ出す — Discord のログには出さない。 */
+  readonly confusion?: string
   /** この回の窓に残ったもの。数えたのは行数で、報告文とは関係が無い。 */
   readonly left: Left
   /** モデルを呼んだ回数。 */
@@ -101,6 +103,7 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
       const steps = num(c.steps)
       const spent = num(c.ms)
       const cutOff = str(c.cutOff)
+      const confusion = str(c.confusion)
       out.push({
         at,
         reasons: arr(c.reasons) ?? [],
@@ -109,6 +112,7 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
         ...(spent === undefined ? {} : { ms: spent }),
         ...(cutOff ? { cutOff } : {}),
         said: str(c.said) ?? "",
+        ...(confusion ? { confusion } : {}),
         left,
         runs: Number(burn?.runs ?? 0),
         outTok: Number(burn?.out_tok ?? 0),
@@ -274,6 +278,7 @@ export const renderJournal = (entries: readonly Entry[]): string => {
       `  道具    ${e.tools?.length ? runs(e.tools) : "記録なし(この回より前)"}`,
       `  残った  ${leftLine(e.left)}`,
       `  言った  ${saidLine(e.said)}`,
+      ...(e.confusion ? [`  戸惑い  ${e.confusion}`] : []),
     ].join("\n"),
   )
   return [

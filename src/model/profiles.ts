@@ -61,6 +61,7 @@ export const PARENT_TOOLS: readonly string[] = [
   "tell",
   "draft",
   "budget",
+  "confusion",
 ]
 
 /**

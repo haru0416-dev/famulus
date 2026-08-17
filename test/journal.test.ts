@@ -297,3 +297,46 @@ test("Discord に出す行は、携帯の幅に収まる", () => {
     .filter((l) => cols(l) > 40)
   assert.deepEqual(over, [], `40桁を超えた行がある(携帯で折り返す):\n${over.join("\n")}`)
 })
+
+test("戸惑い(confusion)は残した回の journal にだけ出て、Discord のログには出ない", async () => {
+  await withHarness(async (h) => {
+    await h.run(
+      cycleRow(
+        {
+          cycle: "2026-08-14T07:00:00Z",
+          reasons: ["watch"],
+          said: "進めた。",
+          tools: ["recall"],
+          steps: 2,
+          ms: 60_000,
+          confusion: "watch の「前回:」がどの回を指すのか分からなかった",
+        },
+        "2026-08-14T07:02:00Z",
+      ),
+    )
+    await h.run(
+      cycleRow(
+        {
+          cycle: "2026-08-14T08:00:00Z",
+          reasons: ["watch"],
+          said: "進めた。",
+          tools: [],
+          steps: 1,
+          ms: 1_000,
+        },
+        "2026-08-14T08:01:00Z",
+      ),
+    )
+    const entries = await h.run(readJournal(5))
+    const [latest, withConfusion] = entries
+    assert.equal(withConfusion?.confusion, "watch の「前回:」がどの回を指すのか分からなかった")
+    assert.equal(latest?.confusion, undefined)
+    assert.match(renderJournal(entries), /戸惑い {2}watch の「前回:」/)
+    assert.ok(
+      !renderJournal(entries)
+        .split("\n")
+        .some((l) => l.includes("戸惑い") && l.includes("08:00")),
+    )
+    for (const e of entries) assert.doesNotMatch(logPost(e), /戸惑い/)
+  })
+})

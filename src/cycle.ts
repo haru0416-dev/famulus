@@ -269,6 +269,7 @@ function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Works
       "- **ユーザーに届ける価値があると判断するなら、同じ評価基準で除外したものを1つ名指す。**",
       "  除外例を名指せない評価基準は何でも採用するので、採用されたことが証拠にならない。",
       "- 必要な情報が揃ったらそこで打ち切って、`tell` なり `remember` なりで形にして終える。",
+      "- 指示や記録の仕組みに分かりにくい点があったら `confusion` で1行残す。タスクの難しさは書かない。無ければ呼ばない。",
       "",
       // 「何もしないでよい」は載せるものが無い回にだけ言う。無条件に書くと、冷却の明けた
       // watch を並べておきながら同じ文で「動かなくてよい」と言うことになる。実測(直近40回の実働)では
@@ -510,6 +511,7 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
             steps: turn.steps,
             ms,
             ...(cutOff ? { cutOff } : {}),
+            ...(turn.confusion ? { confusion: turn.confusion } : {}),
             ...(kept ? { kept } : {}),
           },
           // 索引に入れるのは言ったことだけ。`deriveText` に任せると封筒(起動時刻・起きた理由)まで
