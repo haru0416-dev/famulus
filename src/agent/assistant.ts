@@ -20,6 +20,8 @@ import { appConfig } from "../core/config.ts"
 import { remainingLabel, remainingMs } from "../core/deadline.ts"
 import { causeReason } from "../core/errors.ts"
 import { renderCard, renderChart, renderDiagram } from "../core/figure.ts"
+import { googleConfigured } from "../core/google-auth.ts"
+import { insertCalendarEvent, listCalendarEvents, renderCalendarEvents } from "../core/google-calendar.ts"
 import { saveMedia } from "../core/media.ts"
 import { localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
@@ -845,6 +847,66 @@ function buildTools(state: TurnState, gate: ToolGate) {
     }),
 
     recall: recallTool(state),
+
+    // ── Google カレンダー。予定の正本はここで、DB の記憶は写しにすぎない。
+    calendar: tool({
+      description:
+        "Google カレンダー(primary)のこれからの予定を読む。**予定の有無・日時の正本はここ** — " +
+        "DB の記憶(recall/belief)にある予定は書いた時点の写しなので、予定を答える前にこれで確かめる。" +
+        "未連携なら設定手順が返る。",
+      inputSchema: vs(
+        v.object({
+          days: v.pipe(
+            v.optional(v.pipe(v.number(), v.minValue(1), v.maxValue(60))),
+            v.description("これから何日ぶんを見るか。既定7。"),
+          ),
+        }),
+      ),
+      execute: async ({ days }) => {
+        if (!googleConfigured()) {
+          return "Google 連携が未設定。`.env` に FAMULUS_GOOGLE_CLIENT_ID / FAMULUS_GOOGLE_CLIENT_SECRET を置いてから `fam google-login` を通すとつながる(手順はユーザーの作業)。"
+        }
+        try {
+          return renderCalendarEvents(await listCalendarEvents(days ?? 7))
+        } catch (e) {
+          return `読めなかった: ${e instanceof Error ? e.message : String(e)}`
+        }
+      },
+      toModelOutput: untrustedToolOutput("google-calendar", "calendar"),
+    }),
+
+    calendar_add: tool({
+      description:
+        "Google カレンダーに予定を1件入れる。**ユーザーに頼まれた回でだけ**使う(日時が曖昧なら先に確かめる)。" +
+        "自走では書けない — その場合は `propose` で提案し、ユーザーが対話で頼み直したときに入れる。",
+      inputSchema: vs(
+        v.object({
+          title: v.pipe(v.string(), v.description("予定の題。")),
+          start: v.pipe(
+            v.string(),
+            v.description("開始。時刻ありは ISO 日時(例 2026-08-24T10:00:00+09:00)、終日は YYYY-MM-DD。"),
+          ),
+          end: v.pipe(v.optional(v.string()), v.description("終了。省くと時刻ありは1時間後、終日は同日。")),
+        }),
+      ),
+      execute: async ({ title, start, end }) => {
+        // 書き込みの承認は「ユーザーがこの回に頼んだ」こと。自走の書き込みは機械で止める —
+        // 規律に書くだけでは通る(下書きの検査と同じ理由)。
+        if (currentLane() === "autonomous") {
+          return "自走ではカレンダーに書かない。`propose` で提案するか、次にユーザーが話しかけた回に頼まれてから入れる。"
+        }
+        if (!googleConfigured()) {
+          return "Google 連携が未設定。`.env` に FAMULUS_GOOGLE_CLIENT_ID / FAMULUS_GOOGLE_CLIENT_SECRET を置いてから `fam google-login` を通すとつながる(手順はユーザーの作業)。"
+        }
+        try {
+          const ev = await insertCalendarEvent({ title, start, ...(end ? { end } : {}) })
+          const when = ev.allDay ? `${ev.start} 終日` : localStamp(ev.start)
+          return `入れた: ${ev.title}(${when})${ev.link ? `\n${ev.link}` : ""}`
+        } catch (e) {
+          return `入れられなかった: ${e instanceof Error ? e.message : String(e)}`
+        }
+      },
+    }),
 
     belief: tool({
       // 状態を表す事実は、検索ではなくここから引かせる。検索は古い値も同じ強さで当ててしまう。

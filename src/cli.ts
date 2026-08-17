@@ -2,12 +2,13 @@
 import { resolve } from "node:path"
 /**
  * ユーザー向け管理 CLI。提案の承認・却下、停止、状態確認、記憶や watch の操作をまとめる。
- * 提案の承認を記録する入口はこの CLI だけで、承認後の実行コネクタはまだ無い。
+ * 提案の承認を記録する入口はこの CLI だけ。
  *
  * コマンドの一覧と説明は下の USAGE が正。
  *
- * 承認しても実行はされない。コネクタ(送信・予約)が1つも無いので、approved は
- * 「承認済み・未実行」で止まる。ここを実行したことにするのが一番大きい嘘なので、そうしない。
+ * 承認しても実行はされない。approved を自動実行する経路が無いので「承認済み・未実行」で
+ * 止まる。ここを実行したことにするのが一番大きい嘘なので、そうしない。実行の道具
+ * (calendar_add など)は承認フローの外 — ユーザーが対話で頼んだ回にモデルが直接呼ぶ。
  */
 import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
@@ -77,6 +78,8 @@ const USAGE = `fam — famulus の承認 CLI
   fam selfdev [--fresh]     自分のソースの clone を workspace に置き、中でゲートが通るまで確かめる
                            --fresh は clone ごと取り直す(中で直しかけていたものは消える)
   fam grok-login            SuperGrok OAuth の device flow を通す(トークンを保存)
+  fam google-login [貼り付け] Google OAuth(installed app + PKCE)。引数なしで承認 URL を出し、
+                           ブラウザの失敗ページの URL を丸ごと貼って2回目を打つと完了
   fam code <指示> [--cwd <path>] [--plan] [--model <id>]
                            コーディングを Cursor へ委譲する(taskブランチに commit。merge はしない)
   fam code-models           Cursor で使えるモデル一覧(API鍵の生死確認を兼ねる)
@@ -619,6 +622,23 @@ const main = async (): Promise<void> => {
         console.log(`コード: ${code}`)
       })
       console.log(`ログイン完了${auth.email ? `: ${auth.email}` : ""} → ${config.paths.xaiAuth}`)
+      return
+    }
+    if (command === "google-login") {
+      // 2段: 引数なしで URL を出し、貼られた URL(または code)で交換する。
+      // redirect は listen しない localhost:1 — ブラウザは失敗するが、アドレスバーに code が残る。
+      const { googleLoginFinish, googleLoginStart } = await import("./core/google-auth.ts")
+      if (args.length === 0) {
+        console.log("ブラウザで開いて承認する:")
+        console.log(googleLoginStart())
+        console.log("")
+        console.log("承認後にブラウザが「localhost に接続できない」ページになったら、")
+        console.log("その URL を丸ごとコピーして: fam google-login '<貼り付け>'")
+        return
+      }
+      const pasted = args.join(" ")
+      await googleLoginFinish(pasted)
+      console.log(`ログイン完了 → ${config.paths.googleAuth}`)
       return
     }
     if (command === "cursor-hook") {

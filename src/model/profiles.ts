@@ -64,6 +64,8 @@ export const PARENT_TOOLS: readonly string[] = [
   "chart",
   "diagram",
   "card",
+  "calendar",
+  "calendar_add",
   "budget",
   "confusion",
 ]

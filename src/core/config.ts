@@ -28,11 +28,17 @@ export interface AppConfig {
     readonly exportRoot: string
     readonly transcriptRoot: string
     readonly xaiAuth: string
+    readonly googleAuth: string
     /**
      * 共有 skill(SKILL.md)の正本。`~/.famulus`(famulus 専用のディレクトリ — vendor の `~/.openclaw` と同型で、
      * 属するのは Haru 自身のエージェント)を直接読む。Claude 側は symlink で同じ正本を読む。
      */
     readonly skills: string
+  }
+  /** Google 連携(installed app OAuth)。未設定なら calendar 系の道具は設定手順を返すだけ。 */
+  readonly google: {
+    readonly clientId?: string
+    readonly clientSecret?: string
   }
   readonly timeZone: string
   readonly models: {
@@ -223,6 +229,15 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
   ] as const) {
     if (!isKnownModel(id)) issues.push(`${key}: 既知のmodel idが必要です: ${id}`)
   }
+  const googleClientId = optional(env, "FAMULUS_GOOGLE_CLIENT_ID")
+  const googleClientSecret = optional(env, "FAMULUS_GOOGLE_CLIENT_SECRET")
+  if (Boolean(googleClientId) !== Boolean(googleClientSecret)) {
+    issues.push("FAMULUS_GOOGLE_CLIENT_ID / FAMULUS_GOOGLE_CLIENT_SECRET は両方置くか両方外す")
+  }
+  const googleClient = {
+    ...(googleClientId ? { clientId: googleClientId } : {}),
+    ...(googleClientSecret ? { clientSecret: googleClientSecret } : {}),
+  }
   const discordToken = optional(env, "FAMULUS_DISCORD_TOKEN")
   const discordOwnerId = optional(env, "FAMULUS_DISCORD_OWNER_ID")
   const discordTalk = optional(env, "FAMULUS_DISCORD_CH_TALK")
@@ -248,8 +263,10 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
         text(env, "FAMULUS_TRANSCRIPT_ROOT", resolve(homedir(), ".claude/projects")),
       ),
       xaiAuth: absolutePath(root, text(env, "FAMULUS_XAI_AUTH", resolve(dataDir, "xai-auth.json"))),
+      googleAuth: absolutePath(root, text(env, "FAMULUS_GOOGLE_AUTH", resolve(dataDir, "google-auth.json"))),
       skills: absolutePath(root, text(env, "FAMULUS_SKILLS", resolve(homedir(), ".famulus/skills"))),
     },
+    google: googleClient,
     timeZone,
     models,
     cycle: {

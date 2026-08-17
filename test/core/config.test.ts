@@ -61,6 +61,17 @@ test("解約済みのGPT modelを起動前に拒否する", () => {
   assert.throws(() => parseConfig({ FAMULUS_MODEL: "gpt-5.6-sol" }, "/tmp/famulus"), ConfigError)
 })
 
+test("Google client は両方置くか両方外す — 片方だけは起動前に拒否する", () => {
+  assert.throws(() => parseConfig({ FAMULUS_GOOGLE_CLIENT_ID: "cid" }, "/tmp/famulus"), ConfigError)
+  assert.throws(() => parseConfig({ FAMULUS_GOOGLE_CLIENT_SECRET: "cs" }, "/tmp/famulus"), ConfigError)
+  const both = parseConfig(
+    { FAMULUS_GOOGLE_CLIENT_ID: "cid", FAMULUS_GOOGLE_CLIENT_SECRET: "cs" },
+    "/tmp/famulus",
+  )
+  assert.equal(both.google.clientId, "cid")
+  assert.deepEqual(parseConfig({}, "/tmp/famulus").google, {})
+})
+
 test("FAMULUS_TURN_EFFORT は low/medium/high 以外を起動前に拒否する", () => {
   assert.throws(() => parseConfig({ FAMULUS_TURN_EFFORT: "max" }, "/tmp/famulus"), ConfigError)
   assert.equal(parseConfig({ FAMULUS_TURN_EFFORT: "low" }, "/tmp/famulus").models.turnEffort, "low")
