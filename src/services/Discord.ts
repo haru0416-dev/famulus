@@ -67,6 +67,11 @@ export interface Enqueue {
   /** スレッドの名前。渡すと出した1通からスレッドを立て、そこも読みに行く。 */
   readonly thread?: string
   /**
+   * 立てたスレッドの中へ続けて出す本文。1要素が1通。`thread` と一緒のときだけ効く。
+   * チャンネル側を短く保ちつつ全文を届けるための置き場(長文は畳まれてスレッドに入る)。
+   */
+  readonly threadNotes?: readonly string[]
+  /**
    * 受信済みメッセージに直接付けるリアクション(既読の合図)。
    * `taps` と違い自分の投稿ではなくユーザーの発言に付くので、本文を1通も増やさずに
    * 「見えている・動いている」だけを出せる。数分かかる回の沈黙を埋めるのが用途。
@@ -509,6 +514,8 @@ const makeDiscord = () =>
       | {
           readonly kind: "message"
           readonly channelId?: string
+          /** 出す先を、先行する thread action の受領証(threadId)から取る。channelId より優先。 */
+          readonly threadOrdinal?: number
           readonly message: Record<string, unknown>
           /** 添付する画像の参照。実体は media にあり、送信時に読む。 */
           readonly files?: readonly {
@@ -713,13 +720,30 @@ const makeDiscord = () =>
         const lastMessage = messageOrdinals.at(-1)
         // ack だけの投稿(本文なし)は成立する。本文もリアクションも無いものは出さない。
         if (lastMessage === undefined && !p.ack) return undefined
-        if (p.thread && lastMessage !== undefined)
+        if (p.thread && lastMessage !== undefined) {
+          const threadOrdinal = actionSpecs.length
           actionSpecs.push({
             kind: "thread",
             ...(destination.id ? { channelId: destination.id } : {}),
             messageOrdinal: lastMessage,
             name: p.thread.slice(0, 100),
           })
+          for (const [noteIndex, note] of (p.threadNotes ?? []).entries())
+            for (const [partIndex, content] of chunks(note).entries())
+              actionSpecs.push({
+                kind: "message",
+                threadOrdinal,
+                message: {
+                  content,
+                  // 本文側の nonce と衝突しないよう note の位置を混ぜる。
+                  nonce: digestOf({ purpose: p.purpose, dedupeKey: p.dedupeKey, noteIndex, partIndex }).slice(
+                    0,
+                    25,
+                  ),
+                  enforce_nonce: true,
+                },
+              })
+        }
         if (lastMessage !== undefined)
           for (const tap of p.taps ?? [])
             actionSpecs.push({
@@ -1018,7 +1042,14 @@ const makeDiscord = () =>
               const opened = receipts.get(0)?.channelId
               return typeof opened === "string" ? opened : undefined
             }
-            const channelId = spec.kind === "open_dm" ? undefined : (spec.channelId ?? dmChannel())
+            const threadReceipt =
+              spec.kind === "message" && spec.threadOrdinal !== undefined
+                ? receipts.get(spec.threadOrdinal)
+                : undefined
+            const threadChannel =
+              typeof threadReceipt?.threadId === "string" ? threadReceipt.threadId : undefined
+            const channelId =
+              spec.kind === "open_dm" ? undefined : (threadChannel ?? spec.channelId ?? dmChannel())
             const messageReceipt = "messageOrdinal" in spec ? receipts.get(spec.messageOrdinal) : undefined
             const messageId =
               typeof messageReceipt?.messageId === "string" ? messageReceipt.messageId : undefined

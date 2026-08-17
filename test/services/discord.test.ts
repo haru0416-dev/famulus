@@ -15,7 +15,7 @@ import { drainInbox } from "../../src/inbox.ts"
 import { Attention } from "../../src/services/Attention.ts"
 import { Db } from "../../src/services/Db.ts"
 import { Discord, type Enqueue } from "../../src/services/Discord.ts"
-import { Drafts } from "../../src/services/Drafts.ts"
+import { Drafts, deliveryKey } from "../../src/services/Drafts.ts"
 import { Memory } from "../../src/services/Memory.ts"
 import { Research } from "../../src/services/Research.ts"
 import { withHarness } from "../helpers.ts"
@@ -323,7 +323,7 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
           const draft = yield* drafts.materialize({ title: "題", body: "本文", dossierId: dossier.id })
           const outbound = yield* discord.enqueue({
             purpose: "assistant-draft",
-            dedupeKey: draft.id,
+            dedupeKey: deliveryKey(draft.id, draft.content_hash),
             text: "本文",
             taps: [{ emoji: "✏️", reply: "直す", draft: { id: draft.id, decision: "revise" } }],
           })
@@ -357,7 +357,10 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
       assert.equal(await h.run(drainInbox), 0)
       const stored = await h.run(Effect.flatMap(Drafts, (drafts) => drafts.forDay()))
       assert.equal(stored?.id, draftId)
-      assert.equal(stored?.state, "revise_requested")
+      // ✏️ は終点ではなく差し戻し — 配送前の状態へ戻り、改稿ループに入る
+      assert.equal(stored?.state, "revision_needed")
+      assert.equal(stored?.delivered_at, null)
+      assert.match(String(stored?.review_feedback), /直す/)
       assert.equal(stored?.decision_origin_id, `${messageId}:✏️`)
     })
   })
@@ -955,6 +958,34 @@ test("スレッドの名前を渡すと、出した1通からスレッドが立�
       const made = dc.hits.find((x) => x.method === "POST" && x.path.endsWith("/threads"))
       assert.equal(made?.path, `/channels/${DRAFT}/messages/${id}/threads`)
       assert.equal(made?.body?.name, "題名")
+    })
+  })
+})
+
+/** チャンネル側を短く保ちつつ全文を届ける置き場。長文はスレッドの中に入る。 */
+test("threadNotes は立てたスレッドの中へ1要素1通で入る", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, { draft: DRAFT }, async () => {
+    await withHarness(async (h) => {
+      await h.run(
+        post({
+          text: "題と件数だけ",
+          to: "draft",
+          thread: "題名",
+          threadNotes: ["全文そのもの", "根拠 dossier: d-1"],
+        }),
+      )
+      // スレッド(fake では起点メッセージと同じ id が場所になる)へ、順番どおり2通
+      const made = dc.hits.find((x) => x.method === "POST" && x.path.endsWith("/threads"))
+      const origin = /\/messages\/(\d+)\/threads$/.exec(made?.path ?? "")?.[1]
+      assert.ok(origin)
+      // fake は新しい順に積む
+      assert.deepEqual(
+        dc.at(origin).map((m) => m.content),
+        ["根拠 dossier: d-1", "全文そのもの"],
+      )
+      // チャンネル側には短い1通だけ
+      assert.equal(dc.at(DRAFT).filter((m) => m.author.id === "bot").length, 1)
     })
   })
 })

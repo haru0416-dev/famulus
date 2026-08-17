@@ -85,3 +85,15 @@ export const legacyV4Sql = (schemaSql: string): string =>
       "kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction')),",
     )
     .replace(/\n-- 意味検索の索引。[\s\S]*?\) STRICT;\n/, "\n")
+    .replace(
+      `         review_feedback = CASE WHEN NEW.state = 'sent' THEN review_feedback ELSE NEW.error END,
+         decision_origin_id = NULL,
+         updated_at = NEW.updated_at
+   WHERE state IN ('review_pending','delivery_pending')
+     AND (outbound_id = NEW.id OR (outbound_id IS NULL AND NEW.purpose = 'assistant-draft'
+          AND id = substr(NEW.dedupe_key, 1, 36)));`,
+      `         review_feedback = CASE WHEN NEW.state = 'sent' THEN review_feedback ELSE NEW.error END,
+         updated_at = NEW.updated_at
+   WHERE state IN ('review_pending','delivery_pending')
+     AND (outbound_id = NEW.id OR (outbound_id IS NULL AND NEW.purpose = 'assistant-draft' AND id = NEW.dedupe_key));`,
+    )

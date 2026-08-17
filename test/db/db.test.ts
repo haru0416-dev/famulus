@@ -121,6 +121,7 @@ test("空DBは現行schemaで一度だけ作られ再オープンできる", asy
     { version: 1, name: "migration-ledger" },
     { version: 2, name: "discord-ack" },
     { version: 3, name: "recall-vec" },
+    { version: 4, name: "draft-delivery-key" },
   ])
   assert.throws(() => reopened.exec("DELETE FROM schema_migrations"), /immutable/)
   reopened.close()
@@ -153,6 +154,7 @@ test("既知のbaseline DBはデータを保ったままcurrent schemaへ移行�
     { version: 1, name: "migration-ledger" },
     { version: 2, name: "discord-ack" },
     { version: 3, name: "recall-vec" },
+    { version: 4, name: "draft-delivery-key" },
   ])
   reopened.close()
 })

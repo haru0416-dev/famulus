@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import { Db } from "../../src/services/Db.ts"
-import { Drafts } from "../../src/services/Drafts.ts"
+import { Drafts, deliveryKey } from "../../src/services/Drafts.ts"
 import { Research } from "../../src/services/Research.ts"
 import { withHarness } from "../helpers.ts"
 
@@ -24,7 +24,7 @@ const terminalDossier = (question: string) =>
     research.recordWebDossier({ question, limitations: "test fixture", snapshots: [], claims: [] }),
   )
 
-const insertOutbound = (draftId: string, state: "sent" | "queued", withReceipt: boolean) =>
+const insertOutbound = (dedupeKey: string, state: "sent" | "queued", withReceipt: boolean) =>
   Effect.gen(function* () {
     const db = yield* Db
     const id = randomUUID()
@@ -33,7 +33,7 @@ const insertOutbound = (draftId: string, state: "sent" | "queued", withReceipt: 
        VALUES (?,?,?,?,?,?,NULL,?,?)`,
       id,
       "assistant-draft",
-      draftId,
+      dedupeKey,
       "{}",
       "spec",
       state,
@@ -181,7 +181,7 @@ test("attachOutbound: sent+receipt は delivered、receipt 無しの sent は de
       Effect.gen(function* () {
         const drafts = yield* Drafts
         const draft = yield* materialized("draft-delivered")
-        const outboundId = yield* insertOutbound(draft.id, "sent", true)
+        const outboundId = yield* insertOutbound(deliveryKey(draft.id, draft.content_hash), "sent", true)
         return yield* drafts.attachOutbound(draft.id, outboundId, AT_SENT)
       }),
     )
@@ -194,7 +194,7 @@ test("attachOutbound: sent+receipt は delivered、receipt 無しの sent は de
       Effect.gen(function* () {
         const drafts = yield* Drafts
         const draft = yield* materialized("draft-no-receipt")
-        const outboundId = yield* insertOutbound(draft.id, "sent", false)
+        const outboundId = yield* insertOutbound(deliveryKey(draft.id, draft.content_hash), "sent", false)
         return yield* drafts.attachOutbound(draft.id, outboundId, AT_SENT)
       }),
     )
@@ -207,7 +207,7 @@ test("attachOutbound: sent+receipt は delivered、receipt 無しの sent は de
       Effect.gen(function* () {
         const drafts = yield* Drafts
         const draft = yield* materialized("draft-queued")
-        const outboundId = yield* insertOutbound(draft.id, "queued", false)
+        const outboundId = yield* insertOutbound(deliveryKey(draft.id, draft.content_hash), "queued", false)
         const attached = yield* drafts.attachOutbound(draft.id, outboundId, AT_SENT)
         return { attached, pending: yield* drafts.pending() }
       }),
@@ -236,7 +236,7 @@ test("applyDecision は配送実績を要求する — receipt があれば deli
     const { decided, row, again, unknown } = await h.run(
       Effect.gen(function* () {
         const drafts = yield* Drafts
-        yield* insertOutbound(draft.id, "sent", true)
+        yield* insertOutbound(deliveryKey(draft.id, draft.content_hash), "sent", true)
         const decided = yield* drafts.applyDecision(draft.id, "accept", "origin-1", AT_SENT)
         const again = yield* drafts.applyDecision(draft.id, "discard", "origin-2", AT_SENT)
         const unknown = yield* drafts.applyDecision("no-such-draft", "accept", "origin-3", AT_SENT)
@@ -250,5 +250,40 @@ test("applyDecision は配送実績を要求する — receipt があれば deli
     // 決定は一度だけ。未知の id も false
     assert.equal(again, false)
     assert.equal(unknown, false)
+  })
+})
+
+test("✏️ は差し戻し — 改稿版の再配送で新しい決定を受け付ける", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const drafts = yield* Drafts
+        const draft = yield* materialized("draft-revise-loop")
+        yield* insertOutbound(deliveryKey(draft.id, draft.content_hash), "sent", true)
+        const revised = yield* drafts.applyDecision(draft.id, "revise", "origin-r1", AT_SENT)
+        const afterRevise = yield* drafts.forDay(AT)
+        const pendingAgain = yield* drafts.pending()
+        // 指摘に沿って本文を差し替えると、同じ行が review_pending に戻る
+        const v2 = yield* drafts.materialize(
+          { title: "題", body: "直した本文", dossierId: draft.dossier_id },
+          AT_SENT,
+        )
+        const outbound2 = yield* insertOutbound(deliveryKey(v2.id, v2.content_hash), "sent", true)
+        const attached = yield* drafts.attachOutbound(v2.id, outbound2, "2026-08-08T09:10:00Z")
+        const second = yield* drafts.applyDecision(v2.id, "accept", "origin-r2", "2026-08-08T09:11:00Z")
+        return { revised, afterRevise, pendingAgain, attached, second, final: yield* drafts.forDay(AT) }
+      }),
+    )
+    assert.equal(out.revised, true)
+    // 差し戻しは配送前の状態へ戻る — pending() と draftDue が拾える位置
+    assert.equal(out.afterRevise?.state, "revision_needed")
+    assert.equal(out.afterRevise?.delivered_at, null)
+    assert.match(String(out.afterRevise?.review_feedback), /直す/)
+    assert.equal(out.pendingAgain?.id, out.afterRevise?.id)
+    assert.equal(out.attached.state, "delivered")
+    // 再配送は決定欄を空に戻す — 新しい版にもう一度リアクションできる
+    assert.equal(out.attached.decision_origin_id, null)
+    assert.equal(out.second, true)
+    assert.equal(out.final?.state, "accepted")
   })
 })

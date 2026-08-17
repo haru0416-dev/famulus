@@ -40,6 +40,21 @@ export interface DraftInput {
 
 export type DraftDecision = "accept" | "revise" | "discard"
 
+/**
+ * 配送1回ぶんの dedupe キー。版(content_hash)ごとに変える — 改稿の再配送が
+ * 前の配送の dedupe に潰されないため。形は `id@hash12` 固定: drafts_sync_delivery
+ * トリガが先頭36字(UUID)から draft を引くので、id を先頭に置く。
+ */
+export const deliveryKey = (id: string, contentHash: string): string => `${id}@${contentHash.slice(0, 12)}`
+
+/**
+ * ✏️(直す)の差し戻しで review_feedback に置く文。指摘の本文はスレッドに書かれ、
+ * owner イベントとして DB に入る — ここには読みに行き方だけを書く。
+ */
+const REVISE_FEEDBACK =
+  "ユーザーが「直す」を押した。指摘は下書きスレッドの発言にある(未読入力か recall で読む)。" +
+  "指摘に沿って本文を書き直し、draft を呼び直す。"
+
 const row = (value: Row): DraftRow => value as unknown as DraftRow
 
 const SELECT_DAY = "SELECT * FROM drafts WHERE local_day = ?"
@@ -138,12 +153,17 @@ const makeDrafts = () =>
 
     const attachOutbound = (id: string, outboundId: string, at: string = nowIso()) =>
       db.withImmediateTransaction("attach draft outbound", (tx) => {
+        const current = tx.get("SELECT content_hash FROM drafts WHERE id=?", id)
+        if (!current) throw new Error(`Draft not found: ${id}`)
         const outbound = tx.get(
           "SELECT purpose,dedupe_key,state,error,updated_at FROM discord_outbound WHERE id=?",
           outboundId,
         )
         if (!outbound) throw new Error(`Discord outbound not found: ${outboundId}`)
-        if (outbound.purpose !== "assistant-draft" || outbound.dedupe_key !== id) {
+        if (
+          outbound.purpose !== "assistant-draft" ||
+          outbound.dedupe_key !== deliveryKey(id, String(current.content_hash))
+        ) {
           throw new Error(`Discord outbound does not belong to draft: ${outboundId}`)
         }
         const outboundState = String(outbound.state)
@@ -156,9 +176,10 @@ const makeDrafts = () =>
         )
         const delivered = outboundState === "sent" && hasReceipt
         const failed = ["failed", "partial", "unknown"].includes(outboundState)
+        // decision_origin_id を空に戻す — 改稿の再配送で、新しい版への決定を受け付ける。
         tx.run(
           `UPDATE drafts
-              SET state=?,outbound_id=?,delivered_at=?,review_feedback=?,updated_at=?
+              SET state=?,outbound_id=?,delivered_at=?,review_feedback=?,decision_origin_id=NULL,updated_at=?
             WHERE id=? AND state='review_pending'`,
           delivered
             ? "delivered"
@@ -180,7 +201,7 @@ const makeDrafts = () =>
 
     const applyDecision = (id: string, decision: DraftDecision, originId: string, at: string = nowIso()) =>
       db.withImmediateTransaction("apply draft decision", (tx) => {
-        const draft = tx.get("SELECT state,delivered_at FROM drafts WHERE id=?", id)
+        const draft = tx.get("SELECT state,delivered_at,content_hash FROM drafts WHERE id=?", id)
         if (!draft) return false
         if (draft.delivered_at == null) {
           const outbound = tx.get(
@@ -190,7 +211,7 @@ const makeDrafts = () =>
                   SELECT 1 FROM discord_outbound_actions a
                    WHERE a.outbound_id=o.id AND a.kind='message' AND a.state='succeeded' AND a.receipt IS NOT NULL
                 )`,
-            id,
+            deliveryKey(id, String(draft.content_hash)),
           )
           if (!outbound) return false
           tx.run(
@@ -201,15 +222,31 @@ const makeDrafts = () =>
             id,
           )
         }
-        const result = tx.run(
-          `UPDATE drafts
-              SET state=?,decision_origin_id=?,updated_at=?
-            WHERE id=? AND delivered_at IS NOT NULL AND decision_origin_id IS NULL`,
-          decision === "accept" ? "accepted" : decision === "revise" ? "revise_requested" : "discarded",
-          originId,
-          at,
-          id,
-        )
+        // ✏️ は終点ではなく差し戻し。配送前の状態に戻すと SELECT_PENDING と draftDue が拾い、
+        // 改稿 → 再精査 → 再配送のループに入る。再配送(attachOutbound)が決定欄を空に戻すので、
+        // 新しい版にもう一度リアクションできる。配送中(delivered_at NULL)の旧メッセージの
+        // リアクションは上の配送実績の要求で弾かれる。
+        const result =
+          decision === "revise"
+            ? tx.run(
+                `UPDATE drafts
+                    SET state='revision_needed',review_feedback=?,delivered_at=NULL,outbound_id=NULL,
+                        decision_origin_id=?,updated_at=?
+                  WHERE id=? AND delivered_at IS NOT NULL AND decision_origin_id IS NULL`,
+                REVISE_FEEDBACK,
+                originId,
+                at,
+                id,
+              )
+            : tx.run(
+                `UPDATE drafts
+                    SET state=?,decision_origin_id=?,updated_at=?
+                  WHERE id=? AND delivered_at IS NOT NULL AND decision_origin_id IS NULL`,
+                decision === "accept" ? "accepted" : "discarded",
+                originId,
+                at,
+                id,
+              )
         return result.changes === 1
       })
 

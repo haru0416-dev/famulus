@@ -18,7 +18,7 @@ import {
   STALLED_SHOW_MAX,
 } from "../../src/services/Attention.ts"
 import { Db } from "../../src/services/Db.ts"
-import { Drafts } from "../../src/services/Drafts.ts"
+import { Drafts, deliveryKey } from "../../src/services/Drafts.ts"
 import { Memory } from "../../src/services/Memory.ts"
 import { Proposals } from "../../src/services/Proposals.ts"
 import { Research } from "../../src/services/Research.ts"
@@ -666,11 +666,13 @@ test("下書き生成条件は決めた時刻から1日1回だけ成立する", 
     await h.run(
       Effect.gen(function* () {
         const db = yield* Db
+        const hash = (yield* db.get("SELECT content_hash FROM drafts WHERE id=?", saved.first.id))
+          ?.content_hash
         yield* db.run(
           `INSERT INTO discord_outbound
               (id,purpose,dedupe_key,spec,spec_hash,state,created_at,updated_at)
              VALUES ('draft-out','assistant-draft',?,'{}','hash','sent','2026-08-09T09:00:00Z','2026-08-09T09:01:00Z')`,
-          saved.first.id,
+          deliveryKey(saved.first.id, String(hash)),
         )
         yield* db.run(
           `INSERT INTO discord_outbound_actions

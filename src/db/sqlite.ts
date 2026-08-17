@@ -25,6 +25,7 @@ const MIGRATIONS: readonly Migration[] = [
   migration(1, "migration-ledger", new URL("./migrations/0001-migration-ledger.sql", import.meta.url)),
   migration(2, "discord-ack", new URL("./migrations/0002-discord-ack.sql", import.meta.url)),
   migration(3, "recall-vec", new URL("./migrations/0003-recall-vec.sql", import.meta.url)),
+  migration(4, "draft-delivery-key", new URL("./migrations/0004-draft-delivery-key.sql", import.meta.url)),
 ]
 
 const sqlString = (value: string): string => `'${value.replaceAll("'", "''")}'`

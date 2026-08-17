@@ -36,7 +36,7 @@ import { Attention } from "../services/Attention.ts"
 import { CycleLease, type CycleLeaseToken } from "../services/CycleLease.ts"
 import { Db } from "../services/Db.ts"
 import { Discord } from "../services/Discord.ts"
-import { Drafts } from "../services/Drafts.ts"
+import { Drafts, deliveryKey } from "../services/Drafts.ts"
 import { ExecutionKernel } from "../services/ExecutionKernel.ts"
 import { buildFencedPrompt, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
@@ -1582,13 +1582,17 @@ function buildTools(state: TurnState, gate: ToolGate) {
             if (gate) yield* Effect.promise(gate)
             const outbound = yield* discord.enqueue({
               purpose: "assistant-draft",
-              dedupeKey: draft.id,
-              text: `**${draft.title}**\n\n${draft.body}\n\n---\n根拠 dossier: ${draft.dossier_id}`,
+              // 版つきの鍵。改稿の再配送が前の配送の dedupe に潰されない。
+              dedupeKey: deliveryKey(draft.id, draft.content_hash),
+              // チャンネル側は一覧で読める短さに留め、全文と根拠はスレッドへ。
+              // 全文はスレッド1通目にそのまま置く — 装飾も dossier 行も付けず、コピペ一発で投稿に使える形。
+              text: `**${draft.title}**\n${draft.body.length}字 — 全文と根拠はスレッドに\n✅ 出していい / ✏️ 直す(指摘はスレッドへ) / 🛑 捨てる`,
               // 押してもらわないと外に出ない文なので、ミュートしてある場所でも呼ぶ。
               to: "draft",
               ping: true,
               // 「直す」はリアクションだけでは何を直すか言えない。スレッドを立てて、そこに書けるようにする。
               thread: draft.title,
+              threadNotes: [draft.body, `根拠 dossier: ${draft.dossier_id}`],
               taps: [
                 {
                   emoji: "✅",

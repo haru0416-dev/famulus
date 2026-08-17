@@ -391,9 +391,11 @@ BEGIN
            ELSE NULL
          END,
          review_feedback = CASE WHEN NEW.state = 'sent' THEN review_feedback ELSE NEW.error END,
+         decision_origin_id = NULL,
          updated_at = NEW.updated_at
    WHERE state IN ('review_pending','delivery_pending')
-     AND (outbound_id = NEW.id OR (outbound_id IS NULL AND NEW.purpose = 'assistant-draft' AND id = NEW.dedupe_key));
+     AND (outbound_id = NEW.id OR (outbound_id IS NULL AND NEW.purpose = 'assistant-draft'
+          AND id = substr(NEW.dedupe_key, 1, 36)));
   INSERT OR REPLACE INTO schema_meta(key,value)
     SELECT 'health:draft:last_success',NEW.updated_at
      WHERE EXISTS (SELECT 1 FROM drafts WHERE outbound_id=NEW.id AND state='delivered');
