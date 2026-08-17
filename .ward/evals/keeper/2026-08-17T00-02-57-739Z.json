@@ -1,0 +1,198 @@
+{
+  "at": "2026-08-17T00:02:57.739Z",
+  "model": "ROLE_MODEL.structurer",
+  "cases": 12,
+  "capture": "9/9",
+  "falsePositives": 0,
+  "fidelityViolations": 0,
+  "results": [
+    {
+      "id": "single-fact",
+      "captured": [
+        "青葉町2-14"
+      ],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [
+        {
+          "slot": "住所.現在",
+          "value": "\"新しい住所は青葉町2-14\"",
+          "quote": "新しい住所は青葉町2-14ね。"
+        }
+      ],
+      "said": "keeper: 1 件を確定値として保存 住所.現在=新しい住所は青葉町2-14 — ユーザーの発言から「新しい住所は青葉町2-14ね。」の明言を抽出した。永続的な住所情報として次回参照に意味がある。"
+    },
+    {
+      "id": "two-facts",
+      "captured": [
+        "Rust",
+        "紅茶"
+      ],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [
+        {
+          "slot": "work.team",
+          "value": "\"4月からRust側のチームに移ることになった。\"",
+          "quote": "4月から仕事はRust側のチームに移ることになった。"
+        },
+        {
+          "slot": "beverage.morning",
+          "value": "\"朝のコーヒーはやめて紅茶にした。\"",
+          "quote": "朝のコーヒーはやめて紅茶にした。"
+        }
+      ],
+      "said": "keeper: 2 件を確定値として保存 work.team=4月からRust側のチームに移ることになった。 / beverage.morning=朝のコーヒーはやめて紅茶にした。 — ユーザーの発言から2つの明示的な決定を抽出した：チーム異動と飲料変更。どちらも継続参照可能な確言。"
+    },
+    {
+      "id": "correction",
+      "captured": [
+        "木曜"
+      ],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [
+        {
+          "slot": "dentist.next_appt",
+          "value": "\"予約は木曜の16時。\"",
+          "quote": "金曜じゃなくて木曜の16時だったわ。"
+        }
+      ],
+      "said": "keeper: 1 件を確定値として保存 dentist.next_appt=予約は木曜の16時。 — ユーザーの発言から歯医者予約の確定時間を直接引用できたので保存対象と判断した。"
+    },
+    {
+      "id": "temporary-state",
+      "captured": [],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [],
+      "said": "keeper: 保存対象は無かった — ユーザーの「今日は頭痛いから早めに寝る。」は一回限りの体調報告で、次に参照して意味を持つ値ではないため保存対象なし。"
+    },
+    {
+      "id": "question-only",
+      "captured": [],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [],
+      "said": "keeper: 保存対象は無かった — ユーザーの発言は「grokの週次の上限っていくらだったっけ?」という質問のみで、値や設定の確言が無い。"
+    },
+    {
+      "id": "hearsay",
+      "captured": [],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [],
+      "said": "keeper: 保存対象は無かった — ユーザーの発言「隣の部署の田口さん、来月で辞めるらしいよ。」をチェック。「らしいよ」で確言ではなく噂・推測のため保存対象外と判断。"
+    },
+    {
+      "id": "numbers-verbatim",
+      "captured": [
+        "9月30日",
+        "12万"
+      ],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [
+        {
+          "slot": "server_migration.deadline",
+          "value": "\"サーバー移行の期限は9月30日。\"",
+          "quote": "サーバー移行の期限は9月30日で確定。"
+        },
+        {
+          "slot": "server_migration.budget",
+          "value": "\"予算は12万円。\"",
+          "quote": "予算は12万円に決めた。"
+        }
+      ],
+      "said": "keeper: 2 件を確定値として保存 server_migration.deadline=サーバー移行の期限は9月30日。 / server_migration.budget=予算は12万円。 — ユーザーの発言から「サーバー移行の期限は9月30日で確定」「予算は12万円に決めた」の2文をそのまま引用可能で、将来参照可能な確定値と判断。"
+    },
+    {
+      "id": "speculation",
+      "captured": [],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [],
+      "said": "keeper: 保存対象は無かった — 「たぶん来年あたり車買うかもなー。」は推測・未確定で確言しておらず、次回に前提として参照する意味を持たないため保存対象なし。"
+    },
+    {
+      "id": "preference",
+      "captured": [
+        "Discord"
+      ],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [
+        {
+          "slot": "notification.method",
+          "value": "\"通知はDiscordだけでいい。ntfyはもう見てないから外して。\"",
+          "quote": "通知はDiscordだけでいい。ntfyはもう見てないから外して。"
+        }
+      ],
+      "said": "keeper: 1 件を確定値として保存 notification.method=通知はDiscordだけでいい。ntfyはもう見てないから外して。 — ユーザーの発言に通知方法に関する明言があり、次回参照可能な設定として保存対象と判断。"
+    },
+    {
+      "id": "buried-fact",
+      "captured": [
+        "灰色の実測"
+      ],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [
+        {
+          "slot": "blog.name",
+          "value": "\"ブログの名前は「灰色の実測」\"",
+          "quote": "ブログの名前は「灰色の実測」にする。"
+        }
+      ],
+      "said": "keeper: 1 件を確定値として保存 blog.name=ブログの名前は「灰色の実測」 — 散歩・本屋寄り・早寝は一時的出来事のため保存対象外。ブログ名のみ「決めた」明言で保存可。"
+    },
+    {
+      "id": "path-verbatim",
+      "captured": [
+        ".data/xai-auth.json"
+      ],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [
+        {
+          "slot": "auth.api_key_path",
+          "value": "\"APIキーの置き場は .data/xai-auth.json に統一した。\"",
+          "quote": "APIキーの置き場は .data/xai-auth.json に統一したから。"
+        }
+      ],
+      "said": "keeper: 1 件を確定値として保存 auth.api_key_path=APIキーの置き場は .data/xai-auth.json に統一した。 — ユーザーの発言にAPIキーの置き場に関する明確な設定表明があったため保存対象と判断。"
+    },
+    {
+      "id": "smalltalk-only",
+      "captured": [],
+      "missed": [],
+      "falsePositives": [],
+      "extras": [],
+      "fidelityViolations": [],
+      "saved": [],
+      "said": "keeper: 保存対象は無かった — 天気感想「今日はほんと暑いねー。」は一時的な実況で、保存対象の確言・設定・次回参照値を含まない。"
+    }
+  ]
+}
