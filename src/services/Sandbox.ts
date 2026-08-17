@@ -264,9 +264,15 @@ export async function runInSandbox(command: string, opts: RunOptions): Promise<R
   // 読む側は `uv: command not found` から「この環境には uv が無い」と学んでしまう。
   let out = fellBack ? `[走行用イメージを組めなかった — pip / uv / jq は無い]\n` : ""
   let timedOut = false
+  let dropped = 0
   const take = (chunk: Buffer): void => {
-    // 上限を超えた分は捨てる。全部溜めてから切ると、暴走した install でこちら側の記憶が先に尽きる。
-    if (out.length < MAX_OUTPUT_CHARS * 2) out += chunk.toString("utf8")
+    // 超過分は頭から捨てて末尾を保つ(落ちた理由は最後に出る)。全部溜めてから切ると、
+    // 暴走した install でこちら側の記憶が先に尽きる。
+    out += chunk.toString("utf8")
+    if (out.length > MAX_OUTPUT_CHARS * 2) {
+      dropped += out.length - MAX_OUTPUT_CHARS
+      out = out.slice(-MAX_OUTPUT_CHARS)
+    }
   }
   child.stdout.on("data", take)
   child.stderr.on("data", take)
@@ -294,12 +300,12 @@ export async function runInSandbox(command: string, opts: RunOptions): Promise<R
   opts.signal?.removeEventListener("abort", stop)
   opts.signal?.throwIfAborted()
 
-  const truncated = out.length > MAX_OUTPUT_CHARS
+  const truncated = dropped > 0 || out.length > MAX_OUTPUT_CHARS
   return {
     exitCode,
     // 切るなら末尾を残す。落ちた理由は最後に出る(先頭は依存の取得ログで埋まる)。
     output: truncated
-      ? `…(頭を ${out.length - MAX_OUTPUT_CHARS}字ぶん省いた)\n${out.slice(-MAX_OUTPUT_CHARS)}`
+      ? `…(頭を ${dropped + Math.max(0, out.length - MAX_OUTPUT_CHARS)}字ぶん省いた)\n${out.slice(-MAX_OUTPUT_CHARS)}`
       : out,
     truncated,
     timedOut,

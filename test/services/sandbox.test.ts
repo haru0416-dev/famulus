@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict"
-import { mkdtempSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
 import { test } from "vitest"
@@ -21,6 +21,7 @@ import {
   runDir,
   runInSandbox,
   runsRoot,
+  sweepOrphans,
 } from "../../src/services/Sandbox.ts"
 
 const withRoot = (fn: () => void): void => {
@@ -131,4 +132,203 @@ test("開始前にabortされていればdockerを起動しない", async () => 
     () => runInSandbox("echo should-not-run", { workDir: tmpdir(), signal: controller.signal }),
     /lease lost/,
   )
+})
+
+test("相対の workDir は走らせる前に弾く", async () => {
+  await assert.rejects(() => runInSandbox("echo x", { workDir: "rel/path" }), /絶対パス/)
+})
+
+test("コンテナ内の home は workspace(uid 指定で home が無くなるため)", () => {
+  const args = dockerArgs("x", { workDir: "/tmp/w", name: "fam-run-test" })
+  const env = args.filter((_, i) => args[i - 1] === "-e")
+  assert.ok(env.includes("HOME=/work"), `HOME が渡っていない: ${env.join(" ")}`)
+  assert.equal(args[args.indexOf("-w") + 1], "/work")
+})
+
+test("イメージは opts → config → 既定の順で決める", () => {
+  const base = { workDir: "/tmp/w", name: "fam-run-test" }
+  const prev = process.env.FAMULUS_RUN_IMAGE
+  try {
+    process.env.FAMULUS_RUN_IMAGE = "my-image:9"
+    configureApp()
+    assert.ok(dockerArgs("x", base).includes("my-image:9"))
+    assert.ok(dockerArgs("x", { ...base, image: "explicit:1" }).includes("explicit:1"))
+    delete process.env.FAMULUS_RUN_IMAGE
+    configureApp()
+    assert.ok(dockerArgs("x", base).includes("famulus-run:1"))
+  } finally {
+    if (prev === undefined) delete process.env.FAMULUS_RUN_IMAGE
+    else process.env.FAMULUS_RUN_IMAGE = prev
+    configureApp()
+  }
+})
+
+/**
+ * ここから下は docker を PATH 上の代替スクリプトに差し替えて、走らせ方の側
+ * (出力の混合と切り詰め・時間切れ・docker 不在時の 127)を見る。実 docker にも daemon にも
+ * 触れない。イメージ名も不正な参照にしてあるので、万一差し替えが外れて実物へ届けば
+ * その場でエラーになり、静かに実コンテナが立つことはない。
+ */
+
+const FAKE_IMAGE = "fam-test-invalid::"
+
+const fakeDockerScript = [
+  "#!/usr/bin/env bash",
+  'case "$1" in',
+  '  rm) printf "rm %s\\n" "$*" >> "$FAKE_DOCKER_LOG"; exit 0 ;;',
+  // FAKE_PS_NAMES は意図して語分割させる(1語 = 1コンテナ名 = 1行)。
+  '  ps) printf "%s\\n" $FAKE_PS_NAMES; exit 0 ;;',
+  "  image|build) exit 1 ;;",
+  "  run)",
+  '    case "$FAKE_RUN_MODE" in',
+  // big は 30,000 字 — 取り込みの刻み境界(MAX_OUTPUT_CHARS の2倍 = 24,000)を超えないと、
+  // 末尾を捨てる実装でも TAIL-END が残ってしまい検査にならない。
+  '      big) for _ in $(seq 300); do printf "%0100d" 0; done; printf "\\nTAIL-END\\n"; exit 0 ;;',
+  // sleep の stdio は pipe から切り離す。繋いだままだと SIGKILL で bash が死んでも
+  // 孫の sleep が pipe を握り続け、close が sleep の満了まで遅れる。
+  "      slow) sleep 3 >/dev/null 2>&1; exit 0 ;;",
+  '      fail) printf "boom\\n"; exit 3 ;;',
+  '      *) printf "FAKE-OK\\n"; exit 0 ;;',
+  "    esac ;;",
+  "esac",
+  "exit 0",
+  "",
+].join("\n")
+
+const withFakeDocker = async (
+  fn: (ctx: { log: string; workDir: string }) => Promise<void>,
+  opts?: { noDocker?: boolean },
+): Promise<void> => {
+  const dir = mkdtempSync(join(tmpdir(), "fam-fake-docker-"))
+  const bin = join(dir, "bin")
+  mkdirSync(bin)
+  if (opts?.noDocker !== true) {
+    writeFileSync(join(bin, "docker"), fakeDockerScript)
+    chmodSync(join(bin, "docker"), 0o755)
+  }
+  const log = join(dir, "docker.log")
+  writeFileSync(log, "")
+  const workDir = join(dir, "work")
+  mkdirSync(workDir)
+  const prev = {
+    path: process.env.PATH,
+    runs: process.env.FAMULUS_RUNS,
+    cache: process.env.FAMULUS_RUN_CACHE,
+    image: process.env.FAMULUS_RUN_IMAGE,
+  }
+  // noDocker では PATH を空の bin だけにする(実 docker を確実に見えなくする)。
+  // 代替を置く側では bin を先頭に足す — 代替スクリプト自身が bash や seq を引くため。
+  process.env.PATH = opts?.noDocker === true ? bin : `${bin}:${prev.path ?? ""}`
+  process.env.FAMULUS_RUNS = join(dir, "runs")
+  process.env.FAMULUS_RUN_CACHE = join(dir, "cache")
+  delete process.env.FAMULUS_RUN_IMAGE
+  process.env.FAKE_DOCKER_LOG = log
+  try {
+    configureApp()
+    await fn({ log, workDir })
+  } finally {
+    process.env.PATH = prev.path
+    if (prev.runs === undefined) delete process.env.FAMULUS_RUNS
+    else process.env.FAMULUS_RUNS = prev.runs
+    if (prev.cache === undefined) delete process.env.FAMULUS_RUN_CACHE
+    else process.env.FAMULUS_RUN_CACHE = prev.cache
+    if (prev.image !== undefined) process.env.FAMULUS_RUN_IMAGE = prev.image
+    delete process.env.FAKE_DOCKER_LOG
+    delete process.env.FAKE_RUN_MODE
+    delete process.env.FAKE_PS_NAMES
+    configureApp()
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+test("出力と終了コードをそのまま返す(失敗も失敗のまま)", async () => {
+  await withFakeDocker(async ({ workDir }) => {
+    const ok = await runInSandbox("echo hi", { workDir, image: FAKE_IMAGE })
+    assert.equal(ok.exitCode, 0)
+    assert.ok(ok.output.includes("FAKE-OK"))
+    assert.equal(ok.truncated, false)
+    assert.equal(ok.timedOut, false)
+    process.env.FAKE_RUN_MODE = "fail"
+    const bad = await runInSandbox("echo hi", { workDir, image: FAKE_IMAGE })
+    assert.equal(bad.exitCode, 3)
+    assert.ok(bad.output.includes("boom"))
+  })
+})
+
+test("長い出力は頭を省いて末尾を残す", async () => {
+  await withFakeDocker(async ({ workDir }) => {
+    process.env.FAKE_RUN_MODE = "big"
+    const r = await runInSandbox("build", { workDir, image: FAKE_IMAGE })
+    assert.equal(r.truncated, true)
+    assert.ok(r.output.startsWith("…(頭を"), r.output.slice(0, 40))
+    // 落ちた理由は最後に出る。切り詰めで末尾側が消えると読む意味が無くなる。
+    assert.ok(r.output.includes("TAIL-END"))
+  })
+})
+
+test("時間切れはコンテナを名前で外から消し、timedOut を立てる", async () => {
+  await withFakeDocker(async ({ workDir, log }) => {
+    process.env.FAKE_RUN_MODE = "slow"
+    const r = await runInSandbox("sleep", { workDir, image: FAKE_IMAGE, timeoutMs: 300 })
+    assert.equal(r.timedOut, true)
+    assert.ok(r.elapsedMs < 2_500, `切られていない: ${r.elapsedMs}ms`)
+    // rm は投げっぱなしで返るので、書かれるまで少しだけ待つ。
+    const deadline = Date.now() + 3_000
+    let seen = ""
+    while (Date.now() < deadline) {
+      seen = readFileSync(log, "utf8")
+      if (seen.includes("rm -f fam-run-")) break
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.ok(seen.includes("rm -f fam-run-"), `rm が飛んでいない: ${seen}`)
+  })
+  // 既定の 5 秒だと、退行時に vitest がここを打ち切って PATH の後始末が次の検査へ食い込む。
+}, 10_000)
+
+test("走行中の abort は止めて例外で返す", async () => {
+  await withFakeDocker(async ({ workDir }) => {
+    process.env.FAKE_RUN_MODE = "slow"
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(new Error("lease lost")), 100)
+    await assert.rejects(
+      () => runInSandbox("sleep", { workDir, image: FAKE_IMAGE, signal: controller.signal }),
+      /lease lost/,
+    )
+  })
+}, 10_000)
+
+test("docker が無ければ 127 と理由を返す(例外にしない)", async () => {
+  await withFakeDocker(
+    async ({ workDir }) => {
+      const r = await runInSandbox("echo hi", { workDir, image: FAKE_IMAGE })
+      assert.equal(r.exitCode, 127)
+      assert.ok(r.output.includes("走らせられなかった"), r.output)
+    },
+    { noDocker: true },
+  )
+})
+
+test("イメージを組めなければ素のイメージへ落とし、そのことを先頭に書く", async () => {
+  // ensureImage はプロセスに1回だけ試して答えを持ち続ける。inspect も build も失敗する
+  // 状態で呼ぶのでフォールバックが確定する(他の検査は image を明示していて影響を受けない)。
+  await withFakeDocker(async ({ workDir }) => {
+    const r = await runInSandbox("echo hi", { workDir })
+    assert.equal(r.exitCode, 0)
+    assert.ok(r.output.startsWith("[走行用イメージを組めなかった"), r.output.slice(0, 60))
+    assert.ok(r.output.includes("FAKE-OK"))
+  })
+})
+
+test("sweepOrphans: 起動元 pid の無いコンテナだけ rm する。dry は数えるだけ", async () => {
+  await withFakeDocker(async ({ log }) => {
+    const dead = 1_073_741_824 // pid_max(既定 4,194,304)より大きい = 存在し得ない
+    process.env.FAKE_PS_NAMES = `fam-run-a-${dead} fam-run-b-${process.pid} fam-run-c-notapid`
+    const dry = await sweepOrphans(true)
+    assert.deepEqual(dry.removed, [`fam-run-a-${dead}`])
+    assert.deepEqual(dry.kept, [`fam-run-b-${process.pid}`, "fam-run-c-notapid"])
+    assert.ok(!readFileSync(log, "utf8").includes("rm"), "dry なのに消しに行った")
+    const wet = await sweepOrphans()
+    assert.deepEqual(wet.removed, [`fam-run-a-${dead}`])
+    assert.ok(readFileSync(log, "utf8").includes(`rm -f fam-run-a-${dead}`))
+  })
 })
