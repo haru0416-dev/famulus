@@ -79,6 +79,7 @@ const USAGE = `fam — famulus の承認 CLI
   fam code <指示> [--cwd <path>] [--plan] [--model <id>]
                            コーディングを Cursor へ委譲する(taskブランチに commit。merge はしない)
   fam code-models           Cursor で使えるモデル一覧(API鍵の生死確認を兼ねる)
+  fam cursor-hook <event>   (内部用)coder workspace の guard.sh から呼ばれる — 手で打つ命令ではない
   fam skills                skill の一覧(組み込み・取り込み・未分類・拒否)と正本の場所
   fam intake --dry [n]      過去の会話を選別だけして圧縮率を見る(モデルを呼ばない)
   fam intake [n]            未取り込みの会話を古い順に n 件(既定 10)DB へ入れる
@@ -216,7 +217,8 @@ const program = (argv: readonly string[]) =>
         const restorePath = yield* db.meta("restore:last_verified_path")
         const inboundOk = yield* db.meta("health:inbound:last_success")
         const inboundFailed = yield* db.meta("health:inbound:last_failure")
-        const draftOk = yield* db.meta("health:draft:last_success")
+        // 配送成功は drafts の実データから導く。成功時にだけ書く別台帳は、書き忘れがそのまま「まだ無い」表示になる。
+        const draftOk = yield* db.get("SELECT MAX(delivered_at)d FROM drafts WHERE delivered_at IS NOT NULL")
         const draftFailed = yield* db.meta("health:draft:last_failure")
         const lease = yield* (yield* CycleLease).status()
         // 記録が溜まっているか。仕組みがあることと中身があることは別で、
@@ -244,7 +246,7 @@ const program = (argv: readonly string[]) =>
             ? `復元検証: 最終 ${restoreAt} (${restorePath ?? "対象不明"})`
             : "復元検証: まだ無い — fam backup または fam restore --verify",
           `受信health: 成功 ${inboundOk ?? "まだ無い"}${inboundFailed ? ` / 失敗 ${inboundFailed}` : ""}`,
-          `下書きhealth: 配送成功 ${draftOk ?? "まだ無い"}${draftFailed ? ` / 失敗 ${draftFailed}` : ""}`,
+          `下書きhealth: 配送成功 ${draftOk?.d ?? "まだ無い"}${draftFailed ? ` / 失敗 ${draftFailed}` : ""}`,
           lease.state === "held"
             ? `cycle lease: held fence=${lease.fence} ${lease.owner_hostname ?? "host不明"}:${lease.owner_pid ?? "pid不明"} expires=${new Date(lease.expires_at_ms as number).toISOString()}`
             : `cycle lease: ${lease.state} fence=${lease.fence}`,
