@@ -56,6 +56,7 @@ import {
   reviewOutcome,
 } from "./drafting.ts"
 import { runExplore, salvageClaims } from "./explore.ts"
+import { newRecallTurn, type RecallTurn, recordRecall, repeatNotice } from "./recall-turn.ts"
 import { compileSkillPlan, renderSkillOverlay, type SkillPlan } from "./skills.ts"
 import { soulInstruction } from "./soul.ts"
 
@@ -112,6 +113,8 @@ interface TurnState {
   delegations: number
   /** 指示や仕組みへの戸惑い(1行)。読むのは人間だけ — プロンプトにも recall にも還流させない。 */
   confusion: string | undefined
+  /** このターンの recall 台帳。respond ごとに作り直す — 対話は assistant を使い回すので、閉包に置くと前のターンの既読が残る。 */
+  recallTurn: RecallTurn
 }
 
 /**
@@ -144,13 +147,15 @@ export const untrustedToolOutput =
 // ── DB を引く道具。親と検索役で同じものを使う。
 // 検索役に渡すのはこれだけ — remember / believe / propose は渡さない。
 // DB に何を書くかは承認の側の話で、検索してきた側が決めてよいことではない。
-const recallTool = (state: TurnState) =>
+const recallTool = (state: TurnState, own?: RecallTurn) =>
   tool({
     // どう読むかまで書く。検索結果は日付と層(確定/取り込み/システム記録)を頭に付けて返るが、
     // 今の事実として読むかその時点の記録として読むかは書き手の側で決まる。
     // [取り込み] はその時点の記録で、現在値とは限らない。
     // 言わずに渡すと、1年前の要約を現在形でユーザーに喋り返す。
     description: `DB を全文検索する。3文字以上のクエリで部分一致する。
+**同じ語をもう一度引いても検索されない**(結果は変わらない)。空振りしたら別の語で1回だけ、
+それでも無ければ「無い」と結論する。
 各行の頭に [日時 層] が付く。読み方:
 - [確定] … ユーザーに確かめた今の値。**今の事実として使ってよいのはこれだけ**
 - [確定(旧版)] … 同じ事柄の古い値。今はもう違う。過去形でしか使わない
@@ -158,14 +163,19 @@ const recallTool = (state: TurnState) =>
   日時が古いものを現在形で語らない。今どうかは belief で確かめるか、ユーザーに聞く
 - [システム記録] … famulus が保存した記録。実行結果・送信結果・調査メモなどを含み、確認状態は内容ごとに異なる`,
     inputSchema: vs(v.object({ query: v.pipe(v.string(), v.description("検索語。3文字以上。")) })),
-    execute: async ({ query }) =>
-      run(
+    execute: async ({ query }) => {
+      const turn = own ?? state.recallTurn
+      const notice = repeatNotice(turn, query)
+      if (notice !== undefined) return notice
+      return run(
         Effect.gen(function* () {
           const mem = yield* Memory
           // 第3引数は今のターンの入力。渡さないと現在の入力を過去の記録として読む。
-          return renderRecall(yield* mem.recall(query, 10, state.lastInputEventId))
+          const rows = yield* mem.recall(query, 10, state.lastInputEventId)
+          return recordRecall(turn, query, renderRecall(rows), rows.length)
         }),
-      ),
+      )
+    },
     toModelOutput: untrustedToolOutput("memory", "recall"),
   })
 
@@ -386,7 +396,8 @@ export const RESEARCHER = `web を調べる役。fetchで開いた資料からcl
  */
 const DIGGER = `検索役。DB を検索して、要る行を**原文のまま**返す。
 
-- \`recall\` を語を変えて何度でも呼ぶ。1回で当たることは少ない。言い換え・略称・関係する人や場所でも引く。
+- \`recall\` は語を**変えて**引く。1回で当たることは少ない — 言い換え・略称・関係する人や場所。
+  同じ語を二度引かない(引いても検索されない)。「該当なし」が2回続いたら DB に無い — 「無い」と書いて止める。
 - 見つけた行は [日時 層] ごと写す。**要約しない。** 固有名・日付・金額・引用は1文字も変えない。
 - 無かったら「無い」と書く。それ以上は書かない。埋めた分だけ嘘になる。
 - 解釈を足さない。何を意味するかは呼んだ側が決める。`
@@ -748,7 +759,8 @@ function buildTools(state: TurnState, gate: ToolGate) {
           const child = new ToolLoopAgent({
             model: governedModel(workModel()),
             instructions: DIGGER,
-            tools: gateTools({ recall: recallTool(state) }, gate),
+            // 台帳は委譲ごとに独立。親のを共有すると、親が引いた語を子が引けず結果を見られない。
+            tools: gateTools({ recall: recallTool(state, newRecallTurn()) }, gate),
             ...childOpts(8),
           })
           const r = await child.generate({ prompt: task, ...(abortSignal ? { abortSignal } : {}) })
@@ -1683,7 +1695,12 @@ export const replyStepText = (text: string, toolCalls: readonly unknown[]): stri
  */
 export function createAssistant(opts: AssistantOptions = {}) {
   const modelId = opts.model ?? appConfig().models.default
-  const state: TurnState = { lastInputEventId: undefined, delegations: 0, confusion: undefined }
+  const state: TurnState = {
+    lastInputEventId: undefined,
+    delegations: 0,
+    confusion: undefined,
+    recallTurn: newRecallTurn(),
+  }
   let history: ModelMessage[] = []
   const token = opts.leaseToken
   const gate: ToolGate = token
@@ -1745,8 +1762,9 @@ export function createAssistant(opts: AssistantOptions = {}) {
       if (gate) await gate()
       const inputEventId = await observe(input)
       state.lastInputEventId = inputEventId
-      // chat は同じ assistant を使い回すので、前のターンの戸惑いをここで消す。
+      // chat は同じ assistant を使い回すので、前のターンの戸惑いと recall 台帳をここで消す。
       state.confusion = undefined
+      state.recallTurn = newRecallTurn()
       const sent: ModelMessage[] = [...history, { role: "user", content: input }]
       // 利用者へ返すのはツールループが終わった step の本文だけ。ツールを呼ぶ step に書かれた
       // 「調べます」の類は経過で、積むと CONDUCT の「経過を書かない」と衝突する。

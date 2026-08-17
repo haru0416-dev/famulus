@@ -9,3 +9,4 @@ coverage/
 # 秘密は環境変数か 600 の .env で持つ。どちらも追跡しない。
 .env
 .env.*
+.playwright-mcp/
