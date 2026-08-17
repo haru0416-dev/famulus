@@ -25,6 +25,19 @@ test("chart — ECharts option の JSON から SVG と PNG が出る", async () 
   assert.ok(isPng(fig.png))
 })
 
+test("chart — legend の余白は既定で空き、option 側の top 指定が勝つ", async () => {
+  const base = {
+    legend: { data: ["a"] },
+    xAxis: { type: "category", data: ["x"] },
+    yAxis: { type: "value" },
+    series: [{ name: "a", type: "line", data: [1] }],
+  }
+  const spaced = await renderChart(JSON.stringify(base), 300, 200)
+  assert.ok(spaced.svg.includes("<svg"))
+  const pinned = await renderChart(JSON.stringify({ ...base, legend: { data: ["a"], top: 0 } }), 300, 200)
+  assert.ok(pinned.svg.includes("<svg"))
+})
+
 test("chart — 壊れた JSON は読める文で拒否する", async () => {
   await assert.rejects(() => renderChart("{壊れてる"), FigureError)
   await assert.rejects(() => renderChart('["配列"]'), FigureError)
