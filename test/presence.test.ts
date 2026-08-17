@@ -17,7 +17,7 @@ import { carryOver, presence, stateLine } from "../src/presence.ts"
 
 /** 現行schemaのDBを1つ作る。shape境界も含めてpresenceと同じ条件で読む。 */
 const withDb = (fn: (path: string, db: Database) => void): void => {
-  const dir = mkdtempSync(join(tmpdir(), "oz-presence-"))
+  const dir = mkdtempSync(join(tmpdir(), "fam-presence-"))
   const path = join(dir, "t.db")
   const db = new Database(path)
   try {
@@ -58,7 +58,7 @@ test("未読があれば件数を前に出す", () => {
 })
 
 test("DB が読めなければ文は作らない", () => {
-  assert.equal(stateLine(join(tmpdir(), "oz-presence-無い.db")), undefined)
+  assert.equal(stateLine(join(tmpdir(), "fam-presence-無い.db")), undefined)
 })
 
 /**
@@ -66,7 +66,7 @@ test("DB が読めなければ文は作らない", () => {
  * IDENTIFY に載せる中身が無くなって接続そのものが立たない。
  */
 test("文が作れなくても online で組み立てる", () => {
-  const p = presence(join(tmpdir(), "oz-presence-無い.db"))
+  const p = presence(join(tmpdir(), "fam-presence-無い.db"))
   assert.equal(p.status, "online")
   assert.deepEqual(p.activities, [])
 })

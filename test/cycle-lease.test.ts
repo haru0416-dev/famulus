@@ -255,7 +255,7 @@ test("transaction callbackはasyncとhandle漏出を拒否してrollbackする",
 })
 
 test("実プロセスで停止中ownerを奪わず終了後だけ高いfenceで回復する", async () => {
-  const root = mkdtempSync(join(tmpdir(), "oz-cycle-lease-"))
+  const root = mkdtempSync(join(tmpdir(), "fam-cycle-lease-"))
   const path = join(root, "lease.db")
   const fixture = join(import.meta.dirname, "fixtures", "cycle-lease-probe.ts")
   const spawn = (mode: "hold" | "once") =>

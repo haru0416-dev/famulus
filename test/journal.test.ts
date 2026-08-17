@@ -49,7 +49,7 @@ test("呼んだ道具の並びは、締めの文と別に残る", async () => {
     assert.equal(e.ms, 305_000)
     // 報告文はそのまま持つが、道具の並びはそこから作っていない。
     assert.match(e.said, /watch を1本回した/)
-    // Discord は幅が無いので数だけ、`oz journal` は並びごと。どちらも報告文からは作っていない。
+    // Discord は幅が無いので数だけ、`fam journal` は並びごと。どちらも報告文からは作っていない。
     assert.match(logPost(e), /- 道具 shell×2 · record_watch_run · workspaces/)
     assert.match(renderJournal([e]), /道具 {4}shell×2 → record_watch_run → workspaces/)
   })

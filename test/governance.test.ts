@@ -140,7 +140,7 @@ test("日次 run 数の上限は効くが、halt は立てない(翌日には自
 
     // halt を残さない。元実装は残していたが、それは1回ごとに課金される前提での判断。
     // 定額枠では上限に当たること自体が異常の合図ではないので、翌日に自動で戻るべきもので、
-    // ここで halt を立てると人が `oz resume` を打つまで対話まで含めて全停止する。
+    // ここで halt を立てると人が `fam resume` を打つまで対話まで含めて全停止する。
     const halt = await h.run(
       Effect.gen(function* () {
         const gov = yield* Governance

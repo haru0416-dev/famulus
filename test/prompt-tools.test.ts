@@ -26,7 +26,7 @@ const PROMPTS = ["SOUL.md", "src/agent/soul.ts", "src/agent/assistant.ts", "src/
 
 /** 道具ではないと分かっている語。足すときは「なぜ道具ではないか」を書く。 */
 const NOT_TOOLS = new Set([
-  "oz", // CLI の名前(ユーザーが端末で叩くもの)
+  "fam", // CLI の名前(ユーザーが端末で叩くもの)
   "owner", // DB の列の値
   "source", // DB の列名(誰が書いたか)。keeper と dream が材料を絞るのに使う
   "completeCycle", // Attention の関数(cooldownの起点を進める側)。モデルからは呼べない

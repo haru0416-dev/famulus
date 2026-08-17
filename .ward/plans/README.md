@@ -130,5 +130,5 @@ P0 through P2 means plans 001 through 006 plus cross-cutting plans 009 and 011 P
 - (追記・2026-08-17) **open-zero → famulus 全面改名。** リポジトリは `~/Project/famulus`
   (互換 symlink も撤去)、環境変数は `FAMULUS_*`(旧 `OPEN_ZERO_*` の読み替えは残さない)、
   状態は `~/.famulus/data/`(DB は famulus.db、backup 命名も famulus-*)、systemd unit は
-  famulus-{cycle,poll,presence}、CLI は `fam`(別名 `oz`)、sandbox container 接頭辞は
+  famulus-{cycle,poll,presence}、CLI は `fam`(`oz` は同日に廃止)、sandbox container 接頭辞は
   fam-run-。本文書より前の記述に現れる open-zero / OPEN_ZERO_* は当時の名前として読む。

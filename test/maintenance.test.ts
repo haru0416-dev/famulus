@@ -22,7 +22,7 @@ let source = ""
 const projectRoot = fileURLToPath(new URL("..", import.meta.url))
 
 beforeAll(async () => {
-  root = mkdtempSync(join(tmpdir(), "oz-maintenance-"))
+  root = mkdtempSync(join(tmpdir(), "fam-maintenance-"))
   source = join(root, "famulus.db")
   const rt = makeRuntime(DbLive(source), RunnerStub([{ text: "ok" }]).layer)
   await rt.runPromise(Effect.flatMap(Db, (db) => db.setMeta("backup-sentinel", "kept")))

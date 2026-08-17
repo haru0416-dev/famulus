@@ -29,7 +29,7 @@ import { Db, type Row } from "./Db.ts"
 /**
  * 提案の状態。実行の3つ(`executing` `executed` `failed`)は落とした。
  *
- * 承認しても実行する仕組みが無い。到達しない状態を残すと、`oz list` を読んだ側が
+ * 承認しても実行する仕組みが無い。到達しない状態を残すと、`fam list` を読んだ側が
  * 「承認すれば動く」と読む。実行を付ける日が来たら、そのときに足す。
  */
 export type ProposalStatus = "proposed" | "approved" | "denied" | "expired"

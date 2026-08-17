@@ -23,7 +23,7 @@ import {
 import { type Harness, withHarness } from "./helpers.ts"
 
 const withRuns = async (fn: (root: string, h: Harness) => Promise<void>) => {
-  const dir = mkdtempSync(join(tmpdir(), "oz-ws-"))
+  const dir = mkdtempSync(join(tmpdir(), "fam-ws-"))
   const prev = process.env.FAMULUS_RUNS
   process.env.FAMULUS_RUNS = join(dir, "runs")
   try {
@@ -104,7 +104,7 @@ test("noteWorkspace は keep を変更しない", async () => {
  * ルートの mtime しか見ないと、使っている workspace が古いと出る(cleanup がそれで消す)。
  */
 test("scanTree は子孫を含む最大 mtime と合計サイズを返す", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "oz-scan-"))
+  const dir = mkdtempSync(join(tmpdir(), "fam-scan-"))
   try {
     mkdirSync(join(dir, "a", "b"), { recursive: true })
     writeFileSync(join(dir, "a", "b", "new.txt"), "x".repeat(100))
@@ -126,7 +126,7 @@ test("scanTree は子孫を含む最大 mtime と合計サイズを返す", asyn
  * bun の isolated はそこを symlink と hard link で組む。数え直すと大きさが数倍に出る。
  */
 test("scanTree は symlink の先へ降りない", () => {
-  const dir = mkdtempSync(join(tmpdir(), "oz-scan-sym-"))
+  const dir = mkdtempSync(join(tmpdir(), "fam-scan-sym-"))
   try {
     mkdirSync(join(dir, "real"))
     writeFileSync(join(dir, "real", "f.bin"), "x".repeat(100))
@@ -138,7 +138,7 @@ test("scanTree は symlink の先へ降りない", () => {
 })
 
 test("scanTree は hard link を1回だけ数える", () => {
-  const dir = mkdtempSync(join(tmpdir(), "oz-scan-hard-"))
+  const dir = mkdtempSync(join(tmpdir(), "fam-scan-hard-"))
   try {
     writeFileSync(join(dir, "f.bin"), "x".repeat(100))
     linkSync(join(dir, "f.bin"), join(dir, "g.bin"))
@@ -150,7 +150,7 @@ test("scanTree は hard link を1回だけ数える", () => {
 
 /** 輪があっても落ちない。投げると一覧そのものが出なくなる — cycle のプロンプトも作れない。 */
 test("scanTree は symlink の輪で落ちない", () => {
-  const dir = mkdtempSync(join(tmpdir(), "oz-scan-loop-"))
+  const dir = mkdtempSync(join(tmpdir(), "fam-scan-loop-"))
   try {
     mkdirSync(join(dir, "a"))
     writeFileSync(join(dir, "a", "f.bin"), "x".repeat(100))

@@ -142,7 +142,7 @@ export const listWorkspaces = Effect.gen(function* () {
   return out.sort((a, b) => b.touchedMs - a.touchedMs)
 })
 
-/** プロンプトにも `oz ws` にも同じ形で出す。説明の無いものは無いと書く。 */
+/** プロンプトにも `fam ws` にも同じ形で出す。説明の無いものは無いと書く。 */
 export const renderWorkspaces = (list: readonly Workspace[], nowMs: number): string => {
   if (list.length === 0) return "(まだ1つも無い)"
   return list
@@ -177,7 +177,7 @@ export const noteWorkspace = (name: string, purpose: string) =>
     )
   })
 
-/** 触られなくても消さない場所として登録する。`oz selfdev` のようなホスト側の管理経路から呼ぶ。 */
+/** 触られなくても消さない場所として登録する。`fam selfdev` のようなホスト側の管理経路から呼ぶ。 */
 export const keepWorkspace = (name: string, purpose: string) =>
   Effect.gen(function* () {
     const db = yield* Db

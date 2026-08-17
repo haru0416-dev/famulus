@@ -14,7 +14,7 @@ let dbPath = ""
 let backupDir = ""
 const projectRoot = fileURLToPath(new URL("..", import.meta.url))
 
-const oz = async (...args: string[]) => {
+const fam = async (...args: string[]) => {
   const child = Bun.spawn([process.execPath, "src/cli.ts", ...args], {
     cwd: projectRoot,
     env: {
@@ -36,7 +36,7 @@ const oz = async (...args: string[]) => {
 }
 
 beforeAll(async () => {
-  root = mkdtempSync(join(tmpdir(), "oz-cli-maintenance-"))
+  root = mkdtempSync(join(tmpdir(), "fam-cli-maintenance-"))
   dbPath = join(root, "famulus.db")
   backupDir = join(root, "backups")
   const rt = makeRuntime(DbLive(dbPath), RunnerStub([{ text: "ok" }]).layer)
@@ -49,21 +49,21 @@ afterAll(() => {
 })
 
 test("CLIでbackup・doctor・restore検証を端から端まで実行する", async () => {
-  const backup = await oz("backup")
+  const backup = await fam("backup")
   assert.equal(backup.exitCode, 0, backup.stderr)
   assert.match(backup.stdout, /バックアップ完了/)
   assert.match(backup.stdout, /復元検証: ok/)
 
-  const doctor = await oz("doctor")
+  const doctor = await fam("doctor")
   assert.equal(doctor.exitCode, 0, doctor.stderr)
   assert.match(doctor.stdout, /live DB: ok/)
   assert.match(doctor.stdout, /最新backup復元: ok/)
 
-  const restore = await oz("restore", "--verify")
+  const restore = await fam("restore", "--verify")
   assert.equal(restore.exitCode, 0, restore.stderr)
   assert.match(restore.stdout, /復元検証完了/)
 
-  const status = await oz("status")
+  const status = await fam("status")
   assert.equal(status.exitCode, 0, status.stderr)
   assert.match(status.stdout, /バックアップ: 最終/)
   assert.match(status.stdout, /復元検証: 最終/)

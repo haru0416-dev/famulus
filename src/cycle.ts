@@ -2,7 +2,7 @@
 /**
  * cycle。話しかけられなくても動くための唯一の入口。
  *
- * ここまでの構造は全部「人が話しかけたら動く」形だった(`bun run agent` も `oz` も人が起動する)。
+ * ここまでの構造は全部「人が話しかけたら動く」形だった(`bun run agent` も `fam` も人が起動する)。
  * 自走にするというのは、起動の理由を人の発話から DB の状態に移すこと。
  * このファイルがその置き換えで、systemd のタイマーから定期的に呼ばれる。
  *
@@ -535,7 +535,7 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         // 出す先が指してなければ何も起きない(`Desk` の "log" は DM に落ちない)。
         //
         // 書いた記録をそのまま読み直して出す。ここで数え直すと、画面で見る値と
-        // `oz journal` の値が別々に育って、食い違ったときにどちらが本当か決められなくなる。
+        // `fam journal` の値が別々に育って、食い違ったときにどちらが本当か決められなくなる。
         // 最後に置いてあるのは、enqueue に失敗しても commit まで済んでいるようにするため。
         const [entry] = yield* readJournal(1)
         if (entry) {

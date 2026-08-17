@@ -51,7 +51,7 @@ function entry(raw: string): [string, string] | undefined {
 /**
  * `.env` の値を `process.env` に載せる。2回目以降は何もしない。
  * 既にプロセスに入っていた値は `.env` で上書きしない(systemd の `Environment=` と
- * `FOO=x oz ...` が常に勝つ)。
+ * `FOO=x fam ...` が常に勝つ)。
  */
 export function loadEnv(path: string = ENV_PATH): void {
   if (done) return

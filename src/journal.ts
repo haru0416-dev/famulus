@@ -163,7 +163,7 @@ const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed
  * Discord に出す側で使う。幅が狭い場所では並びを持たせられない — 15手ぶんの並びは
  * 92桁になり、スマホの幅で3行に折れて、折り返した先は何の行だったか読めなくなる。
  * 「10回呼んで0本残っていない」というずれは数だけでも見えるので、そちらを取った。
- * 順番は `runs()` が持っていて、`oz journal` から読める。
+ * 順番は `runs()` が持っていて、`fam journal` から読める。
  */
 export const tally = (tools: readonly string[]): string => {
   const seen = new Map<string, number>()

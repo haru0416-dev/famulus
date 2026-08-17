@@ -1,7 +1,7 @@
 /**
  * `.env` の読み込みの検査。外から渡した値が勝つかだけを見る。
  *
- * 逆向き(ファイルが勝つ)にすると、`FOO=x oz ...` で一度だけ差し替えることができなくなり、
+ * 逆向き(ファイルが勝つ)にすると、`FOO=x fam ...` で一度だけ差し替えることができなくなり、
  * テストも本番の `.env` に引きずられる。順序が壊れても実行時には何も起きないので、
  * ここで固定していないと壊れたことに気づけない。
  *
@@ -15,7 +15,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test, vi } from "vitest"
 
-const dir = mkdtempSync(join(tmpdir(), "oz-env-"))
+const dir = mkdtempSync(join(tmpdir(), "fam-env-"))
 
 const envFile = (name: string, body: string): string => {
   const path = join(dir, name)

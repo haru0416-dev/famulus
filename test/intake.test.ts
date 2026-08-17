@@ -78,7 +78,7 @@ const LONG_ASK =
   "あと、予約の確認メールは自分宛てには要らない。"
 
 beforeAll(() => {
-  ROOT = mkdtempSync(join(tmpdir(), "oz-intake-"))
+  ROOT = mkdtempSync(join(tmpdir(), "fam-intake-"))
   process.env.FAMULUS_TRANSCRIPT_ROOT = ROOT
 
   const dir = join(ROOT, "-home-haru-Project-demo")

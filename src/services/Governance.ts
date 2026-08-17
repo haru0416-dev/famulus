@@ -178,7 +178,7 @@ const makeGovernance = () =>
         //
         // halt は立てない。1回ごとに課金される前提なら上限に当たること自体が
         // 想定外の従量課金を示すが、定額利用ではそうではない。
-        // ここで halt を立てると、翌日には自動で戻るはずの上限が、人が `oz resume` を打つまで
+        // ここで halt を立てると、翌日には自動で戻るはずの上限が、人が `fam resume` を打つまで
         // 対話まで含めた全停止として残る(3b の自律実行上限で halt を設定しないのと同じ判断)。
         const day = localDayRange(opts.at)
         const row = yield* db.get(

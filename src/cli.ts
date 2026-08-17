@@ -4,30 +4,30 @@ import { resolve } from "node:path"
  * ユーザー向け管理 CLI。提案の承認・却下、停止、状態確認、記憶や watch の操作をまとめる。
  * 提案の承認を記録する入口はこの CLI だけで、承認後の実行コネクタはまだ無い。
  *
- *   oz status              … 停止/クォータ/今日の使用量/承認待ち件数/自動処理の最終実行状態
- *   oz halt <理由>         … 全停止。自動では明けない
- *   oz resume              … 停止解除
- *   oz attention           …自動処理の対象(watch・問い・次回の実行条件)
- *   oz journal [n]         …自動処理が実際に何をしたか(呼んだ道具・残った行・モデル使用量)
- *   oz answer <id> <答え>  … 問いに答えて閉じる
- *   oz drop <id> <理由>    … 追跡を終了する問いを、答えずに取り下げる
- *   oz watch <やること>    …watch に置く(既定は famulus = 自動処理の実行条件になる)
- *   oz unwatch <id>        … 決着した watch を閉じる
- *   oz list [status]       … 提案一覧(既定は承認待ち)
- *   oz show <id>           … 承認カード全文(id は前方一致でよい)
- *   oz approve <id>        … 承認actionを書き、payloadを指紋で固定する
- *   oz deny <id> <理由>    … 却下。理由は次の生成へ還流させるので必須
- *   oz recall <語>         … 記憶を引く
- *   oz dossier [id]        … 調査dossier一覧または引用・実験・限界の全文
- *   oz belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
- *   oz dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定値として保存する(1回ぶんでは見えない値)
- *   oz cleanup [日数] [--dry]… `.data/` の増え続けるものを削除する(events は触らない)
- *   oz backup              … DBのsnapshotを作り、一時復元して検証してから保持する
- *   oz restore --verify [path]… backupを一時DBへ復元して検証する
- *   oz doctor              … 設定・live DB・最新backupを診断する
- *   oz ws                  … workspace の一覧(名前・用途・大きさ・最後に触った時刻)
- *   oz selfdev [--fresh]   … 自分のソースの clone を workspace に置く(コンテナから直せるようにする)
- *   oz intake [--dry] [n]  … 過去の会話を圧縮して DB に入れる(DB の入口)
+ *   fam status              … 停止/クォータ/今日の使用量/承認待ち件数/自動処理の最終実行状態
+ *   fam halt <理由>         … 全停止。自動では明けない
+ *   fam resume              … 停止解除
+ *   fam attention           …自動処理の対象(watch・問い・次回の実行条件)
+ *   fam journal [n]         …自動処理が実際に何をしたか(呼んだ道具・残った行・モデル使用量)
+ *   fam answer <id> <答え>  … 問いに答えて閉じる
+ *   fam drop <id> <理由>    … 追跡を終了する問いを、答えずに取り下げる
+ *   fam watch <やること>    …watch に置く(既定は famulus = 自動処理の実行条件になる)
+ *   fam unwatch <id>        … 決着した watch を閉じる
+ *   fam list [status]       … 提案一覧(既定は承認待ち)
+ *   fam show <id>           … 承認カード全文(id は前方一致でよい)
+ *   fam approve <id>        … 承認actionを書き、payloadを指紋で固定する
+ *   fam deny <id> <理由>    … 却下。理由は次の生成へ還流させるので必須
+ *   fam recall <語>         … 記憶を引く
+ *   fam dossier [id]        … 調査dossier一覧または引用・実験・限界の全文
+ *   fam belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
+ *   fam dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定値として保存する(1回ぶんでは見えない値)
+ *   fam cleanup [日数] [--dry]… `.data/` の増え続けるものを削除する(events は触らない)
+ *   fam backup              … DBのsnapshotを作り、一時復元して検証してから保持する
+ *   fam restore --verify [path]… backupを一時DBへ復元して検証する
+ *   fam doctor              … 設定・live DB・最新backupを診断する
+ *   fam ws                  … workspace の一覧(名前・用途・大きさ・最後に触った時刻)
+ *   fam selfdev [--fresh]   … 自分のソースの clone を workspace に置く(コンテナから直せるようにする)
+ *   fam intake [--dry] [n]  … 過去の会話を圧縮して DB に入れる(DB の入口)
  *
  * 承認しても実行はされない。コネクタ(送信・予約)が1つも無いので、approved は
  * 「承認済み・未実行」で止まる。ここを実行したことにするのが一番大きい嘘なので、そうしない。
@@ -69,39 +69,39 @@ const kb = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `$
 const place = (ch: string | undefined, dm: string | undefined) =>
   ch === undefined ? "出せない" : ch === dm ? "DM" : `チャンネル ${ch}`
 
-const USAGE = `fam — famulus の承認 CLI(別名: oz)
+const USAGE = `fam — famulus の承認 CLI(別名: fam)
 
-  oz status                今の停止状態・クォータ・今日の使用量・承認待ち件数・自動処理の最終実行状態
-  oz halt <理由>           全停止(自動解除しない)
-  oz resume                停止解除
-  oz attention             自動処理の対象(watch・未解決の問い・次回の実行条件)
-  oz journal [n]           自動処理の実働(既定 10 回)。呼んだ道具・残った行数を、
+  fam status                今の停止状態・クォータ・今日の使用量・承認待ち件数・自動処理の最終実行状態
+  fam halt <理由>           全停止(自動解除しない)
+  fam resume                停止解除
+  fam attention             自動処理の対象(watch・未解決の問い・次回の実行条件)
+  fam journal [n]           自動処理の実働(既定 10 回)。呼んだ道具・残った行数を、
                            自分で書いた報告文と分けて出す
-  oz answer <id> <答え>    問いに答えて閉じる(ユーザーの答えは確認済みとして入る)
-  oz drop <id> <理由>      問いを答えないまま取り下げる。理由は必須
-  oz watch <やること>      watch に置く(既定は自分の番。--human で人待ち)
-  oz unwatch <id>          watch を閉じる
-  oz list [status]         提案一覧。status は proposed(既定)/approved/denied/expired/all
-  oz show <id>             承認カード全文(id は前方一致可)
-  oz approve <id>          承認(実行はされない — 実行の仕組みはまだ無い)
-  oz deny <id> <理由>      却下。理由は必須
-  oz recall <語>           DB を全文検索
-  oz dossier [id]          調査dossier一覧。idを渡すと引用・hash・実験check・限界を表示
-  oz belief <slot>         事実の今の値と変遷(いつからいつまで何だったか)
-  oz belief <slot> <値>    新しい値を確定。前の区間はそこで閉じる(上書きしない)
+  fam answer <id> <答え>    問いに答えて閉じる(ユーザーの答えは確認済みとして入る)
+  fam drop <id> <理由>      問いを答えないまま取り下げる。理由は必須
+  fam watch <やること>      watch に置く(既定は自分の番。--human で人待ち)
+  fam unwatch <id>          watch を閉じる
+  fam list [status]         提案一覧。status は proposed(既定)/approved/denied/expired/all
+  fam show <id>             承認カード全文(id は前方一致可)
+  fam approve <id>          承認(実行はされない — 実行の仕組みはまだ無い)
+  fam deny <id> <理由>      却下。理由は必須
+  fam recall <語>           DB を全文検索
+  fam dossier [id]          調査dossier一覧。idを渡すと引用・hash・実験check・限界を表示
+  fam belief <slot>         事実の今の値と変遷(いつからいつまで何だったか)
+  fam belief <slot> <値>    新しい値を確定。前の区間はそこで閉じる(上書きしない)
                            --from <ISO> で「いつから真だったか」を遡って書ける
-  oz dream [日数] [--dry]   何日ぶんかをまとめて見直し、確定に上げ直す(既定 7 日)
-  oz cleanup [日数] [--dry] workspace と読まれない会話を落とす(既定 14 日・events は触らない)
-  oz backup                DB snapshotを作成し、一時復元で検証する
-  oz restore --verify [path] backupを一時DBへ復元し、整合性とschemaを検証する
-  oz doctor                設定・live DB・最新backupを診断する
-  oz ws                    workspace の一覧(何のための場所か・大きさ・最後に触った時刻)
-  oz selfdev [--fresh]     自分のソースの clone を workspace に置き、中でゲートが通るまで確かめる
+  fam dream [日数] [--dry]   何日ぶんかをまとめて見直し、確定に上げ直す(既定 7 日)
+  fam cleanup [日数] [--dry] workspace と読まれない会話を落とす(既定 14 日・events は触らない)
+  fam backup                DB snapshotを作成し、一時復元で検証する
+  fam restore --verify [path] backupを一時DBへ復元し、整合性とschemaを検証する
+  fam doctor                設定・live DB・最新backupを診断する
+  fam ws                    workspace の一覧(何のための場所か・大きさ・最後に触った時刻)
+  fam selfdev [--fresh]     自分のソースの clone を workspace に置き、中でゲートが通るまで確かめる
                            --fresh は clone ごと取り直す(中で直しかけていたものは消える)
-  oz grok-login            SuperGrok OAuth の device flow を通す(トークンを保存)
-  oz skills                skill の一覧(組み込み・取り込み・未分類・拒否)と正本の場所
-  oz intake --dry [n]      過去の会話を選別だけして圧縮率を見る(モデルを呼ばない)
-  oz intake [n]            未取り込みの会話を古い順に n 件(既定 10)DB へ入れる
+  fam grok-login            SuperGrok OAuth の device flow を通す(トークンを保存)
+  fam skills                skill の一覧(組み込み・取り込み・未分類・拒否)と正本の場所
+  fam intake --dry [n]      過去の会話を選別だけして圧縮率を見る(モデルを呼ばない)
+  fam intake [n]            未取り込みの会話を古い順に n 件(既定 10)DB へ入れる
                            取り込み元は Claude Code のログと Claude.ai の書き出しの両方
 `
 
@@ -124,14 +124,14 @@ const idAndText = (rest: readonly string[]): { id: string; text: string } | null
   return id && text ? { id, text } : null
 }
 
-/** `oz watch` で次に動く相手を指定する札。無指定は famulus。 */
+/** `fam watch` で次に動く相手を指定する札。無指定は famulus。 */
 const NEXT_MOVE_FLAG: Readonly<Record<string, NextMove>> = {
   "--famulus": "famulus",
   "--human": "human",
 }
 
 /**
- * `oz watch <やること> [--human]` の引数を割る。
+ * `fam watch <やること> [--human]` の引数を割る。
  *
  * 知らない札は読み飛ばさずに弾く。読み飛ばすと、打ち間違えた札が watch の本文から
  * 一語消えたまま登録され、宛先も既定のままになる — 二重に化けたうえ、
@@ -154,7 +154,7 @@ const parseWatch = (rest: readonly string[]) =>
       owner = flag
     }
     const subject = words.join(" ").trim()
-    if (!subject) return yield* Effect.fail(new Error("中身が要る: oz watch <やること> [--human]"))
+    if (!subject) return yield* Effect.fail(new Error("中身が要る: fam watch <やること> [--human]"))
     return { subject, owner }
   })
 
@@ -253,7 +253,7 @@ const program = (argv: readonly string[]) =>
              FROM events WHERE content IS NOT NULL`,
         )
         return [
-          halt ? `停止中: ${halt.reason}(${halt.at}) — oz resume で解除` : "停止: なし",
+          halt ? `停止中: ${halt.reason}(${halt.at}) — fam resume で解除` : "停止: なし",
           ...pools,
           `${t.day}: run ${t.runs} 回(うち自走 ${Number(a?.n ?? 0)}/${appConfig().governance.autonomousRuns})` +
             ` / 入力 ${fmtTok(t.inTok)} 出力 ${fmtTok(t.outTok)}`,
@@ -265,10 +265,10 @@ const program = (argv: readonly string[]) =>
           `DB: ${Number(mem?.n ?? 0)} 件(うち取り込み ${Number(mem?.imported ?? 0)} セッション)`,
           backupAt
             ? `バックアップ: 最終 ${backupAt} (${backupPath ?? "保存先不明"})`
-            : "バックアップ: まだ無い — oz backup",
+            : "バックアップ: まだ無い — fam backup",
           restoreAt
             ? `復元検証: 最終 ${restoreAt} (${restorePath ?? "対象不明"})`
-            : "復元検証: まだ無い — oz backup または oz restore --verify",
+            : "復元検証: まだ無い — fam backup または fam restore --verify",
           `受信health: 成功 ${inboundOk ?? "まだ無い"}${inboundFailed ? ` / 失敗 ${inboundFailed}` : ""}`,
           `下書きhealth: 配送成功 ${draftOk ?? "まだ無い"}${draftFailed ? ` / 失敗 ${draftFailed}` : ""}`,
           lease.state === "held"
@@ -284,7 +284,7 @@ const program = (argv: readonly string[]) =>
           // ここで言わないと「動いていないのか、出す先が無いのか」が分からない。
           dc.log
             ? `進み具合: チャンネル ${dc.log} に1回1行(呼びかけなし)`
-            : "進み具合: 出さない(.env の FAMULUS_DISCORD_CH_LOG が空)— oz journal で見る",
+            : "進み具合: 出さない(.env の FAMULUS_DISCORD_CH_LOG が空)— fam journal で見る",
         ].join("\n")
       }
 
@@ -344,7 +344,7 @@ const program = (argv: readonly string[]) =>
        */
       case "answer": {
         const a = idAndText(rest)
-        if (!a) return yield* Effect.fail(new Error("id と答えが要る: oz answer <id> <答え>"))
+        if (!a) return yield* Effect.fail(new Error("id と答えが要る: fam answer <id> <答え>"))
         const att = yield* Attention
         // ユーザーが打った答えは一次情報。この経路だけは確認済みとして入れてよい。
         const q = yield* att.answer(a.id, a.text, { confirmed: true })
@@ -353,7 +353,7 @@ const program = (argv: readonly string[]) =>
 
       case "drop": {
         const a = idAndText(rest)
-        if (!a) return yield* Effect.fail(new Error("id と理由が要る: oz drop <id> <理由>"))
+        if (!a) return yield* Effect.fail(new Error("id と理由が要る: fam drop <id> <理由>"))
         const att = yield* Attention
         const q = yield* att.drop(a.id, a.text)
         return `問いを取り下げた: ${short(q.id)} ${q.question}\n  理由: ${q.answer}`
@@ -367,7 +367,7 @@ const program = (argv: readonly string[]) =>
       }
 
       case "unwatch": {
-        if (!rest[0]) return yield* Effect.fail(new Error("id が要る: oz unwatch <id>"))
+        if (!rest[0]) return yield* Effect.fail(new Error("id が要る: fam unwatch <id>"))
         const att = yield* Attention
         const w = yield* att.closeWatch(rest[0])
         return `watch を閉じた: ${short(w.id)} ${w.subject}`
@@ -375,9 +375,9 @@ const program = (argv: readonly string[]) =>
 
       case "halt": {
         const reason = rest.join(" ").trim()
-        if (!reason) return yield* Effect.fail(new Error("理由が要る: oz halt <理由>"))
+        if (!reason) return yield* Effect.fail(new Error("理由が要る: fam halt <理由>"))
         yield* gov.writeHalt(reason, nowIso())
-        return `停止した: ${reason}\n自動では明けない。再開は oz resume。`
+        return `停止した: ${reason}\n自動では明けない。再開は fam resume。`
       }
 
       case "resume": {
@@ -394,12 +394,12 @@ const program = (argv: readonly string[]) =>
       }
 
       case "show": {
-        if (!rest[0]) return yield* Effect.fail(new Error("id が要る: oz show <id>"))
+        if (!rest[0]) return yield* Effect.fail(new Error("id が要る: fam show <id>"))
         return card(yield* proposals.get(rest[0]))
       }
 
       case "approve": {
-        if (!rest[0]) return yield* Effect.fail(new Error("id が要る: oz approve <id>"))
+        if (!rest[0]) return yield* Effect.fail(new Error("id が要る: fam approve <id>"))
         const r = yield* proposals.approve(rest[0])
         return [
           `承認した: ${short(r.id)}`,
@@ -412,14 +412,14 @@ const program = (argv: readonly string[]) =>
 
       case "deny": {
         const a = idAndText(rest)
-        if (!a) return yield* Effect.fail(new Error("id と理由が要る: oz deny <id> <理由>"))
+        if (!a) return yield* Effect.fail(new Error("id と理由が要る: fam deny <id> <理由>"))
         const r = yield* proposals.deny(a.id, a.text)
         return `却下した: ${short(r.id)} — ${a.text}`
       }
 
       case "recall": {
         const q = rest.join(" ").trim()
-        if (!q) return yield* Effect.fail(new Error("検索語が要る: oz recall <語>"))
+        if (!q) return yield* Effect.fail(new Error("検索語が要る: fam recall <語>"))
         const mem = yield* Memory
         return renderRecall(yield* mem.recall(q, 20))
       }
@@ -427,13 +427,13 @@ const program = (argv: readonly string[]) =>
       /**
        * 事実の変遷を見る/書き換える。上書きではなく区間を継ぐので、
        * 「今なんなのか」と「あのとき何だったか」が両方残る。
-       *   oz belief <slot>                    … 今の値と変遷
-       *   oz belief <slot> <値> [--from ISO]  … 新しい値を確定(前の区間はそこで閉じる)
+       *   fam belief <slot>                    … 今の値と変遷
+       *   fam belief <slot> <値> [--from ISO]  … 新しい値を確定(前の区間はそこで閉じる)
        */
       case "belief": {
         const mem = yield* Memory
         const slot = rest[0]
-        if (!slot) return yield* Effect.fail(new Error("slot が要る: oz belief <slot> [新しい値]"))
+        if (!slot) return yield* Effect.fail(new Error("slot が要る: fam belief <slot> [新しい値]"))
         const fromAt = rest.indexOf("--from")
         const validFrom = fromAt >= 0 ? rest[fromAt + 1] : undefined
         const value = rest
@@ -447,7 +447,7 @@ const program = (argv: readonly string[]) =>
           }
           yield* mem.recordBelief(slot, value, {
             ...(validFrom ? { validFrom } : {}),
-            reason: "ユーザーが oz belief で更新した",
+            reason: "ユーザーが fam belief で更新した",
           })
         }
 
@@ -550,7 +550,7 @@ const program = (argv: readonly string[]) =>
           ...head,
           `取り込んだ: ${done.length} 件`,
           ...done,
-          ...(stopped ? ["", `途中で止めた: ${stopped}`, "残りは次の oz intake で続きから入る。"] : []),
+          ...(stopped ? ["", `途中で止めた: ${stopped}`, "残りは次の fam intake で続きから入る。"] : []),
         ].join("\n")
       }
 
@@ -599,7 +599,7 @@ const main = async (): Promise<void> => {
       }
     }
     if (command === "skills") {
-      if (args.length !== 0) throw new Error("引数は取らない: oz skills")
+      if (args.length !== 0) throw new Error("引数は取らない: fam skills")
       const { IMPORTED_CLASSIFICATION, importedSkills, SKILLS } = await import("./agent/skills.ts")
       const lines: string[] = [`正本: ${config.paths.skills}`, "", "組み込み:"]
       for (const skill of Object.values(SKILLS)) {
@@ -621,7 +621,7 @@ const main = async (): Promise<void> => {
     }
     if (command === "grok-login") {
       // device flow。URL とコードを出して、手元のブラウザでの承認を待つ。
-      if (args.length !== 0) throw new Error("引数は取らない: oz grok-login")
+      if (args.length !== 0) throw new Error("引数は取らない: fam grok-login")
       const auth = await xaiDeviceLogin((uri, code) => {
         console.log(`ブラウザで開いて承認する: ${uri}`)
         console.log(`コード: ${code}`)
@@ -630,7 +630,7 @@ const main = async (): Promise<void> => {
       return
     }
     if (command === "backup") {
-      if (args.length !== 0) throw new Error("引数は取らない: oz backup")
+      if (args.length !== 0) throw new Error("引数は取らない: fam backup")
       const result = createBackup(config.paths.db, config.paths.backups, {
         keep: config.maintenance.backupKeep,
       })
@@ -646,17 +646,17 @@ const main = async (): Promise<void> => {
     }
     if (command === "restore") {
       if (!args.includes("--verify") || args.filter((arg) => arg === "--verify").length !== 1)
-        throw new Error("復元は検証だけを明示する: oz restore --verify [backup path]")
+        throw new Error("復元は検証だけを明示する: fam restore --verify [backup path]")
       const paths = args.filter((arg) => arg !== "--verify")
       if (paths.length > 1) throw new Error("backup pathは1つだけ指定する")
       const backup = paths[0] ? resolve(config.rootDir, paths[0]) : latestBackup(config.paths.backups)
-      if (!backup) throw new Error("検証するbackupが無い: 先に oz backup")
+      if (!backup) throw new Error("検証するbackupが無い: 先に fam backup")
       const result = verifyAndRecordRestore(config.paths.db, backup)
       console.log(`復元検証完了: ${backup}\nDB ${kb(result.bytes)}`)
       return
     }
     if (command === "doctor") {
-      if (args.length !== 0) throw new Error("引数は取らない: oz doctor")
+      if (args.length !== 0) throw new Error("引数は取らない: fam doctor")
       const live = checkDatabase(config.paths.db)
       const backup = latestBackup(config.paths.backups)
       const restored = backup ? verifyAndRecordRestore(config.paths.db, backup) : undefined
@@ -666,7 +666,7 @@ const main = async (): Promise<void> => {
           `live DB: ok (${kb(live.bytes)})`,
           restored
             ? `最新backup復元: ok (${backup} / ${kb(restored.bytes)})`
-            : "最新backup復元: 未実施 (backupなし — oz backup)",
+            : "最新backup復元: 未実施 (backupなし — fam backup)",
         ].join("\n"),
       )
       return

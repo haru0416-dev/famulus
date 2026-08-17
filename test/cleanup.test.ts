@@ -32,7 +32,7 @@ const age = (path: string, daysAgo: number): void => {
 const noOrphans = async (): Promise<{ removed: string[]; kept: string[] }> => ({ removed: [], kept: [] })
 
 const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): Promise<void> => {
-  const dir = mkdtempSync(join(tmpdir(), "oz-cleanup-"))
+  const dir = mkdtempSync(join(tmpdir(), "fam-cleanup-"))
   const runs = process.env.FAMULUS_RUNS
   const cache = process.env.FAMULUS_RUN_CACHE
   process.env.FAMULUS_RUNS = join(dir, "runs")

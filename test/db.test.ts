@@ -30,7 +30,7 @@ const readLine = async (stream: ReadableStream<Uint8Array>): Promise<string> => 
 }
 
 beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), "oz-db-"))
+  root = mkdtempSync(join(tmpdir(), "fam-db-"))
 })
 afterAll(() => {
   if (root) rmSync(root, { recursive: true, force: true })

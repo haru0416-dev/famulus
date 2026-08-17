@@ -799,7 +799,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
             // 名指しできない案を提案にしない規律を、指示ではなく schema 側に置いてある。
             const proposals = yield* Proposals
             const id = yield* proposals.create(data)
-            return `提案 ${id.slice(0, 8)} を登録した。実行はしていない — 承認(oz approve)を待つ。`
+            return `提案 ${id.slice(0, 8)} を登録した。実行はしていない — 承認(fam approve)を待つ。`
           }),
         ),
     }),
@@ -1201,7 +1201,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
     }),
 
     /**
-     * ユーザーに届ける経路。`remember` は自分の側に残すだけで、ユーザーは `oz recall` を
+     * ユーザーに届ける経路。`remember` は自分の側に残すだけで、ユーザーは `fam recall` を
      * 打たない限り読まない。読ませたいものはここから Discord へ送る。
      * 承認は要らない — 出るのはユーザーしか居ない場所(DM か、ユーザーが用意した囲いの中)だけ。
      *

@@ -44,7 +44,7 @@ export function parseXaiAuth(contents: string): XaiAuth {
   const refresh = str(root.refresh)
   const expires = typeof root.expires === "number" && Number.isFinite(root.expires) ? root.expires : undefined
   if (!access || !refresh || expires === undefined) {
-    throw new ModelCallError("xai-auth.json に access/refresh/expires が無い(`oz grok-login` を通す)")
+    throw new ModelCallError("xai-auth.json に access/refresh/expires が無い(`fam grok-login` を通す)")
   }
   const email = str(root.email)
   return { access, refresh, expires, ...(email ? { email } : {}) }
@@ -64,7 +64,7 @@ export function saveXaiAuth(auth: XaiAuth, path: string = authPath()): void {
 
 export function readXaiAuth(path: string = authPath()): XaiAuth {
   if (!existsSync(path)) {
-    throw new ModelCallError(`${path} が無い(\`oz grok-login\` を通す)`)
+    throw new ModelCallError(`${path} が無い(\`fam grok-login\` を通す)`)
   }
   return parseXaiAuth(readFileSync(path, "utf8"))
 }
