@@ -16,7 +16,7 @@
  * 見送り(記録): objects共有(alternates)で巨大repoを軽くする最適化は、ユーザ側 git gc
  * による借用オブジェクト刈り取りのfootgunがあるため既定では使わない(自己完結オブジェクト)。
  * snapshotは retryFresh フロー(opt-in、既定off)でのみ刻まれ、commitのblobは内容ハッシュで
- * dedupされるため増加は緩やか。明示的な prune / gc は未実装(将来の運用課題として docs に記録)。
+ * dedupされるため増加は緩やか。明示的な prune / gc は未実装。
  */
 import { execFileSync } from "node:child_process"
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
