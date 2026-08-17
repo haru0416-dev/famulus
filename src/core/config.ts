@@ -162,64 +162,64 @@ const optionalEndpoint = (
 export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_ROOT): AppConfig {
   const issues: string[] = []
   const root = resolve(rootDir)
-  const dataDir = absolutePath(root, text(env, "OPEN_ZERO_DATA", ".data"))
-  const timeoutMs = integer(env, "OPEN_ZERO_CYCLE_TIMEOUT_MS", 420_000, issues, { min: 1_000, max: 540_000 })
-  const heartbeatMs = integer(env, "OPEN_ZERO_CYCLE_HEARTBEAT_MS", 30_000, issues, {
+  const dataDir = absolutePath(root, text(env, "FAMULUS_DATA", resolve(homedir(), ".famulus/data")))
+  const timeoutMs = integer(env, "FAMULUS_CYCLE_TIMEOUT_MS", 420_000, issues, { min: 1_000, max: 540_000 })
+  const heartbeatMs = integer(env, "FAMULUS_CYCLE_HEARTBEAT_MS", 30_000, issues, {
     min: 1_000,
     max: 300_000,
   })
-  const leaseTtlMs = integer(env, "OPEN_ZERO_CYCLE_LEASE_TTL_MS", 90_000, issues, {
+  const leaseTtlMs = integer(env, "FAMULUS_CYCLE_LEASE_TTL_MS", 90_000, issues, {
     min: 3_000,
     max: 900_000,
   })
-  if (leaseTtlMs < heartbeatMs * 3) issues.push("OPEN_ZERO_CYCLE_LEASE_TTL_MS: heartbeatの3倍以上が必要です")
+  if (leaseTtlMs < heartbeatMs * 3) issues.push("FAMULUS_CYCLE_LEASE_TTL_MS: heartbeatの3倍以上が必要です")
 
-  const timeZone = text(env, "OPEN_ZERO_TZ", Intl.DateTimeFormat().resolvedOptions().timeZone)
+  const timeZone = text(env, "FAMULUS_TZ", Intl.DateTimeFormat().resolvedOptions().timeZone)
   try {
     new Intl.DateTimeFormat("en-US", { timeZone }).format(0)
   } catch {
-    issues.push("OPEN_ZERO_TZ: IANAタイムゾーンが必要です")
+    issues.push("FAMULUS_TZ: IANAタイムゾーンが必要です")
   }
 
-  const model = text(env, "OPEN_ZERO_MODEL", "grok-4.6")
+  const model = text(env, "FAMULUS_MODEL", "grok-4.6")
   const models = {
     default: model,
-    cycle: text(env, "OPEN_ZERO_CYCLE_MODEL", model),
-    work: text(env, "OPEN_ZERO_WORK_MODEL", "grok-4.3"),
-    research: text(env, "OPEN_ZERO_RESEARCH_MODEL", "grok-4.3"),
+    cycle: text(env, "FAMULUS_CYCLE_MODEL", model),
+    work: text(env, "FAMULUS_WORK_MODEL", "grok-4.3"),
+    research: text(env, "FAMULUS_RESEARCH_MODEL", "grok-4.3"),
   }
   for (const [key, id] of [
-    ["OPEN_ZERO_MODEL", models.default],
-    ["OPEN_ZERO_CYCLE_MODEL", models.cycle],
-    ["OPEN_ZERO_WORK_MODEL", models.work],
-    ["OPEN_ZERO_RESEARCH_MODEL", models.research],
+    ["FAMULUS_MODEL", models.default],
+    ["FAMULUS_CYCLE_MODEL", models.cycle],
+    ["FAMULUS_WORK_MODEL", models.work],
+    ["FAMULUS_RESEARCH_MODEL", models.research],
   ] as const) {
     if (!isKnownModel(id)) issues.push(`${key}: 既知のmodel idが必要です: ${id}`)
   }
-  const discordToken = optional(env, "OPEN_ZERO_DISCORD_TOKEN")
-  const discordOwnerId = optional(env, "OPEN_ZERO_DISCORD_OWNER_ID")
-  const discordTalk = optional(env, "OPEN_ZERO_DISCORD_CH_TALK")
-  const discordDraft = optional(env, "OPEN_ZERO_DISCORD_CH_DRAFT")
-  const discordLog = optional(env, "OPEN_ZERO_DISCORD_CH_LOG")
-  const runImage = optional(env, "OPEN_ZERO_RUN_IMAGE")
-  const searxngBase = optionalEndpoint(env, "OPEN_ZERO_SEARXNG", "http://127.0.0.1:8888", issues, {
+  const discordToken = optional(env, "FAMULUS_DISCORD_TOKEN")
+  const discordOwnerId = optional(env, "FAMULUS_DISCORD_OWNER_ID")
+  const discordTalk = optional(env, "FAMULUS_DISCORD_CH_TALK")
+  const discordDraft = optional(env, "FAMULUS_DISCORD_CH_DRAFT")
+  const discordLog = optional(env, "FAMULUS_DISCORD_CH_LOG")
+  const runImage = optional(env, "FAMULUS_RUN_IMAGE")
+  const searxngBase = optionalEndpoint(env, "FAMULUS_SEARXNG", "http://127.0.0.1:8888", issues, {
     allowLoopbackHttp: true,
   })
   const config: AppConfig = {
     rootDir: root,
     paths: {
       dataDir,
-      db: absolutePath(root, text(env, "OPEN_ZERO_DB", resolve(dataDir, "open-zero.db")), true),
-      backups: absolutePath(root, text(env, "OPEN_ZERO_BACKUPS", resolve(dataDir, "backups"))),
-      runs: absolutePath(root, text(env, "OPEN_ZERO_RUNS", resolve(homedir(), ".famulus/runs"))),
-      runCache: absolutePath(root, text(env, "OPEN_ZERO_RUN_CACHE", resolve(dataDir, "run-cache"))),
-      exportRoot: absolutePath(root, text(env, "OPEN_ZERO_EXPORT_ROOT", resolve(dataDir, "claude-export"))),
+      db: absolutePath(root, text(env, "FAMULUS_DB", resolve(dataDir, "famulus.db")), true),
+      backups: absolutePath(root, text(env, "FAMULUS_BACKUPS", resolve(dataDir, "backups"))),
+      runs: absolutePath(root, text(env, "FAMULUS_RUNS", resolve(homedir(), ".famulus/runs"))),
+      runCache: absolutePath(root, text(env, "FAMULUS_RUN_CACHE", resolve(dataDir, "run-cache"))),
+      exportRoot: absolutePath(root, text(env, "FAMULUS_EXPORT_ROOT", resolve(dataDir, "claude-export"))),
       transcriptRoot: absolutePath(
         root,
-        text(env, "OPEN_ZERO_TRANSCRIPT_ROOT", resolve(homedir(), ".claude/projects")),
+        text(env, "FAMULUS_TRANSCRIPT_ROOT", resolve(homedir(), ".claude/projects")),
       ),
-      xaiAuth: absolutePath(root, text(env, "OPEN_ZERO_XAI_AUTH", resolve(dataDir, "xai-auth.json"))),
-      skills: absolutePath(root, text(env, "OPEN_ZERO_SKILLS", resolve(homedir(), ".famulus/skills"))),
+      xaiAuth: absolutePath(root, text(env, "FAMULUS_XAI_AUTH", resolve(dataDir, "xai-auth.json"))),
+      skills: absolutePath(root, text(env, "FAMULUS_SKILLS", resolve(homedir(), ".famulus/skills"))),
     },
     timeZone,
     models,
@@ -227,30 +227,30 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
       timeoutMs,
       heartbeatMs,
       leaseTtlMs,
-      unit: textAllowEmpty(env, "OPEN_ZERO_CYCLE_UNIT", "famulus-cycle.service"),
+      unit: textAllowEmpty(env, "FAMULUS_CYCLE_UNIT", "famulus-cycle.service"),
     },
     governance: {
-      dailyRuns: integer(env, "OPEN_ZERO_DAILY_RUNS", 2_000, issues, { min: 1, max: 1_000_000 }),
-      autonomousRuns: integer(env, "OPEN_ZERO_AUTONOMOUS_RUNS", 500, issues, { min: 1, max: 1_000_000 }),
+      dailyRuns: integer(env, "FAMULUS_DAILY_RUNS", 2_000, issues, { min: 1, max: 1_000_000 }),
+      autonomousRuns: integer(env, "FAMULUS_AUTONOMOUS_RUNS", 500, issues, { min: 1, max: 1_000_000 }),
     },
     schedule: {
-      dailyDraftHour: integer(env, "OPEN_ZERO_DAILY_HOUR", 20, issues, { min: 0, max: 23 }),
-      dreamHour: integer(env, "OPEN_ZERO_DREAM_HOUR", 4, issues, { min: 0, max: 23 }),
-      cleanupHour: integer(env, "OPEN_ZERO_CLEANUP_HOUR", 4, issues, { min: 0, max: 23 }),
+      dailyDraftHour: integer(env, "FAMULUS_DAILY_HOUR", 20, issues, { min: 0, max: 23 }),
+      dreamHour: integer(env, "FAMULUS_DREAM_HOUR", 4, issues, { min: 0, max: 23 }),
+      cleanupHour: integer(env, "FAMULUS_CLEANUP_HOUR", 4, issues, { min: 0, max: 23 }),
     },
     cleanup: {
-      days: integer(env, "OPEN_ZERO_CLEANUP_DAYS", 14, issues, { min: 1, max: 3_650 }),
-      cacheMaxMb: integer(env, "OPEN_ZERO_CACHE_MAX_MB", 2_048, issues, { min: 1, max: 1_000_000 }),
+      days: integer(env, "FAMULUS_CLEANUP_DAYS", 14, issues, { min: 1, max: 3_650 }),
+      cacheMaxMb: integer(env, "FAMULUS_CACHE_MAX_MB", 2_048, issues, { min: 1, max: 1_000_000 }),
     },
     maintenance: {
-      backupKeep: integer(env, "OPEN_ZERO_BACKUP_KEEP", 7, issues, { min: 1, max: 10_000 }),
+      backupKeep: integer(env, "FAMULUS_BACKUP_KEEP", 7, issues, { min: 1, max: 10_000 }),
     },
     web: {
-      hostIntervalMs: integer(env, "OPEN_ZERO_HOST_INTERVAL_MS", 1_000, issues, { min: 0, max: 300_000 }),
+      hostIntervalMs: integer(env, "FAMULUS_HOST_INTERVAL_MS", 1_000, issues, { min: 0, max: 300_000 }),
       ...(searxngBase ? { searxngBase } : {}),
     },
     discord: {
-      api: endpoint(env, "OPEN_ZERO_DISCORD_API", "https://discord.com/api/v10", issues, {
+      api: endpoint(env, "FAMULUS_DISCORD_API", "https://discord.com/api/v10", issues, {
         allowLoopbackHttp: true,
       }),
       ...(discordToken ? { token: discordToken } : {}),
@@ -265,7 +265,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
   }
 
   if (config.governance.autonomousRuns > config.governance.dailyRuns)
-    issues.push("OPEN_ZERO_AUTONOMOUS_RUNS: OPEN_ZERO_DAILY_RUNS以下が必要です")
+    issues.push("FAMULUS_AUTONOMOUS_RUNS: FAMULUS_DAILY_RUNS以下が必要です")
   if (issues.length > 0) throw new ConfigError(issues)
   return config
 }

@@ -23,9 +23,9 @@ const oz = async (dbPath: string, extraEnv: Record<string, string> = {}) => {
     cwd: callerCwd,
     env: {
       ...Bun.env,
-      OPEN_ZERO_DB: relative(PROJECT_ROOT, dbPath),
-      OPEN_ZERO_DISCORD_TOKEN: "",
-      OPEN_ZERO_TZ: "UTC",
+      FAMULUS_DB: relative(PROJECT_ROOT, dbPath),
+      FAMULUS_DISCORD_TOKEN: "",
+      FAMULUS_TZ: "UTC",
       ...extraEnv,
     },
     stdout: "pipe",
@@ -40,7 +40,7 @@ const oz = async (dbPath: string, extraEnv: Record<string, string> = {}) => {
 }
 
 test("別cwdから起動しても相対DBは設定rootに作る", async () => {
-  const dbPath = join(configRoot, "open-zero.db")
+  const dbPath = join(configRoot, "famulus.db")
   const result = await oz(dbPath)
   assert.equal(result.exitCode, 0, result.stderr)
   assert.equal(existsSync(dbPath), true)
@@ -49,8 +49,8 @@ test("別cwdから起動しても相対DBは設定rootに作る", async () => {
 
 test("不正ConfigはDBを開く前に入口を停止する", async () => {
   const dbPath = join(configRoot, "invalid.db")
-  const result = await oz(dbPath, { OPEN_ZERO_TZ: "Mars/Olympus" })
+  const result = await oz(dbPath, { FAMULUS_TZ: "Mars/Olympus" })
   assert.notEqual(result.exitCode, 0)
-  assert.match(result.stderr, /OPEN_ZERO_TZ/)
+  assert.match(result.stderr, /FAMULUS_TZ/)
   assert.equal(existsSync(dbPath), false)
 })

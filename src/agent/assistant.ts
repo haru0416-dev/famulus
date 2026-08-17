@@ -136,7 +136,7 @@ const recallTool = (state: TurnState) =>
 - [確定(旧版)] … 同じ事柄の古い値。今はもう違う。過去形でしか使わない
 - [取り込み] … 過去の会話から起こした要約。**その日時点でそう書かれていた、というだけ**。
   日時が古いものを現在形で語らない。今どうかは belief で確かめるか、ユーザーに聞く
-- [システム記録] … open-zero が保存した記録。実行結果・送信結果・調査メモなどを含み、確認状態は内容ごとに異なる`,
+- [システム記録] … famulus が保存した記録。実行結果・送信結果・調査メモなどを含み、確認状態は内容ごとに異なる`,
     inputSchema: vs(v.object({ query: v.pipe(v.string(), v.description("検索語。3文字以上。")) })),
     execute: async ({ query }) =>
       run(
@@ -834,7 +834,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
     // これが無いと、cycle が実行されても参照対象が無く、毎回ゼロから考え直すことになる。
     watch: tool({
       description:
-        "決着していない件を継続確認項目(watch)として登録する。famulus(open-zero) が次に対応する未処理項目は次回の自律実行時、human(ユーザー) が次に対応する項目は一定期間更新が無いときに提示される。`record_watch_run` で対応結果を記録した後は、設定時間が経過すると再び提示される。**同じ件を登録し直さない** — 状態を確認するか open-zero 側の担当作業を進めたら `record_watch_run` を使う。",
+        "決着していない件を継続確認項目(watch)として登録する。famulus(famulus) が次に対応する未処理項目は次回の自律実行時、human(ユーザー) が次に対応する項目は一定期間更新が無いときに提示される。`record_watch_run` で対応結果を記録した後は、設定時間が経過すると再び提示される。**同じ件を登録し直さない** — 状態を確認するか famulus 側の担当作業を進めたら `record_watch_run` を使う。",
       inputSchema: vs(
         v.object({
           subject: v.pipe(
@@ -843,7 +843,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
           ),
           next_move: v.pipe(
             v.picklist(["famulus", "human"]),
-            v.description("次に対応する主体。famulus=open-zero、human=ユーザー。"),
+            v.description("次に対応する主体。famulus=famulus、human=ユーザー。"),
           ),
           cooldown_hours: v.optional(
             v.pipe(
@@ -871,7 +871,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
 
     record_watch_run: tool({
       description:
-        "継続確認項目(watch)の状態確認、または open-zero 側の担当作業の結果を記録する。**対応したら必ず呼ぶ** — 呼ばないと同じ項目が次回もプロンプトに載る。変化が無くても呼ぶ(変化なしも次回の判断材料になる)。result は次回対応の基準になるので、実施内容と結果を具体的に書く。**以前の対応結果を記録し忘れていたなら、そのときの時刻を `at` で渡して今から記録してよい** — 再提示待機時間は渡した時刻から数えるので、後ろへずれない。",
+        "継続確認項目(watch)の状態確認、または famulus 側の担当作業の結果を記録する。**対応したら必ず呼ぶ** — 呼ばないと同じ項目が次回もプロンプトに載る。変化が無くても呼ぶ(変化なしも次回の判断材料になる)。result は次回対応の基準になるので、実施内容と結果を具体的に書く。**以前の対応結果を記録し忘れていたなら、そのときの時刻を `at` で渡して今から記録してよい** — 再提示待機時間は渡した時刻から数えるので、後ろへずれない。",
       inputSchema: vs(
         v.object({
           id: v.pipe(v.string(), v.description("watch の id(先頭8文字でよい)。")),
@@ -1264,7 +1264,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
       description:
         "外に出す文の下書きをユーザーに渡す。**そのまま公開できる本文だけ**を入れる — " +
         "「こういう記事はどうか」という提案や、箇条書きの材料は入れない。書けないなら呼ばない。" +
-        "根拠は DB にある open-zero 自身の実測に限る。他人の記事の要約は本文にしない。**1日に1本まで。**" +
+        "根拠は DB にある famulus 自身の実測に限る。他人の記事の要約は本文にしない。**1日に1本まで。**" +
         "**書いていない読み手が精査してから届く** — 規律に当たる箇所は引用付きで返るので、そこを直して呼び直す。",
       inputSchema: vs(
         v.object({
@@ -1484,7 +1484,7 @@ export interface AssistantTurnResult {
 }
 
 export interface AssistantOptions {
-  /** 対話に使うモデル。省くと検証済みの `OPEN_ZERO_MODEL` を使う。 */
+  /** 対話に使うモデル。省くと検証済みの `FAMULUS_MODEL` を使う。 */
   readonly model?: string | undefined
   readonly leaseToken?: CycleLeaseToken | undefined
   readonly onLeaseLost?: ((reason: unknown) => void) | undefined

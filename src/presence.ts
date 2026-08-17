@@ -174,7 +174,7 @@ function once(
               d: {
                 token,
                 intents: 0,
-                properties: { os: "linux", browser: "open-zero", device: "open-zero" },
+                properties: { os: "linux", browser: "famulus", device: "famulus" },
                 presence: presence(),
               },
             }),
@@ -228,7 +228,7 @@ async function main(): Promise<void> {
   const token = config.discord.token
   if (!token) {
     // 設定が無いのは異常ではない(Discord と同じ契約)。走り続ける理由も無い。
-    log("OPEN_ZERO_DISCORD_TOKEN が無い — 接続しない")
+    log("FAMULUS_DISCORD_TOKEN が無い — 接続しない")
     return
   }
   // 出せる先が実在するかを1回だけ確かめる。トークンが無効だと 4004 で無限に張り直すことになる。

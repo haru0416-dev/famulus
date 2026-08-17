@@ -29,7 +29,7 @@ const skillMd = (name: string, body = "# 本文\n規律。") =>
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
   // 他のテストが素の設定で走れるように戻す
-  delete process.env.OPEN_ZERO_SKILLS
+  delete process.env.FAMULUS_SKILLS
   configureApp()
 })
 
@@ -75,7 +75,7 @@ test("分類済みの取り込み skill は合成でき、未分類は拒否さ�
   const root = makeRoot()
   put(root, "jissoku-writing", skillMd("jissoku-writing", "# 実測を書く\n「効く」で文を締めない。"))
   put(root, "impeccable", skillMd("impeccable")) // 実在しても分類が無い
-  process.env.OPEN_ZERO_SKILLS = root
+  process.env.FAMULUS_SKILLS = root
   configureApp()
 
   const plan = compileSkillPlan({ profile: "autonomous-parent", presentation: "jissoku-writing" })
@@ -93,13 +93,13 @@ test("分類済みの取り込み skill は合成でき、未分類は拒否さ�
 test("取り込み skill の世代は内容で固定される — 正本を書き換えると digest が変わる", () => {
   const root = makeRoot()
   put(root, "jissoku-writing", skillMd("jissoku-writing", "版1"))
-  process.env.OPEN_ZERO_SKILLS = root
+  process.env.FAMULUS_SKILLS = root
   configureApp()
   const before = skillRef("jissoku-writing").digest
 
   const root2 = makeRoot()
   put(root2, "jissoku-writing", skillMd("jissoku-writing", "版2"))
-  process.env.OPEN_ZERO_SKILLS = root2
+  process.env.FAMULUS_SKILLS = root2
   configureApp()
   const after = skillRef("jissoku-writing").digest
   assert.notEqual(before, after)

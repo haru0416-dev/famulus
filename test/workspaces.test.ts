@@ -24,15 +24,15 @@ import { type Harness, withHarness } from "./helpers.ts"
 
 const withRuns = async (fn: (root: string, h: Harness) => Promise<void>) => {
   const dir = mkdtempSync(join(tmpdir(), "oz-ws-"))
-  const prev = process.env.OPEN_ZERO_RUNS
-  process.env.OPEN_ZERO_RUNS = join(dir, "runs")
+  const prev = process.env.FAMULUS_RUNS
+  process.env.FAMULUS_RUNS = join(dir, "runs")
   try {
     await withHarness(async (h) => {
       await fn(join(dir, "runs"), h)
     })
   } finally {
-    if (prev === undefined) delete process.env.OPEN_ZERO_RUNS
-    else process.env.OPEN_ZERO_RUNS = prev
+    if (prev === undefined) delete process.env.FAMULUS_RUNS
+    else process.env.FAMULUS_RUNS = prev
     rmSync(dir, { recursive: true, force: true })
   }
 }

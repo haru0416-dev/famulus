@@ -9,16 +9,16 @@ import { test } from "vitest"
 import { configureApp } from "../src/core/config.ts"
 import { localDayRange, localMonthRange, localStamp, timeZone } from "../src/core/time.ts"
 
-test("OPEN_ZERO_TZ で既定と異なるtimezoneへ差し替えられる", () => {
-  const previous = process.env.OPEN_ZERO_TZ
-  process.env.OPEN_ZERO_TZ = "UTC"
+test("FAMULUS_TZ で既定と異なるtimezoneへ差し替えられる", () => {
+  const previous = process.env.FAMULUS_TZ
+  process.env.FAMULUS_TZ = "UTC"
   try {
     configureApp()
     assert.equal(timeZone(), "UTC")
     assert.equal(localDayRange("2026-08-07T16:55:00Z").key, "2026-08-07")
   } finally {
-    if (previous === undefined) delete process.env.OPEN_ZERO_TZ
-    else process.env.OPEN_ZERO_TZ = previous
+    if (previous === undefined) delete process.env.FAMULUS_TZ
+    else process.env.FAMULUS_TZ = previous
     configureApp()
   }
 })

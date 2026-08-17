@@ -15,7 +15,7 @@ import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { assertCurrentSchema, ensureCurrentSchema, openDb } from "./sqlite.ts"
 
-const BACKUP_FILE = /^open-zero-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f-]+\.db$/
+const BACKUP_FILE = /^famulus-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f-]+\.db$/
 
 export interface DatabaseCheck {
   readonly path: string
@@ -55,7 +55,7 @@ export const checkDatabase = (path: string): DatabaseCheck => {
 /** Copy a backup to a throwaway location and open that restored copy for verification. */
 export const verifyRestore = (backupPath: string): DatabaseCheck => {
   assertFileDatabase(backupPath)
-  const root = mkdtempSync(join(tmpdir(), "open-zero-restore-"))
+  const root = mkdtempSync(join(tmpdir(), "famulus-restore-"))
   const restored = join(root, "restored.db")
   try {
     copyFileSync(backupPath, restored)
@@ -170,8 +170,8 @@ export const createBackup = (
     const createdAt = (options.now ?? new Date()).toISOString()
     const stamp = createdAt.replaceAll(":", "-").replace(".", "-")
     const id = randomUUID()
-    const backupPath = join(backupDir, `open-zero-${stamp}-${id}.db`)
-    const pendingPath = join(backupDir, `.open-zero-${stamp}-${id}.tmp`)
+    const backupPath = join(backupDir, `famulus-${stamp}-${id}.db`)
+    const pendingPath = join(backupDir, `.famulus-${stamp}-${id}.tmp`)
     const source = openDb(sourcePath)
     try {
       source.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;")

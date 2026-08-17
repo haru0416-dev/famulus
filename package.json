@@ -17,6 +17,7 @@
     "fmt": "biome check --write .",
     "agent": "bun src/chat.ts",
     "oz": "bun src/cli.ts",
+    "fam": "bun src/cli.ts",
     "cycle": "bun src/cycle.ts",
     "evaluate:explore": "bun evaluate/explore.ts",
     "eval:keeper": "bun evaluate/keeper-fidelity.ts",

@@ -176,28 +176,28 @@ const configured = Effect.gen(function* () {
 
 /** 値を残すと後続テストが実 Discord へ接続し得るため、解除もこの helper に集約する。 */
 const wire = (url: string | undefined, ch?: { talk?: string; draft?: string; log?: string }) => {
-  delete process.env.OPEN_ZERO_DISCORD_CH_TALK
-  delete process.env.OPEN_ZERO_DISCORD_CH_DRAFT
-  delete process.env.OPEN_ZERO_DISCORD_CH_LOG
+  delete process.env.FAMULUS_DISCORD_CH_TALK
+  delete process.env.FAMULUS_DISCORD_CH_DRAFT
+  delete process.env.FAMULUS_DISCORD_CH_LOG
   if (url === undefined) {
-    process.env.OPEN_ZERO_DISCORD_TOKEN = ""
-    delete process.env.OPEN_ZERO_DISCORD_TOKEN
-    delete process.env.OPEN_ZERO_DISCORD_OWNER_ID
-    delete process.env.OPEN_ZERO_DISCORD_API
+    process.env.FAMULUS_DISCORD_TOKEN = ""
+    delete process.env.FAMULUS_DISCORD_TOKEN
+    delete process.env.FAMULUS_DISCORD_OWNER_ID
+    delete process.env.FAMULUS_DISCORD_API
     return
   }
-  process.env.OPEN_ZERO_DISCORD_TOKEN = "test-token"
-  process.env.OPEN_ZERO_DISCORD_OWNER_ID = OWNER
-  process.env.OPEN_ZERO_DISCORD_API = url
-  if (ch?.talk) process.env.OPEN_ZERO_DISCORD_CH_TALK = ch.talk
-  if (ch?.draft) process.env.OPEN_ZERO_DISCORD_CH_DRAFT = ch.draft
-  if (ch?.log) process.env.OPEN_ZERO_DISCORD_CH_LOG = ch.log
+  process.env.FAMULUS_DISCORD_TOKEN = "test-token"
+  process.env.FAMULUS_DISCORD_OWNER_ID = OWNER
+  process.env.FAMULUS_DISCORD_API = url
+  if (ch?.talk) process.env.FAMULUS_DISCORD_CH_TALK = ch.talk
+  if (ch?.draft) process.env.FAMULUS_DISCORD_CH_DRAFT = ch.draft
+  if (ch?.log) process.env.FAMULUS_DISCORD_CH_LOG = ch.log
 }
 
 test("トークンが無ければ何もしない — 叩かないし落ちない", async () => {
   const dc = await fakeDiscord()
   wire(undefined)
-  process.env.OPEN_ZERO_DISCORD_API = dc.url
+  process.env.FAMULUS_DISCORD_API = dc.url
   try {
     await withHarness(async (h) => {
       assert.equal(await h.run(configured), false)

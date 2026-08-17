@@ -96,11 +96,11 @@ const IS_CURRENT =
  * 層の重み。bm25 は「小さいほど関連が強い」負の値なので、引くと前に出る。
  *
  * DB は1つの events 表だが、記録種別によって検索順位を変える。確定事実(belief)はユーザーに確認した1行、
- * `source='system'` は open-zero が保存した記録。同じ語を含んでいても、検索結果としての優先度が違う。
+ * `source='system'` は famulus が保存した記録。同じ語を含んでいても、検索結果としての優先度が違う。
  *
  * `kind` と `source` は別の問いに答えている。source は誰が書いたか、kind はどんな記録か。
  * 取り込み(`import`)は自分が書くので source は system だが、中身はユーザーの判断の要約であって
- * open-zero 自身の実行記録ではない。source だけで下げると、取り込んだ会話要約がすべて検索結果の下位になる。
+ * famulus 自身の実行記録ではない。source だけで下げると、取り込んだ会話要約がすべて検索結果の下位になる。
  * だから `import` を `source='system'` より先に判定する。順序がそのまま意味になっている。
  */
 const LAYER_BIAS = `CASE

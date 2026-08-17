@@ -22,13 +22,13 @@ import { timeZone } from "../core/time.ts"
  * **札を上げたら、走っているホストでは古いイメージが残る。**`ensureImage` は名前で存在を見るので、
  * 上げた回だけ組み直しが1回入る。古いほうは自動では消えない。
  */
-const RUN_IMAGE = "open-zero-run:1"
+const RUN_IMAGE = "famulus-run:1"
 /** ビルド失敗時のフォールバックイメージ。ここでも実行できるが、pip も uv も jq も無い。 */
 const BASE_IMAGE = "node:24-bookworm"
 /**
  * 1回の走行の上限。依存の取得は分単位で掛かるので、web の 20 秒とは桁が違う。
  *
- * 上限は cycle の持ち時間(`OPEN_ZERO_CYCLE_TIMEOUT_MS`、既定 420 秒)より短く取ってある。
+ * 上限は cycle の持ち時間(`FAMULUS_CYCLE_TIMEOUT_MS`、既定 420 秒)より短く取ってある。
  * 走行が cycle の制限時間を使い切ると、その回は終了して走行記録が1行も残らない —
  * コンテナの中で起きたことはコンテナを捨てた時点で消えるので、書き残せなかった走行は無かったのと同じになる。
  * 長い作業は1回で終わらせず、同じ workspace に置いて次の cycle で続ける。
@@ -196,7 +196,7 @@ export function ensureImage(): Promise<string> {
 
 /**
  * 対応するホストプロセスが存在しないコンテナを消す。名前に起動元の pid が入っていることだけを頼りにする
- * (`oz-run-<時刻36進>-<pid>`)。時間切れの片付けは `docker rm -f` を投げた時点で終わりだが、
+ * (`fam-run-<時刻36進>-<pid>`)。時間切れの片付けは `docker rm -f` を投げた時点で終わりだが、
  * cycle 自身やホストが停止した回は削除処理が実行されず、`--rm` の付いたコンテナが残る。
  *
  * 存在する pid のものは触らない。pid は使い回されるので、対応プロセスの同一性までは判定できず、
@@ -218,7 +218,7 @@ export function orphanNames(
 
 /** 上の判定を docker に繋いだもの。`dry` なら数えるだけ。 */
 export async function sweepOrphans(dry = false): Promise<{ removed: string[]; kept: string[] }> {
-  const ls = await docker(["ps", "-a", "--filter", "name=^oz-run-", "--format", "{{.Names}}"], 30_000)
+  const ls = await docker(["ps", "-a", "--filter", "name=^fam-run-", "--format", "{{.Names}}"], 30_000)
   const alive = (pid: number): boolean => {
     try {
       process.kill(pid, 0)
@@ -255,7 +255,7 @@ export async function runInSandbox(command: string, opts: RunOptions): Promise<R
   const fellBack = image === BASE_IMAGE && opts.image === undefined && configuredImage === undefined
   const startedAt = Date.now()
   // コンテナの名前は時刻で作る(同じ走行を続けて呼んでも衝突しない)。時間切れのとき外から消すのに要る。
-  const name = `oz-run-${startedAt.toString(36)}-${process.pid}`
+  const name = `fam-run-${startedAt.toString(36)}-${process.pid}`
   const child = spawn("docker", dockerArgs(command, { ...opts, image, name }), {
     stdio: ["ignore", "pipe", "pipe"],
   })

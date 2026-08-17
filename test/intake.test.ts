@@ -22,8 +22,8 @@ let ROOT = ""
 let EXPORT = ""
 let EXPORT_EN = ""
 let EMPTY = ""
-const prev = process.env.OPEN_ZERO_TRANSCRIPT_ROOT
-const prevExport = process.env.OPEN_ZERO_EXPORT_ROOT
+const prev = process.env.FAMULUS_TRANSCRIPT_ROOT
+const prevExport = process.env.FAMULUS_EXPORT_ROOT
 
 const typed = (sessionId: string, cwd: string, at: string, text: string) =>
   JSON.stringify({
@@ -79,7 +79,7 @@ const LONG_ASK =
 
 beforeAll(() => {
   ROOT = mkdtempSync(join(tmpdir(), "oz-intake-"))
-  process.env.OPEN_ZERO_TRANSCRIPT_ROOT = ROOT
+  process.env.FAMULUS_TRANSCRIPT_ROOT = ROOT
 
   const dir = join(ROOT, "-home-haru-Project-demo")
   mkdirSync(dir, { recursive: true })
@@ -112,7 +112,7 @@ beforeAll(() => {
   EMPTY = join(ROOT, "no-export")
   mkdirSync(EMPTY, { recursive: true })
   mkdirSync(join(ROOT, "no-logs"), { recursive: true })
-  process.env.OPEN_ZERO_EXPORT_ROOT = EMPTY
+  process.env.FAMULUS_EXPORT_ROOT = EMPTY
 
   EXPORT = join(ROOT, "export")
   mkdirSync(join(EXPORT, "design_chats"), { recursive: true })
@@ -208,10 +208,10 @@ beforeAll(() => {
 })
 
 afterAll(() => {
-  if (prev === undefined) delete process.env.OPEN_ZERO_TRANSCRIPT_ROOT
-  else process.env.OPEN_ZERO_TRANSCRIPT_ROOT = prev
-  if (prevExport === undefined) delete process.env.OPEN_ZERO_EXPORT_ROOT
-  else process.env.OPEN_ZERO_EXPORT_ROOT = prevExport
+  if (prev === undefined) delete process.env.FAMULUS_TRANSCRIPT_ROOT
+  else process.env.FAMULUS_TRANSCRIPT_ROOT = prev
+  if (prevExport === undefined) delete process.env.FAMULUS_EXPORT_ROOT
+  else process.env.FAMULUS_EXPORT_ROOT = prevExport
   if (ROOT) rmSync(ROOT, { recursive: true, force: true })
 })
 
@@ -220,13 +220,13 @@ afterAll(() => {
  * 取り込み元が2つあるので、両方を有効にすると「候補に出た1件がどちらの入口から来たか」が言えない。
  */
 async function onlyExport<T>(dir: string, fn: () => Promise<T>): Promise<T> {
-  process.env.OPEN_ZERO_TRANSCRIPT_ROOT = join(ROOT, "no-logs")
-  process.env.OPEN_ZERO_EXPORT_ROOT = dir
+  process.env.FAMULUS_TRANSCRIPT_ROOT = join(ROOT, "no-logs")
+  process.env.FAMULUS_EXPORT_ROOT = dir
   try {
     return await fn()
   } finally {
-    process.env.OPEN_ZERO_TRANSCRIPT_ROOT = ROOT
-    process.env.OPEN_ZERO_EXPORT_ROOT = EMPTY
+    process.env.FAMULUS_TRANSCRIPT_ROOT = ROOT
+    process.env.FAMULUS_EXPORT_ROOT = EMPTY
   }
 }
 

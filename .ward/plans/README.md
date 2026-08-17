@@ -125,3 +125,10 @@ P0 through P2 means plans 001 through 006 plus cross-cutting plans 009 and 011 P
 - (追記) 正本は `~/Project/skills`(git 管理・vendor 中立)へ移動。Claude Code は
   `~/.claude/skills` からの symlink で同じ正本を読む。famulus の既定(`OPEN_ZERO_SKILLS`)も
   そこを指す。エージェントを替えても正本は動かない。
+- (追記・2026-08-17) 正本はさらに `~/.famulus/skills/` へ移動(famulus の家。git 管理・
+  vendor 中立は維持)。workspace も `~/.famulus/runs/`。
+- (追記・2026-08-17) **open-zero → famulus 全面改名。** リポジトリは `~/Project/famulus`
+  (互換 symlink も撤去)、環境変数は `FAMULUS_*`(旧 `OPEN_ZERO_*` の読み替えは残さない)、
+  状態は `~/.famulus/data/`(DB は famulus.db、backup 命名も famulus-*)、systemd unit は
+  famulus-{cycle,poll,presence}、CLI は `fam`(別名 `oz`)、sandbox container 接頭辞は
+  fam-run-。本文書より前の記述に現れる open-zero / OPEN_ZERO_* は当時の名前として読む。

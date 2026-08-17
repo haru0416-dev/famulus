@@ -130,7 +130,7 @@ async function runCurrent(seed: string) {
   if (!parsed.success) throw parsed.error
   return {
     path: "current" as const,
-    route: { harness: "open-zero researcher", backend: "api.x.ai/v1 responses", model: appConfig().models.research },
+    route: { harness: "famulus researcher", backend: "api.x.ai/v1 responses", model: appConfig().models.research },
     rev: execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim(),
     elapsedMs: Date.now() - began,
     steps: generated.steps.length,
@@ -151,7 +151,7 @@ async function runExplorePath(seed: string) {
   )
   return {
     path: "explore" as const,
-    route: { harness: "open-zero explore", backend: "api.x.ai/v1 responses", model: appConfig().models.research },
+    route: { harness: "famulus explore", backend: "api.x.ai/v1 responses", model: appConfig().models.research },
     rev: execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim(),
     elapsedMs: Date.now() - began,
     duplicates,

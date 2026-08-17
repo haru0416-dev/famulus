@@ -19,10 +19,10 @@ const oz = async (...args: string[]) => {
     cwd: projectRoot,
     env: {
       ...Bun.env,
-      OPEN_ZERO_DB: dbPath,
-      OPEN_ZERO_BACKUPS: backupDir,
-      OPEN_ZERO_TZ: "UTC",
-      OPEN_ZERO_DISCORD_TOKEN: "",
+      FAMULUS_DB: dbPath,
+      FAMULUS_BACKUPS: backupDir,
+      FAMULUS_TZ: "UTC",
+      FAMULUS_DISCORD_TOKEN: "",
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -37,7 +37,7 @@ const oz = async (...args: string[]) => {
 
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), "oz-cli-maintenance-"))
-  dbPath = join(root, "open-zero.db")
+  dbPath = join(root, "famulus.db")
   backupDir = join(root, "backups")
   const rt = makeRuntime(DbLive(dbPath), RunnerStub([{ text: "ok" }]).layer)
   await rt.runPromise(Effect.flatMap(Db, (db) => db.setMeta("cli-sentinel", "kept")))

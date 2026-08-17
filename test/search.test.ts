@@ -13,14 +13,14 @@ import assert from "node:assert/strict"
 import fc from "fast-check"
 import { test } from "vitest"
 
-process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
-// `OPEN_ZERO_TZ` は `new Date()` には届かない。帯の付いていない日付
+process.env.FAMULUS_TZ = "Asia/Tokyo"
+// `FAMULUS_TZ` は `new Date()` には届かない。帯の付いていない日付
 // (SearXNG の `publishedDate`)を読む1件は素の `Date` を通るので、走らせたホストの帯で答が変わる。
 // ここまでは「たまたまこのホストが Asia/Tokyo だから通っていた」検査で、コンテナの中では 9 時間ずれた。
 process.env.TZ = "Asia/Tokyo"
 // 同じホストへの間隔は既定 1 秒。ここは fetch を差し替えてあるので誰も接続していない —
 // 待つぶんがそのままゲートの所要になるので 0 にする(src/services/Web.ts の hostIntervalMs)。
-process.env.OPEN_ZERO_HOST_INTERVAL_MS = "0"
+process.env.FAMULUS_HOST_INTERVAL_MS = "0"
 const { configureApp } = await import("../src/core/config.ts")
 configureApp()
 const { defaultSources, parseFrom, plainQuery, renderHits, repoPath, searchSources } = await import(
@@ -229,9 +229,9 @@ test("知らない先は undefined。名前を間違えたまま読み取りに�
 })
 
 test("使えない先は既定から外れる", () => {
-  const saved = process.env.OPEN_ZERO_SEARXNG
+  const saved = process.env.FAMULUS_SEARXNG
   try {
-    delete process.env.OPEN_ZERO_SEARXNG
+    delete process.env.FAMULUS_SEARXNG
     configureApp()
     const on = defaultSources()
     assert.ok(on.includes("web"), "既定の在り処があるのに web が既定に入らない")
@@ -241,12 +241,12 @@ test("使えない先は既定から外れる", () => {
     assert.ok(!on.includes("arxiv"))
 
     // 空にすると SearXNG を使わない設定になる(容器を落としている日)。
-    process.env.OPEN_ZERO_SEARXNG = "  "
+    process.env.FAMULUS_SEARXNG = "  "
     configureApp()
     assert.ok(!defaultSources().includes("web"), "空にしたのに web が既定に残っている")
   } finally {
-    if (saved === undefined) delete process.env.OPEN_ZERO_SEARXNG
-    else process.env.OPEN_ZERO_SEARXNG = saved
+    if (saved === undefined) delete process.env.FAMULUS_SEARXNG
+    else process.env.FAMULUS_SEARXNG = saved
     configureApp()
   }
 })

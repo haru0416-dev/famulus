@@ -162,7 +162,7 @@ export function xaiResponsesModel(modelId: string): LanguageModelV4 {
   /**
    * `store: false` は契約枠の必須指定。`strictJsonSchema` を false にするのは、strict が
    * 全ての object に `additionalProperties: false` と全欄 `required` を要求するため —
-   * open-zero のスキーマは valibot 生成で任意欄を持つので、そのままでは 400 で拒否される。
+   * famulus のスキーマは valibot 生成で任意欄を持つので、そのままでは 400 で拒否される。
    * 構造の保証は上流ではなく読み出し側(schema.validate)にある。
    */
   const prepare = (options: LanguageModelV4CallOptions): LanguageModelV4CallOptions => ({

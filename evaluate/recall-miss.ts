@@ -26,7 +26,7 @@ import { Db, DbLive } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
 
 const OUT = new URL("../.ward/evals/recall/", import.meta.url).pathname
-const SCRATCH = "/tmp/claude-1000/-home-haru-Project-open-zero/26059e56-b34f-483b-b348-88375ea485bb/scratchpad"
+const SCRATCH = "/tmp/claude-1000/-home-haru-Project-famulus/26059e56-b34f-483b-b348-88375ea485bb/scratchpad"
 
 type Category =
   | "exact"
@@ -145,7 +145,7 @@ async function partA() {
 async function partB() {
   // 実DBは複製に対して読む。走行中の cycle と足を踏み合わない。
   const copy = `${SCRATCH}/recall-eval.db`
-  execFileSync("sqlite3", [`${process.cwd()}/.data/open-zero.db`, `.backup ${copy}`])
+  execFileSync("sqlite3", [`${process.cwd()}/.data/famulus.db`, `.backup ${copy}`])
   const stub = RunnerStub([{ text: "" }])
   const rt = ManagedRuntime.make(makeAppLayer(DbLive(copy), stub.layer))
   const run = <A, E>(e: Effect.Effect<A, E, AppServices>) => rt.runPromise(e)

@@ -1,10 +1,10 @@
 /**
- * open-zero のソースを、隔離環境から実行できる workspace に置く。
+ * famulus のソースを、隔離環境から実行できる workspace に置く。
  *
  * コンテナに見えるのは workspace だけで、`/home/haru` は映らない(src/services/Sandbox.ts)。
- * この境界のため、自律実行側は open-zero のソースを読むことも修正することもできなかった。
+ * この境界のため、自律実行側は famulus のソースを読むことも修正することもできなかった。
  * 実測した cycle が到達したのは「拾ってきた他人のリポジトリを動かす」ところまでで、
- * open-zero の不具合を見つけても修正対象へアクセスできない。境界は緩めず、代わりに clone を workspace に置く。
+ * famulus の不具合を見つけても修正対象へアクセスできない。境界は緩めず、代わりに clone を workspace に置く。
  *
  * 置くのは clone。作業ツリーのコピーではなく履歴ごと渡すのは、直した結果を `git diff` で
  * 取り出せるようにするため。本体への反映はここではやらない — 反映は取り消せない操作で、
@@ -25,7 +25,7 @@ import { keepWorkspace } from "./workspaces.ts"
 export const SELFDEV = "selfdev"
 
 /** workspace の中でのソースの位置。`npm` の置き土産(`.npm`)を clone の外に落とすために1段掘る。 */
-const CLONE = "open-zero"
+const CLONE = "famulus"
 
 /** このファイルから見たリポジトリの根。cwd に依らない — CLI はどこから叩かれるか分からない。 */
 export const repoRoot = (): string => fileURLToPath(new URL("../..", import.meta.url))
@@ -51,7 +51,7 @@ const BUN = `npx -y bun@${Bun.version}`
 export const GATE = `cd ${CLONE} && ${BUN} run gate`
 
 export const SELFDEV_PURPOSE =
-  `open-zero のソース(${repoRoot()} の clone)。open-zero の不具合はここで修正する。` +
+  `famulus のソース(${repoRoot()} の clone)。famulus の不具合はここで修正する。` +
   `ゲートは \`${GATE}\`。**net を true にする** — 検査のうち数件が名前解決を要る。` +
   `直したものは \`git -C ${CLONE} diff\` で取り出してユーザーに渡す — ` +
   `**ここでの変更は動いている本体には入らない。**`

@@ -24,14 +24,14 @@ import {
 } from "../src/services/Sandbox.ts"
 
 const withRoot = (fn: () => void): void => {
-  const prev = process.env.OPEN_ZERO_RUNS
-  process.env.OPEN_ZERO_RUNS = mkdtempSync(join(tmpdir(), "oz-runs-"))
+  const prev = process.env.FAMULUS_RUNS
+  process.env.FAMULUS_RUNS = mkdtempSync(join(tmpdir(), "fam-runs-"))
   try {
     configureApp()
     fn()
   } finally {
-    if (prev === undefined) delete process.env.OPEN_ZERO_RUNS
-    else process.env.OPEN_ZERO_RUNS = prev
+    if (prev === undefined) delete process.env.FAMULUS_RUNS
+    else process.env.FAMULUS_RUNS = prev
     configureApp()
   }
 }
@@ -60,7 +60,7 @@ test("名前が全部落ちるものは弾く(空の workspace を作らない)"
 })
 
 test("既定では外に出られない。net を渡したときだけ開く", () => {
-  const base = { workDir: "/tmp/w", name: "oz-run-test" }
+  const base = { workDir: "/tmp/w", name: "fam-run-test" }
   const closed = dockerArgs("echo hi", base)
   assert.deepEqual(
     closed.slice(closed.indexOf("--network"), closed.indexOf("--network") + 2),
@@ -72,7 +72,7 @@ test("既定では外に出られない。net を渡したときだけ開く", (
 })
 
 test("ホストへマウントするのは workspace と共有キャッシュだけ。コンテナは毎回捨てる", () => {
-  const args = dockerArgs("echo hi", { workDir: "/tmp/w", name: "oz-run-test" })
+  const args = dockerArgs("echo hi", { workDir: "/tmp/w", name: "fam-run-test" })
   const mounts = args.filter((_, i) => args[i - 1] === "-v")
   assert.deepEqual(
     mounts,
@@ -87,13 +87,13 @@ test("ホストへマウントするのは workspace と共有キャッシュだ
 test("中の時計の帯はホストと同じ", () => {
   // 帯を渡さないとコンテナは UTC で走る。同じコマンドが違う日付を出す環境になり、
   // コンテナ内で失敗した検査を読む側が、コードの不具合とタイムゾーン差を見分けられない。
-  const args = dockerArgs("date", { workDir: "/tmp/w", name: "oz-run-test" })
+  const args = dockerArgs("date", { workDir: "/tmp/w", name: "fam-run-test" })
   const env = args.filter((_, i) => args[i - 1] === "-e")
   assert.ok(env.includes(`TZ=${timeZone()}`), `帯が渡っていない: ${env.join(" ")}`)
 })
 
 test("パッケージキャッシュは workspace の外で共有する", () => {
-  const args = dockerArgs("npm i", { workDir: "/tmp/w", name: "oz-run-test" })
+  const args = dockerArgs("npm i", { workDir: "/tmp/w", name: "fam-run-test" })
   const env = args.filter((_, i) => args[i - 1] === "-e")
   for (const k of ["npm_config_cache=/cache/npm", "PIP_CACHE_DIR=/cache/pip", "UV_CACHE_DIR=/cache/uv"]) {
     assert.ok(env.includes(k), `${k} が渡っていない: ${env.join(" ")}`)
@@ -109,18 +109,18 @@ test("パッケージキャッシュは workspace の外で共有する", () => 
 test("起動元のホストPIDが存在しないコンテナだけ消す", () => {
   const mine = process.pid
   const out = orphanNames(
-    [`oz-run-abc-${mine}`, "oz-run-abc-999999", "oz-run-abc-notapid", "oz-run-abc-0"],
+    [`fam-run-abc-${mine}`, "fam-run-abc-999999", "fam-run-abc-notapid", "fam-run-abc-0"],
     (pid) => pid === mine,
   )
-  assert.deepEqual(out.removed, ["oz-run-abc-999999"])
+  assert.deepEqual(out.removed, ["fam-run-abc-999999"])
   // pid が読めない名前(手で立てたもの・名前の付け方を変える前のもの)は残す側に倒す。
-  assert.deepEqual(out.kept, [`oz-run-abc-${mine}`, "oz-run-abc-notapid", "oz-run-abc-0"])
+  assert.deepEqual(out.kept, [`fam-run-abc-${mine}`, "fam-run-abc-notapid", "fam-run-abc-0"])
 })
 
 test("コマンドは最後の1要素として渡す(語に割らない)", () => {
   // 空白で割って渡すと `bash -lc` は最初の語しか実行しない。パイプもリダイレクトも消える。
   const cmd = "npm install && node index.js | head -5"
-  const args = dockerArgs(cmd, { workDir: "/tmp/w", name: "oz-run-test" })
+  const args = dockerArgs(cmd, { workDir: "/tmp/w", name: "fam-run-test" })
   assert.deepEqual(args.slice(-3), ["bash", "-lc", cmd])
 })
 

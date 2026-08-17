@@ -12,7 +12,7 @@ import * as Effect from "effect/Effect"
 import { test } from "vitest"
 
 // 回す時刻の判定はユーザーの時計で切る。TZ はモジュール読み込み時に確定するので、import より先に差す。
-process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
+process.env.FAMULUS_TZ = "Asia/Tokyo"
 const { DREAM_CURSOR, dream, dreamDue, dreamMaterial } = await import("../src/agent/dream.ts")
 const { Db } = await import("../src/services/Db.ts")
 const { Memory } = await import("../src/services/Memory.ts")

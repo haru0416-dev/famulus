@@ -27,7 +27,7 @@ const MAX_CHARS = 12_000
 const TIMEOUT_MS = 20_000
 const MAX_HOPS = 3
 /** 名乗り。素性と用途が分かる形で出す — 相手が拒否したくなったときに拒否できる名前にしておく。 */
-const UA = "open-zero/0.1 (personal research agent)"
+const UA = "famulus/0.1 (personal research agent)"
 
 /** 内側を指すアドレスか。数値で見る — 文字列の前方一致では 10.0.0.1 と 100.1.1.1 を取り違える。 */
 export function isPrivateAddress(ip: string): boolean {

@@ -331,7 +331,7 @@ const SOURCES: readonly Source[] = [
     qualifiers: true,
     ownOrigin: searxngBase,
     unavailable: () =>
-      searxngBase() ? undefined : "OPEN_ZERO_SEARXNG が空にされている(SearXNG を使わない設定)",
+      searxngBase() ? undefined : "FAMULUS_SEARXNG が空にされている(SearXNG を使わない設定)",
     // 件数の指定は無い。1ページぶん(60〜100件)返るので `perSource` で切る。
     url: (q) => `${searxngBase()}/search?q=${enc(q)}&format=json`,
     parse: searxngHits,
@@ -352,7 +352,7 @@ const SOURCES: readonly Source[] = [
     wide: false,
     ownOrigin: searxngBase,
     unavailable: () =>
-      searxngBase() ? undefined : "OPEN_ZERO_SEARXNG が空にされている(SearXNG を使わない設定)",
+      searxngBase() ? undefined : "FAMULUS_SEARXNG が空にされている(SearXNG を使わない設定)",
     // `site:` はこちらが付ける(`xQuery`)。呼ぶ側が書いた `site:` は `plainQuery` が落としてから
     // 来るので(`qualifiers` を立てていない)、`site:zenn.dev` と競合して 0 件になることがない。
     url: (q) => `${searxngBase()}/search?q=${enc(xQuery(q))}&format=json`,
@@ -531,7 +531,7 @@ const SOURCES: readonly Source[] = [
     wide: false,
     ownOrigin: searxngBase,
     unavailable: () =>
-      searxngBase() ? undefined : "OPEN_ZERO_SEARXNG が空にされている(SearXNG を使わない設定)",
+      searxngBase() ? undefined : "FAMULUS_SEARXNG が空にされている(SearXNG を使わない設定)",
     url: (q) => JOB_SITES.map((s) => `${searxngBase()}/search?q=${enc(`site:${s} ${q}`)}&format=json`),
     parse: (b) => {
       // 媒体ごとに新しい順。募集 ID が掲載時刻の代わりになる。

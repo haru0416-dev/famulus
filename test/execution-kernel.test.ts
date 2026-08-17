@@ -266,7 +266,7 @@ test("予約超過でも実使用量を保存してattemptを終端化する", (
 
 test("死亡確認できた旧incarnationだけを高いfenceで回復する", async () => {
   const root = mkdtempSync(join(tmpdir(), "oz-execution-recovery-"))
-  const path = join(root, "open-zero.db")
+  const path = join(root, "famulus.db")
   const first = {
     hostId: "host",
     bootId: "boot",

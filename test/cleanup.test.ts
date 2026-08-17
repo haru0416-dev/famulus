@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect"
 import { test } from "vitest"
 
 // 回す時刻の判定はユーザーの時計で切る。TZ はモジュール読み込み時に確定するので、import より先に差す。
-process.env.OPEN_ZERO_TZ = "Asia/Tokyo"
+process.env.FAMULUS_TZ = "Asia/Tokyo"
 const { CLEANUP_DAILY, cleanup, cleanupDue } = await import("../src/core/cleanup.ts")
 const { Db } = await import("../src/services/Db.ts")
 const { keepWorkspace, noteWorkspace, purposeOf } = await import("../src/core/workspaces.ts")
@@ -33,18 +33,18 @@ const noOrphans = async (): Promise<{ removed: string[]; kept: string[] }> => ({
 
 const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): Promise<void> => {
   const dir = mkdtempSync(join(tmpdir(), "oz-cleanup-"))
-  const runs = process.env.OPEN_ZERO_RUNS
-  const cache = process.env.OPEN_ZERO_RUN_CACHE
-  process.env.OPEN_ZERO_RUNS = join(dir, "runs")
+  const runs = process.env.FAMULUS_RUNS
+  const cache = process.env.FAMULUS_RUN_CACHE
+  process.env.FAMULUS_RUNS = join(dir, "runs")
   // 既定のままだと本物の `.data/run-cache` を読む。上限を超えていたら検査が消してしまう。
-  process.env.OPEN_ZERO_RUN_CACHE = join(dir, "cache")
+  process.env.FAMULUS_RUN_CACHE = join(dir, "cache")
   try {
     await withHarness((h) => Promise.resolve(fn(dir, h)))
   } finally {
-    if (runs === undefined) delete process.env.OPEN_ZERO_RUNS
-    else process.env.OPEN_ZERO_RUNS = runs
-    if (cache === undefined) delete process.env.OPEN_ZERO_RUN_CACHE
-    else process.env.OPEN_ZERO_RUN_CACHE = cache
+    if (runs === undefined) delete process.env.FAMULUS_RUNS
+    else process.env.FAMULUS_RUNS = runs
+    if (cache === undefined) delete process.env.FAMULUS_RUN_CACHE
+    else process.env.FAMULUS_RUN_CACHE = cache
     rmSync(dir, { recursive: true, force: true })
   }
 }

@@ -69,7 +69,7 @@ const kb = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `$
 const place = (ch: string | undefined, dm: string | undefined) =>
   ch === undefined ? "出せない" : ch === dm ? "DM" : `チャンネル ${ch}`
 
-const USAGE = `oz — open-zero の承認 CLI
+const USAGE = `fam — famulus の承認 CLI(別名: oz)
 
   oz status                今の停止状態・クォータ・今日の使用量・承認待ち件数・自動処理の最終実行状態
   oz halt <理由>           全停止(自動解除しない)
@@ -261,7 +261,7 @@ const program = (argv: readonly string[]) =>
           // 「静かなのは用が無いからか、止まっているからか」がユーザーに区別できない。
           last
             ? `自動処理: 最終 ${last}(最後に実際に動いたのは ${lastActive ?? "まだ無い"})`
-            : "自動処理: まだ一度も回っていない — systemctl --user status open-zero-cycle.timer",
+            : "自動処理: まだ一度も回っていない — systemctl --user status famulus-cycle.timer",
           `DB: ${Number(mem?.n ?? 0)} 件(うち取り込み ${Number(mem?.imported ?? 0)} セッション)`,
           backupAt
             ? `バックアップ: 最終 ${backupAt} (${backupPath ?? "保存先不明"})`
@@ -279,12 +279,12 @@ const program = (argv: readonly string[]) =>
           // 「静かなのは用が無いからか、宛先が空だからか」が分からない。行き来はこの1本だけ。
           discord.configured()
             ? `Discord: 会話 ${place(dc.talk, dc.dm)} / 下書き ${place(dc.draft, dc.dm)} — リアクションも自由文も受けられる`
-            : "Discord: 宛先が無い(.env の OPEN_ZERO_DISCORD_TOKEN が空)",
+            : "Discord: 宛先が無い(.env の FAMULUS_DISCORD_TOKEN が空)",
           // 進み具合は落とす先を持たない。指していなければ出ないので、
           // ここで言わないと「動いていないのか、出す先が無いのか」が分からない。
           dc.log
             ? `進み具合: チャンネル ${dc.log} に1回1行(呼びかけなし)`
-            : "進み具合: 出さない(.env の OPEN_ZERO_DISCORD_CH_LOG が空)— oz journal で見る",
+            : "進み具合: 出さない(.env の FAMULUS_DISCORD_CH_LOG が空)— oz journal で見る",
         ].join("\n")
       }
 

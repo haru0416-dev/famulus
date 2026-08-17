@@ -40,7 +40,7 @@ const rl = createInterface({ input: process.stdin, output: process.stdout })
 const closed = new AbortController()
 rl.on("close", () => closed.abort())
 
-console.log(`open-zero(${assistant.modelId})— /reset で会話を捨てる、/q で終わる`)
+console.log(`famulus(${assistant.modelId})— /reset で会話を捨てる、/q で終わる`)
 
 try {
   while (true) {

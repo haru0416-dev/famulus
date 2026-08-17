@@ -193,7 +193,7 @@ const main = async () => {
   const summary = {
     at: new Date().toISOString(),
     // 経路は三つ組で書く(~/dev/test/agent-experiment-pitfalls.md §2.2 — モデル名だけの比較は再現しない)
-    route: { harness: "open-zero keeper", backend: "api.x.ai/v1 responses", model: "grok-4.3(ROLE_MODEL.structurer)" },
+    route: { harness: "famulus keeper", backend: "api.x.ai/v1 responses", model: "grok-4.3(ROLE_MODEL.structurer)" },
     rev: execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim(),
     cases: FIXTURES.length,
     capture: `${captured}/${expectTotal}`,
