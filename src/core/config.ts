@@ -26,7 +26,7 @@ export interface AppConfig {
     readonly exportRoot: string
     readonly transcriptRoot: string
     readonly xaiAuth: string
-    /** 共有 skill(SKILL.md)の正本。Claude Code と同じ場所を読む(一本化)。 */
+    /** 共有 skill(SKILL.md)の正本。vendor 中立の置き場を直接読む(Claude 側は symlink で同じ正本を読む)。 */
     readonly skills: string
   }
   readonly timeZone: string
@@ -216,7 +216,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
         text(env, "OPEN_ZERO_TRANSCRIPT_ROOT", resolve(homedir(), ".claude/projects")),
       ),
       xaiAuth: absolutePath(root, text(env, "OPEN_ZERO_XAI_AUTH", resolve(dataDir, "xai-auth.json"))),
-      skills: absolutePath(root, text(env, "OPEN_ZERO_SKILLS", resolve(homedir(), ".claude/skills"))),
+      skills: absolutePath(root, text(env, "OPEN_ZERO_SKILLS", resolve(homedir(), "Project/skills"))),
     },
     timeZone,
     models,

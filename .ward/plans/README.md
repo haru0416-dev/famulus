@@ -122,3 +122,6 @@ P0 through P2 means plans 001 through 006 plus cross-cutting plans 009 and 011 P
 - 最初の消費者: 下書きの日の cycle プロンプト(jissoku-writing を DRAFTING に重ねる)。
 - market の skill(49万件)は入れない。Agent Plugins の package 取り込み(plugin.json /
   mcp.json / 出所検証)は plan 010 本体のまま。
+- (追記) 正本は `~/Project/skills`(git 管理・vendor 中立)へ移動。Claude Code は
+  `~/.claude/skills` からの symlink で同じ正本を読む。famulus の既定(`OPEN_ZERO_SKILLS`)も
+  そこを指す。エージェントを替えても正本は動かない。

@@ -1,8 +1,9 @@
 /**
  * SKILL.md の取り込み(.ward/plans/010 の前倒し許可範囲 — no-exec validator と読み込みだけ)。
  *
- * 正本は `~/.claude/skills/`(`OPEN_ZERO_SKILLS`)。Haru が Claude Code 用に整備している
- * skill を famulus がそのまま読む — 書く規律のような共有の手続き知識を二重管理しない(一本化)。
+ * 正本は `~/Project/skills/`(`OPEN_ZERO_SKILLS`)— どのベンダーにも属さない置き場。
+ * famulus は実体を直接読み、Claude Code は `~/.claude/skills` からの symlink で同じ正本を読む。
+ * 書く規律のような共有の手続き知識を二重管理しない(一本化)。エージェントを替えても正本は動かない。
  *
  * 実行はしない。読み込みは frontmatter(name / description)と本文の抽出、サイズ上限、
  * root 外への symlink 脱出の拒否だけ。**どの skill をどのスロットで使ってよいかは
