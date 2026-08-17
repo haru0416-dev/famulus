@@ -192,11 +192,13 @@ test("stats の集計 SQL は全系列が実 schema で実行できる", async (
     await h.run(
       Effect.flatMap(Memory, (m) => m.remember({ content: "系列の種", at: "2026-08-08T09:00:00Z" })),
     )
+    const sample = { d: "2026-08-08", n: 1, a: 0, i: 10, o: 5, e: 0, ok: 0, imp: 0, b: 0 }
     for (const [name, q] of Object.entries(STATS_QUERIES)) {
       const rows = await h.run(Effect.flatMap(Db, (db) => db.all(q.sql, "2026-01-01T00:00:00Z")))
       assert.ok(Array.isArray(rows), name)
-      // 行があれば line() が日付始まりの1行になる(空 DB では0行で素通り)
       for (const r of rows) assert.match(q.line(r), /^\d{4}-\d{2}-\d{2} /, name)
+      // 行の整形は全系列を合成行でも確かめる(空 DB でも関数を通す)
+      assert.match(q.line(sample), /^2026-08-08 /, name)
     }
   })
 })
