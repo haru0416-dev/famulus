@@ -46,6 +46,25 @@
 - 分岐の失敗の型(未検証仮説): 変形を「探す方向」でなく「検索語の制約」に直訳している。
   改善候補3つは RESULTS.md に記録済み。試すなら同じ契約・同じ fixtures で対を取り直す。
 
+### recall(miss 率)— `bun run eval:recall`
+
+条件: Memory.recall(FTS5 trigram + 2文字語 LIKE)、モデル呼び出しなし。合成14記録×26 probe + 実DB複製×8 probe。
+
+| 分類 | 修正前 | broaden fallback 後 |
+|---|---|---|
+| 機構の受け持ち(exact/short-cjk/case) | 13/13 | 13/13 |
+| and-overspecify(語の盛りすぎ) | 0/2(実DBの唯一の miss も同型) | **2/2・実DB 8/8** |
+| 意味系(paraphrase/cross-lingual/kana-latin) | 2/11 | 2/11(不変) |
+
+**判断: sqlite-vec + ローカル埋め込みは買わない(今は)。**機構の受け持ちは満点で、
+実害だった miss は AND の緩め直し(機構修正)で消えた。意味系の弱さは合成では確認済みだが
+実DBで未観測 — digger の「語を変えて引き直す」設計が部分補償している。
+**再訪の引き金**: Part B に意味系 probe を足していき、実DBの miss が現れたら sqlite-vec を検討
+(multilingual-e5 系のローカル推論、私的データを外に出さない制約と適合することは調査済み)。
+
+なお「grok 移行」の miss(道具調査で実害例と呼んだもの)は**真の該当なしだった**
+(DB に該当記録が無かった)— 実害例の主張は撤回。
+
 ### researcher salvage 率(観測)
 
 salvageClaims の落とし分は dossier の limitations に「引用照合で落とした claim:」で残る。
@@ -53,7 +72,9 @@ salvageClaims の落とし分は dossier の limitations に「引用照合で�
 
 ## 2. 撤回した主張
 
-(まだ無い。出たらここに集約する — 追記の海に散逸させない)
+| 撤回した主張 | 何が起きたか | 日付 |
+|---|---|---|
+| 「digger の『grok 移行』miss は recall の質の実害例」 | DB に該当記録が実在しなかった(真の該当なし)。LIKE の ground-truth 確認で判明 | 08-17 |
 
 ## 3. 未決
 

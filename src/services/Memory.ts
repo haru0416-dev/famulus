@@ -474,7 +474,40 @@ const makeMemory = () =>
                 ...selfArg,
                 wide,
               )
-        return dedupe(rows as unknown as EventRow[], limit)
+        if (rows.length > 0 || terms.length < 2) return dedupe(rows as unknown as EventRow[], limit)
+
+        // 盛りすぎた問いを1回だけ緩める。AND で0件なら語ごとに引き直して束ねる —
+        // Search の broaden と同じ思想で、別の問いを発明するためではない。
+        // 実測(eval:recall 2026-08-17): and-overspecify が合成 0/2、実DBの唯一の miss も同型だった。
+        const loose: Row[] = []
+        for (const term of terms.slice(0, 4)) {
+          const one =
+            term.length >= FTS_MIN_QUERY
+              ? yield* db.all(
+                  `SELECT e.*, f.text AS text, ${IS_CURRENT} AS is_current FROM events_fts f
+                     JOIN events e ON e.id = f.event_id
+                    WHERE events_fts MATCH ?
+                      AND e.content IS NOT NULL
+                      ${notSelf}
+                    ORDER BY bm25(events_fts) + ${LAYER_BIAS} ASC, e.at DESC
+                    LIMIT ?`,
+                  `"${term}"`,
+                  ...selfArg,
+                  wide,
+                )
+              : yield* db.all(
+                  `SELECT e.*, f.text AS text, ${IS_CURRENT} AS is_current FROM events e
+                     JOIN events_fts f ON f.event_id = e.id
+                    WHERE e.content IS NOT NULL AND f.text LIKE '%' || ? || '%' ESCAPE '\\' ${notSelf}
+                    ORDER BY ${LAYER_BIAS} ASC, e.at DESC, e.rowid DESC
+                    LIMIT ?`,
+                  term.replace(/[\\%_]/g, "\\$&"),
+                  ...selfArg,
+                  wide,
+                )
+          loose.push(...one)
+        }
+        return dedupe(loose as unknown as EventRow[], limit)
       })
 
     const recent = (limit = 20) =>

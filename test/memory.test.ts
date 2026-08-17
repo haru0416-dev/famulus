@@ -705,3 +705,29 @@ test("3文字未満の語も、索引で引ける語と重ねて絞れる", asyn
     assert.match(String(rows[0]?.text), /14時/)
   })
 })
+
+/**
+ * 盛りすぎた問いの緩め直し。AND で0件なら語ごとに引き直す(1回だけ)。
+ * 実測(eval:recall)で and-overspecify が合成 0/2・実DBの唯一の miss も同型だったための機構。
+ */
+test("語を盛りすぎた recall は絞りを外して引き直す", async () => {
+  await withHarness(async (h) => {
+    await h.run(
+      Effect.flatMap(Memory, (mem) =>
+        mem.remember({
+          source: "system",
+          kind: "observe",
+          content: "presence の再接続で seq を捨てるようにした。",
+          text: "presence の再接続で seq を捨てるようにした。",
+          at: "2026-08-17T00:00:00Z",
+        }),
+      ),
+    )
+    // IDENTIFY は記録に無い語 — AND では0件になる形
+    const rows = await h.run(Effect.flatMap(Memory, (mem) => mem.recall("presence 再接続 IDENTIFY", 10)))
+    assert.ok(
+      rows.some((r) => String((r as { text?: string }).text ?? "").includes("再接続")),
+      "緩め直しで当たるはずの記録が返らない",
+    )
+  })
+})
