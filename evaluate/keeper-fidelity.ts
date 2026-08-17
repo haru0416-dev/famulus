@@ -15,6 +15,7 @@
  *
  * fixture は全部合成(実在の私的データを使わない — .ward は git 管理下にある)。
  */
+import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import * as Effect from "effect/Effect"
 import * as ManagedRuntime from "effect/ManagedRuntime"
@@ -191,7 +192,9 @@ const main = async () => {
   const violations = results.reduce((a, r) => a + r.fidelityViolations.length, 0)
   const summary = {
     at: new Date().toISOString(),
-    model: "ROLE_MODEL.structurer",
+    // 経路は三つ組で書く(~/dev/test/agent-experiment-pitfalls.md §2.2 — モデル名だけの比較は再現しない)
+    route: { harness: "open-zero keeper", backend: "api.x.ai/v1 responses", model: "grok-4.3(ROLE_MODEL.structurer)" },
+    rev: execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim(),
     cases: FIXTURES.length,
     capture: `${captured}/${expectTotal}`,
     falsePositives,

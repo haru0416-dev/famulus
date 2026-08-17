@@ -13,6 +13,7 @@
  * 置き場は `.ward/explore-eval/`。生の結果は消さない — 判定は raw artifacts に対して行う。
  * 実行はクォータを使う(explore は7分岐)。
  */
+import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { Output, stepCountIs, ToolLoopAgent } from "ai"
 import * as Effect from "effect/Effect"
@@ -129,6 +130,8 @@ async function runCurrent(seed: string) {
   if (!parsed.success) throw parsed.error
   return {
     path: "current" as const,
+    route: { harness: "open-zero researcher", backend: "api.x.ai/v1 responses", model: appConfig().models.research },
+    rev: execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim(),
     elapsedMs: Date.now() - began,
     steps: generated.steps.length,
     fetches: fetched.length,
@@ -146,7 +149,14 @@ async function runExplorePath(seed: string) {
     },
     seed,
   )
-  return { path: "explore" as const, elapsedMs: Date.now() - began, duplicates, branches }
+  return {
+    path: "explore" as const,
+    route: { harness: "open-zero explore", backend: "api.x.ai/v1 responses", model: appConfig().models.research },
+    rev: execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim(),
+    elapsedMs: Date.now() - began,
+    duplicates,
+    branches,
+  }
 }
 
 /** explore の分岐を実DBの dossier に固定する(plan 005 step 6)。捏造 quote は記録側の検証で落ちる。 */
