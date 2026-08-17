@@ -72,14 +72,14 @@ export function parseSkillMd(content: string): { name: string; description: stri
 export function importSkillsFrom(root: string): SkillImportResult {
   const skills: ImportedSkill[] = []
   const rejected: { path: string; reason: string }[] = []
-  const rootReal = (() => {
-    try {
-      return realpathSync(resolve(root))
-    } catch {
-      return undefined
-    }
-  })()
-  if (!rootReal) return { skills, rejected }
+  let rootReal: string
+  try {
+    rootReal = realpathSync(resolve(root))
+  } catch (e) {
+    // 正本のディレクトリごと読めないのは skill 0 件とは別のこと。空で返すと
+    // `fam skills` が「何も無い」と表示して、置き場を間違えたことに気付けない。
+    return { skills, rejected: [{ path: root, reason: `正本のディレクトリを読めない: ${String(e)}` }] }
+  }
 
   for (const entry of readdirSync(rootReal, { withFileTypes: true })) {
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue

@@ -104,3 +104,10 @@ test("取り込み skill の世代は内容で固定される — 正本を書�
   const after = skillRef("jissoku-writing").digest
   assert.notEqual(before, after)
 })
+
+test("正本のディレクトリごと読めないときは、0件ではなく理由を返す", () => {
+  const result = importSkillsFrom(join(tmpdir(), `not-here-${process.pid}-${Math.random()}`))
+  assert.deepEqual(result.skills, [])
+  assert.equal(result.rejected.length, 1)
+  assert.match(result.rejected[0]?.reason ?? "", /正本のディレクトリを読めない/)
+})

@@ -12,16 +12,12 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { appConfig } from "../core/config.ts"
 import { DailyRunLimit, Halt, QuotaCooldown } from "../core/errors.ts"
+import type { QuotaSignal } from "../model/models.ts"
+
+export type { QuotaSignal }
+
 import { localDayRange } from "../core/time.ts"
 import { Db } from "./Db.ts"
-
-export interface QuotaSignal {
-  readonly pool: string
-  readonly window: string
-  readonly usedPercent?: number
-  readonly resetsAtMs?: number
-  readonly exhausted?: boolean
-}
 
 export interface QuotaState {
   readonly pool: string
