@@ -15,7 +15,12 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { test } from "vitest"
-import { gateTools, replyStepText, untrustedToolOutput } from "../../src/agent/assistant.ts"
+import {
+  beliefMissMessage,
+  gateTools,
+  replyStepText,
+  untrustedToolOutput,
+} from "../../src/agent/assistant.ts"
 import { readSoul } from "../../src/agent/soul.ts"
 import { PROJECT_ROOT } from "../../src/core/config.ts"
 import { registeredTools } from "../helpers.ts"
@@ -97,6 +102,25 @@ test("親 Agent の remember は確定値を直接書かない", () => {
   const remember = src.slice(start, end)
   assert.ok(remember.length > 0, "remember の本文が切り出せていない")
   assert.doesNotMatch(remember, /mem\.recordBelief|\bslot\b/, "確定値は引用照合を通す keeper だけが書く")
+})
+
+test("belief は読み専用を明言し、外れたら既存の slot を見せる", () => {
+  const src = read("src/agent/assistant.ts")
+  const start = src.indexOf("belief: tool({")
+  const end = src.indexOf("propose: tool({", start)
+  assert.ok(start >= 0 && end > start, "belief の登録が見つからない — 切り出しの目印が変わった")
+  const belief = src.slice(start, end)
+  // 読み手が keeper を知らないと「書けない」が戸惑いとして記録される
+  assert.match(belief, /keeper/, "確定の経路(keeper)を説明していない")
+  assert.match(belief, /読み専用/)
+  // slot 名は推測で引かれる。外れを「無い」で終えると別名の slot が生まれる
+  assert.match(belief, /currentBeliefs/, "外れたときに実在の slot を見せていない")
+  assert.doesNotMatch(belief, /recordBelief/, "確定値は引用照合を通す keeper だけが書く")
+
+  const listed = beliefMissMessage("dentist.next_appt", [{ slot: "hospital.appointment" }])
+  assert.match(listed, /'dentist\.next_appt' は確定していない/)
+  assert.match(listed, /hospital\.appointment/)
+  assert.match(beliefMissMessage("a.b", []), /まだ1件も無い/)
 })
 
 test("ユーザーが話す入口はどちらも keeper を通す", () => {

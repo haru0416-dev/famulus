@@ -448,6 +448,12 @@ const childOpts = (maxSteps: number) => ({ stopWhen: stepCountIs(maxSteps), maxR
 
 type ToolGate = (() => Promise<void>) | undefined
 
+/** belief の slot 名は推測で引かれる。外れを「無い」で終えると別名の slot が生まれるので、実在の名前を見せる。 */
+export const beliefMissMessage = (slot: string, slots: readonly { readonly slot: string }[]): string =>
+  slots.length === 0
+    ? `'${slot}' は確定していない(確定値はまだ1件も無い)`
+    : [`'${slot}' は確定していない。既存の slot:`, ...slots.map((s) => `  ${s.slot}`)].join("\n")
+
 export const gateTools = <T extends Record<string, unknown>>(tools: T, gate: ToolGate): T => {
   if (!gate) return tools
   return Object.fromEntries(
@@ -736,10 +742,15 @@ function buildTools(state: TurnState, gate: ToolGate) {
       // 状態を表す事実は、検索ではなくここから引かせる。検索は古い値も同じ強さで当ててしまう。
       description:
         "確定事実(belief)の**現在値と履歴**を見る。住まい・仕事・進行中の案件のように変わる事柄は、" +
-        "検索ではなくここで確かめる(検索は古い値も同じ強さで当てるので、今かどうかが分からない)。",
+        "検索ではなくここで確かめる(検索は古い値も同じ強さで当てるので、今かどうかが分からない)。" +
+        "**読み専用。**ユーザーが明言した事実は、この回が終わるときに keeper(締めの後処理)が発言から" +
+        "引用照合つきで確定値に上げる — その場で保存する道具は無いが、放っておいて失われはしない。",
       inputSchema: vs(
         v.object({
-          slot: v.pipe(v.string(), v.description("事実のキー(例: 'dentist.next_appt')。")),
+          slot: v.pipe(
+            v.string(),
+            v.description("事実のキー(`領域.項目` の形)。名前の推測で外したら、既存の一覧が返る。"),
+          ),
           asOf: v.optional(
             v.pipe(v.string(), v.description("この時点での値を知りたい場合の ISO-8601 時刻。省略で今。")),
           ),
@@ -750,7 +761,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
           Effect.gen(function* () {
             const mem = yield* Memory
             const now = asOf ? yield* mem.beliefAsOf(slot, asOf) : yield* mem.currentBelief(slot)
-            if (!now) return `'${slot}' は確定していない`
+            if (!now) return beliefMissMessage(slot, yield* mem.currentBeliefs(40))
             const hist = yield* mem.beliefHistory(slot)
             // 期間もユーザーの時計で見せる。recall と同じ帯にしないと、同じ出来事が別の日に見える。
             const span = (from: string, until: string | null) =>
