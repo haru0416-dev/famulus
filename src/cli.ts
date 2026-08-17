@@ -101,7 +101,7 @@ const idAndText = (rest: readonly string[]): { id: string; text: string } | null
   return id && text ? { id, text } : null
 }
 
-/** `fam watch` で次に動く相手を指定する札。無指定は famulus。 */
+/** `fam watch` で次に動く相手を指定するフラグ。無指定は famulus。 */
 const NEXT_MOVE_FLAG: Readonly<Record<string, NextMove>> = {
   "--famulus": "famulus",
   "--human": "human",
@@ -110,7 +110,7 @@ const NEXT_MOVE_FLAG: Readonly<Record<string, NextMove>> = {
 /**
  * `fam watch <やること> [--human]` の引数を割る。
  *
- * 知らない札は読み飛ばさずに弾く。読み飛ばすと、打ち間違えた札が watch の本文から
+ * 知らないフラグは読み飛ばさずに弾く。読み飛ばすと、打ち間違えたフラグが watch の本文から
  * 一語消えたまま登録され、宛先も既定のままになる — 二重に化けたうえ、
  * 登録は成功して見えるので気づく機会が無い。
  */

@@ -241,7 +241,7 @@ test("使えない先は既定から外れる", () => {
     assert.ok(!on.includes("wikipedia"))
     assert.ok(!on.includes("arxiv"))
 
-    // 空にすると SearXNG を使わない設定になる(容器を落としている日)。
+    // 空にすると SearXNG を使わない設定になる(コンテナを止めている日)。
     process.env.FAMULUS_SEARXNG = "  "
     configureApp()
     assert.ok(!defaultSources().includes("web"), "空にしたのに web が既定に残っている")

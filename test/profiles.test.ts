@@ -40,7 +40,7 @@ test("全 profile の道具はローカル実装の閉じた集合に収まり�
       assert.ok(local.has(tool), `${profile.id} の ${tool} はローカル道具ではない`)
     }
   }
-  // 回帰網: provider 側で実行される道具名は、委譲先(worker / reviewer)のモデルに見えない。
+  // 回帰検査: provider 側で実行される道具名は、委譲先(worker / reviewer)のモデルに見えない。
   // 親の `x_search` はローカル道具名(実体は独立呼び出しへの隔離 — src/model/x-search.ts)なので対象外。
   for (const profile of Object.values(AGENT_PROFILES)) {
     if (profile.loopRole === "interactive" || profile.loopRole === "autonomous") continue

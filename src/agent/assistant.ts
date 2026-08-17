@@ -360,7 +360,7 @@ const DIGGER = `検索役。DB を検索して、要る行を**原文のまま**
 /** 委譲の結果契約。自由文で返る委譲(digger / explore の描画済み本文)に共通。 */
 const TEXT_CONTRACT = resultContractRef("delegate-text-v1", rs(v.string()))
 
-/** 委譲1回ぶんの予算の天井。実行を止める線ではなく、監査と同一性の器。 */
+/** 委譲1回ぶんの予算の上限。実行を止める強制ではなく、監査と同一性のための記録。 */
 const DELEGATION_BUDGET = {
   researcher: { modelCalls: 12, toolCalls: 24, tokens: 400_000, costMicrousd: 2_000_000 },
   digger: { modelCalls: 10, toolCalls: 16, tokens: 200_000, costMicrousd: 1_000_000 },
@@ -371,7 +371,7 @@ const DELEGATION_BUDGET = {
  * 委譲を kernel の ExecutionRoot/LoopSpec として固定する。
  *
  * ここで固定するのは同一性(owner・stable slot・profile・SkillPlan・task 入力の hash)と
- * 予算の器。モデル呼び出しごとの統治と会計は governed middleware が今までどおり持つ。
+ * 予算の宣言。モデル呼び出しごとの統治と会計は governed middleware が今までどおり持つ。
  * scope は交差で検査する — 委譲先の道具が親の authority を超えていたら開かない。
  */
 async function delegationLoop<T>(

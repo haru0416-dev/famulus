@@ -58,7 +58,7 @@ export function intersectScope(parent: EffectiveScope, request: Partial<Effectiv
   }
 }
 
-/** 子が親を超えていないか。intersectScope を通した値なら常に真 — 検査はその契約の回帰網。 */
+/** 子が親を超えていないか。intersectScope を通した値なら常に真 — テストはその契約の回帰検査。 */
 export function withinScope(parent: EffectiveScope, child: EffectiveScope): boolean {
   return (
     child.tools.every((tool) => parent.tools.includes(tool)) &&

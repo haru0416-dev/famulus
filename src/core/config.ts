@@ -27,7 +27,7 @@ export interface AppConfig {
     readonly transcriptRoot: string
     readonly xaiAuth: string
     /**
-     * 共有 skill(SKILL.md)の正本。`~/.famulus`(famulus の家 — vendor の `~/.openclaw` と同型で、
+     * 共有 skill(SKILL.md)の正本。`~/.famulus`(famulus 専用のディレクトリ — vendor の `~/.openclaw` と同型で、
      * 属するのは Haru 自身のエージェント)を直接読む。Claude 側は symlink で同じ正本を読む。
      */
     readonly skills: string

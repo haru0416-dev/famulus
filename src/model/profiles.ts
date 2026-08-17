@@ -64,7 +64,7 @@ export const PARENT_TOOLS: readonly string[] = [
 ]
 
 /**
- * 親の authority の天井。親のモデルに見える道具(PARENT_TOOLS)に加え、委譲先の中でだけ
+ * 親の authority の上限。親のモデルに見える道具(PARENT_TOOLS)に加え、委譲先の中でだけ
  * 見える道具(search / fetch)を含む — 委譲の scope 交差はこの集合を親側の tools として使う。
  */
 export const PARENT_AUTHORITY: readonly string[] = [...PARENT_TOOLS, "search", "fetch"]

@@ -183,7 +183,7 @@ test("explore dossier は snapshot に無い quote を拒否する", async () =>
 
 /**
  * 引用の救済。照合失敗1件で委譲まるごとを捨てない — 照合できた claim は残し、
- * 落とした分は文の一覧で返す(limitations 行き)。捏造を通さない砦は記録側に残る。
+ * 落とした分は文の一覧で返す(limitations 行き)。捏造を止める最終検証は記録側に残る。
  */
 test("照合できない claim は落とし、できた分だけ残す", () => {
   const snapshots = [{ url: "https://a", content: "実在する本文", status: 200 }]

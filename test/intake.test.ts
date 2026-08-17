@@ -511,7 +511,7 @@ test("素材は境界マーカーの中に入る(ログの中の文を指示と�
       const prompt = h.calls[0]?.prompt ?? ""
       assert.match(prompt, /<<<EXTERNAL source="transcript"/)
       assert.match(prompt, /<<<END EXTERNAL/)
-      // ユーザーの言葉は柵の内側にある。外側にあるのは自分が書いた指示だけ。
+      // ユーザーの言葉はフェンスの内側にある。外側にあるのは自分が書いた指示だけ。
       const outside = prompt.slice(prompt.indexOf("<<<END EXTERNAL"))
       assert.doesNotMatch(outside, /歯医者/)
     },

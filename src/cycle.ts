@@ -533,7 +533,7 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         // 出す先が指してなければ何も起きない(`Desk` の "log" は DM に落ちない)。
         //
         // 書いた記録をそのまま読み直して出す。ここで数え直すと、画面で見る値と
-        // `fam journal` の値が別々に育って、食い違ったときにどちらが本当か決められなくなる。
+        // `fam journal` の値が別々に変わっていって、食い違ったときにどちらが本当か決められなくなる。
         // 最後に置いてあるのは、enqueue に失敗しても commit まで済んでいるようにするため。
         const [entry] = yield* readJournal(1)
         if (entry) {

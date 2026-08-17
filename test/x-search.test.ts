@@ -108,7 +108,7 @@ test("壊れた応答は投げずに空で返す", () => {
 })
 
 test("429 で落ちたら ledger に失敗が残り、続く precheck はクールダウンで拒否される", async () => {
-  // refresh に行かないよう期限の遠い合成 auth を置く(token 網を回避)。
+  // refresh に行かないよう期限の遠い合成 auth を置く。
   const dir = mkdtempSync(join(tmpdir(), "fam-xai-auth-"))
   const authPath = join(dir, "xai-auth.json")
   writeFileSync(

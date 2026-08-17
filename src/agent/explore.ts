@@ -133,9 +133,9 @@ export interface BranchOutcome {
 /**
  * 引用照合できる claim だけを残す(照合はサービス側と同じ規則: 2xx で取得した本文に quote が
  * そのまま含まれること)。落とした claim は文の一覧で返す — 記録側で throw させると、
- * 1件の照合失敗が委譲まるごとを捨てさせ、親が同じ委譲を再試行して手数を燃やす(実測:
- * 2026-08-17 の watch 回で researcher 3連続失敗)。捏造を通さない砦は記録側に残したまま、
- * 救える分をここで救う。
+ * 1件の照合失敗が委譲まるごとを捨てさせ、親が同じ委譲を再試行して手数を浪費する(実測:
+ * 2026-08-17 の watch 回で researcher 3連続失敗)。捏造を止める最終検証は記録側に残したまま、
+ * 残せる分をここで残す。
  */
 export function salvageClaims<
   C extends { readonly statement: string; readonly evidence: readonly { url: string; quote: string }[] },

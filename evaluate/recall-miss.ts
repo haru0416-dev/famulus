@@ -144,7 +144,7 @@ async function partA() {
 }
 
 async function partB() {
-  // 実DBは複製に対して読む。走行中の cycle と足を踏み合わない。
+  // 実DBは複製に対して読む。走行中の cycle と競合しない。
   const copy = join(mkdtempSync(join(tmpdir(), "recall-eval-")), "recall-eval.db")
   execFileSync("sqlite3", [appConfig().paths.db, `.backup ${copy}`])
   const stub = RunnerStub([{ text: "" }])
