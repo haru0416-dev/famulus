@@ -7,6 +7,10 @@ Bun + TypeScript + Effect + SQLite(bun:sqlite)。実行環境の状態は `~/.fa
 
 - commit の前に `bun run gate`(lint + テスト + カバレッジ)。ゲートが通ったら commit を切る — 可否は訊かない。push は頼まれたときだけ。
 - テストを個別に走らせるときは `bun run test <file>`。素の `vitest` は Node で動いて `bun:sqlite` が無く落ちる。
+- テストは `test/` 以下を src の階層で分ける(`test/agent` `test/core` `test/db` `test/model` `test/services`)。
+  src 直下に対応するもの(journal・presence・cli)だけ `test/` 直下。fixtures と helpers は共有なので `test/` 直下。
+- repo ルートのファイルを読むテストは `PROJECT_ROOT`(src/core/config.ts)を使う。`import.meta.url` からの
+  相対は置き場所を変えた瞬間に壊れる。
 - 実運用の確認: `bun run fam status` / `fam journal`。unit は famulus-{cycle,poll,presence}(systemd --user)。
 
 ## DB の規律

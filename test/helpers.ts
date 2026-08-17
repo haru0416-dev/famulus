@@ -6,9 +6,10 @@
  * つまり「ゲートが実際にモデル呼び出しを止めるか」を、モデルを呼ばずに端から端まで検査できる。
  */
 import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import * as Effect from "effect/Effect"
 import * as ManagedRuntime from "effect/ManagedRuntime"
-import { configureApp } from "../src/core/config.ts"
+import { configureApp, PROJECT_ROOT } from "../src/core/config.ts"
 import { RunnerStub, type StubReply } from "../src/model/Runner.ts"
 import { type AppServices, makeAppLayer } from "../src/runtime.ts"
 import { DbLive } from "../src/services/Db.ts"
@@ -52,7 +53,7 @@ export const withHarness = async (
  * 子に渡す表も同じ書き方なので、1つの正規表現で両方が採れる。
  */
 export function registeredTools(): Set<string> {
-  const src = readFileSync(new URL("../src/agent/assistant.ts", import.meta.url), "utf8")
+  const src = readFileSync(join(PROJECT_ROOT, "src/agent/assistant.ts"), "utf8")
   const names = [...src.matchAll(/\b([a-z][a-z0-9_]*):\s*(?:tool\(\{|[a-zA-Z_]*[Tt]ool\b)/g)].map(
     (m) => m[1] as string,
   )

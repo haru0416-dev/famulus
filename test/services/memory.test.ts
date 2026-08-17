@@ -1,0 +1,733 @@
+/**
+ * DB の検査。append-only が SQL 側で強制されていることを、アプリを経由せずに直接実行して確かめる。
+ * (アプリが行儀よく書いているだけなら、別経路が一つ増えた時点で不変条件は消える)
+ */
+
+import assert from "node:assert/strict"
+import * as Effect from "effect/Effect"
+import { test } from "vitest"
+import { Db } from "../../src/services/Db.ts"
+import { Memory, renderRecall } from "../../src/services/Memory.ts"
+import { withHarness } from "../helpers.ts"
+
+test("events は DELETE できない(トリガが ABORT する)", async () => {
+  await withHarness(async (h) => {
+    const id = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        return yield* mem.remember({ content: "歯医者は水曜の18時" })
+      }),
+    )
+
+    const e = await h.fail(
+      Effect.gen(function* () {
+        const db = yield* Db
+        yield* db.run("DELETE FROM events WHERE id = ?", id)
+      }),
+    )
+    assert.equal((e as { _tag: string })._tag, "DbFailed")
+    assert.match((e as { message: string }).message, /append-only/)
+
+    const n = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        return yield* mem.count
+      }),
+    )
+    assert.equal(n, 1)
+  })
+})
+
+test("同じ外部IDを再取得してもeventは1件だけ残る", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const first = yield* mem.remember({
+          source: "owner",
+          content: "同じDiscord投稿",
+          origin: { kind: "discord", id: "123" },
+        })
+        const second = yield* mem.remember({
+          source: "owner",
+          content: "同じDiscord投稿",
+          origin: { kind: "discord", id: "123" },
+        })
+        return { first, second, count: yield* mem.count }
+      }),
+    )
+    assert.equal(out.first, out.second)
+    assert.equal(out.count, 1)
+  })
+})
+
+test("belief eventは根拠event・引用・失効理由を正本に持つ", async () => {
+  await withHarness(async (h) => {
+    const row = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const db = yield* Db
+        const evidence = yield* mem.remember({ source: "owner", content: "今は東京に住んでいる" })
+        const id = yield* mem.recordBelief("home.city", "東京", {
+          reason: "本人が現住所を訂正した",
+          evidenceEventId: evidence,
+          evidenceQuote: "今は東京に住んでいる",
+        })
+        return yield* db.get(
+          "SELECT evidence_event_id,evidence_quote,invalidated_reason FROM events WHERE id=?",
+          id,
+        )
+      }),
+    )
+    assert.equal(row?.evidence_quote, "今は東京に住んでいる")
+    assert.equal(row?.invalidated_reason, "本人が現住所を訂正した")
+    assert.ok(row?.evidence_event_id)
+  })
+})
+
+test("公開APIはweb eventをbeliefの根拠に昇格させない", async () => {
+  await withHarness(async (h) => {
+    const web = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        return yield* mem.remember({ source: "web", content: "external claim" })
+      }),
+    )
+    const error = await h.fail(
+      Effect.flatMap(Memory, (mem) => mem.recordBelief("public.external", "claim", { evidenceEventId: web })),
+    )
+    assert.equal((error as { _tag?: unknown })._tag, "DbFailed")
+    assert.match(String((error as { message?: unknown }).message), /Belief evidence must be an owner event/)
+  })
+})
+
+test("DBへ直接書いてもweb eventをbeliefとして保存できない", async () => {
+  await withHarness(async (h) => {
+    const error = await h.fail(
+      Effect.flatMap(Db, (db) =>
+        db.run(
+          `INSERT INTO events
+            (id,at,kind,source,taint,exposure,provenance,content,search_text,belief_slot,valid_from)
+           VALUES ('web-belief',?,'belief','web',1,'public','[]','42','fact','public.fact',?)`,
+          "2026-08-16T00:00:00.000Z",
+          "2026-08-16T00:00:00.000Z",
+        ),
+      ),
+    )
+    assert.equal((error as { _tag?: unknown })._tag, "DbFailed")
+    assert.match(String((error as { message?: unknown }).message), /web claims cannot become beliefs/)
+  })
+})
+
+test("event追記が失敗したtransactionは巻き戻される", async () => {
+  await withHarness(async (h) => {
+    const failed = await h.fail(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "不正", exposure: "invalid" as never })
+      }),
+    )
+    assert.equal((failed as { _tag: string })._tag, "DbFailed")
+    const count = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "次の正常な追記" })
+        return yield* mem.count
+      }),
+    )
+    assert.equal(count, 1)
+  })
+})
+
+test("belief追記が失敗したtransactionは巻き戻される", async () => {
+  await withHarness(async (h) => {
+    const failed = await h.fail(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("profile.city", "東京", { exposure: "invalid" as never })
+      }),
+    )
+    assert.equal((failed as { _tag: string })._tag, "DbFailed")
+    const count = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("profile.city", "東京")
+        return yield* mem.count
+      }),
+    )
+    assert.equal(count, 1)
+  })
+})
+
+test("redact監査追記が失敗したtransactionは巻き戻される", async () => {
+  await withHarness(async (h) => {
+    const failed = await h.fail(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.redact("missing-event", "存在しないevent")
+      }),
+    )
+    assert.equal((failed as { _tag: string })._tag, "DbFailed")
+    const count = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "次の正常な追記" })
+        return yield* mem.count
+      }),
+    )
+    assert.equal(count, 1)
+  })
+})
+
+test("events の UPDATE は content := NULL(抹消)だけ通る", async () => {
+  await withHarness(async (h) => {
+    const id = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        return yield* mem.remember({ content: "書き換え禁止" })
+      }),
+    )
+
+    // 内容の差し替えは拒否。
+    const e = await h.fail(
+      Effect.gen(function* () {
+        const db = yield* Db
+        yield* db.run("UPDATE events SET content = ?WHERE id = ?", '"別の話"', id)
+      }),
+    )
+    assert.equal((e as { _tag: string })._tag, "DbFailed")
+
+    // provenance を変えると監査の根拠が失われるため、メタデータも変更できない。
+    const e2 = await h.fail(
+      Effect.gen(function* () {
+        const db = yield* Db
+        yield* db.run("UPDATE events SET source = 'system' WHERE id = ?", id)
+      }),
+    )
+    assert.equal((e2 as { _tag: string })._tag, "DbFailed")
+
+    // 内容は見えなくできても、監査履歴は残る。
+    const after = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const db = yield* Db
+        yield* mem.redact(id, "本人の依頼")
+        const row = yield* db.get("SELECT content FROM events WHERE id = ?", id)
+        const r = yield* db.get("SELECT kind, supersedes FROM events WHERE kind = 'redact'")
+        return { content: row?.content, redact: r }
+      }),
+    )
+    assert.equal(after.content, null)
+    assert.equal(after.redact?.supersedes, id)
+  })
+})
+
+test("最新beliefを抹消しても古い値を現在値として復活させない", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
+        const latest = yield* mem.recordBelief("home.city", "東京", { validFrom: "2026-06-01T00:00:00Z" })
+        yield* mem.redact(latest, "誤った確定")
+        return {
+          current: yield* mem.currentBelief("home.city"),
+          old: yield* mem.beliefAsOf("home.city", "2026-03-01T00:00:00Z"),
+        }
+      }),
+    )
+    assert.equal(out.current, undefined)
+    assert.equal(out.old?.value, "札幌")
+    assert.equal(out.old?.validUntil, "2026-06-01T00:00:00Z")
+  })
+})
+
+test("recall は trigram で部分一致する(日本語が分かち書きなしで引ける)", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "明日の会議資料をレビューする" })
+        yield* mem.remember({ content: "牛乳を買う" })
+        return yield* mem.recall("会議資料")
+      }),
+    )
+    assert.equal(rows.length, 1)
+    assert.match(String(rows[0]?.content), /会議資料/)
+  })
+})
+
+/**
+ * 入力はモデルを呼ぶ前に DB へ落ちる。除外しないと自分が今言われたことを過去の記録として読む
+ * — 「最近疲れてる」の 49 秒後に「それ昨日も言ってる」と返す事故が実際に起きた。
+ * 索引に入れない手(自走側の `text: ""`)は対話の入力には使えないので、検索の側で外す。
+ */
+test("recall は今のターンの入力を過去の記録として返さない", async () => {
+  await withHarness(async (h) => {
+    const { withSelf, withoutSelf } = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        // 本当に過去にある記録。同じ本文だと dedupe がまとめるので、別の言い方にする。
+        yield* mem.remember({ kind: "observe", content: { said: "先週から疲れが抜けない" } })
+        // 今このターンで受け取った入力。DB には残るが、検索の根拠にしてはいけない。
+        const now = yield* mem.remember({
+          kind: "observe",
+          content: { said: "最近ちょっと疲れてるんだよね" },
+        })
+        return {
+          withSelf: yield* mem.recall("疲れ"),
+          withoutSelf: yield* mem.recall("疲れ", 10, now),
+        }
+      }),
+    )
+    assert.equal(withSelf.length, 2, "除外しなければ今の入力も当たる")
+    assert.equal(withoutSelf.length, 1, "今の入力は根拠から外れる")
+    assert.match(String(withoutSelf[0]?.content), /先週から疲れが抜けない/, "残るのは本当の過去だけ")
+  })
+})
+
+test("2文字の日本語(会議・予定)も引ける — trigram の窓から外れる帯を LIKE で拾う", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "明日の会議は14時から" })
+        yield* mem.remember({ content: "牛乳を買う" })
+        return yield* mem.recall("会議")
+      }),
+    )
+    assert.equal(rows.length, 1)
+    assert.match(String(rows[0]?.content), /14時/)
+  })
+})
+
+test("recall の空クエリは引かない", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "何か" })
+        return yield* mem.recall("  ")
+      }),
+    )
+    assert.deepEqual(rows, [])
+  })
+})
+
+test("recall は FTS のクエリ構文をユーザー入力として解釈しない", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "予定表" })
+        return yield* mem.recall('予定" OR "*')
+      }),
+    )
+    assert.ok(Array.isArray(rows))
+  })
+})
+
+test("抹消したイベントは recall に出てこない", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const id = yield* mem.remember({ content: "口座番号は 1234567" })
+        yield* mem.redact(id, "秘密")
+        return yield* mem.recall("口座番号")
+      }),
+    )
+    assert.deepEqual(rows, [])
+  })
+})
+
+// ── 置き方(何が上位に来るか)の検査。
+//
+// 検索が「一致するか」だけを見ていた頃は、並びが `at DESC` = 一致した中の新着順だった。
+// cycle は起きるたびに長い自己言及を書くので、新しさだけでシステム記録が上位を占め、
+// 探している事実を押し下げていた(`recall 予約` の上位10件のうち5件がシステム記録)。
+// 引けるかどうかと同じくらい、何が先に見えるかが記憶の質を決める。
+
+test("recall は関連度と層で並ぶ — 新しいだけのシステム記録が確定した事実を押し下げない", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("dentist.next_appt", "歯医者の次回予約は8月12日18:00")
+        yield* mem.remember({
+          source: "system",
+          content: { cycle: "起動した。次回予約の件は動かない。次回予約について今は判断しない。" },
+        })
+        return yield* mem.recall("次回予約")
+      }),
+    )
+    assert.equal(rows.length, 2)
+    assert.equal(rows[0]?.kind, "belief", "確定した事実が先頭に来る")
+    assert.equal(rows[1]?.source, "system", "システム記録は後ろに下がる")
+  })
+})
+
+test("索引に入れなかった行は検索に出ない — DB には残る", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "面談は9時から" })
+        yield* mem.remember({ source: "system", content: { cyclePrompt: "面談 面談 面談" }, text: "" })
+        return { hits: yield* mem.recall("面談"), all: yield* mem.count }
+      }),
+    )
+    assert.equal(out.all, 2, "DB(正本)からは消さない")
+    // 除外した行が短いクエリの LIKE フォールバック経由で再び現れてはならない。
+    assert.equal(out.hits.length, 1, "検索に出るのは索引を持つ1件だけ")
+    assert.match(String(out.hits[0]?.text), /9時/)
+  })
+})
+
+test("上書きした belief の旧版は『確定』として前に出ない", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("dentist.next_appt", "歯医者の次回予約は8月12日")
+        yield* mem.recordBelief("dentist.next_appt", "歯医者の次回予約は8月13日")
+        return yield* mem.recall("次回予約")
+      }),
+    )
+    assert.equal(rows.length, 2, "旧版が DB から消えるわけではない")
+    assert.equal(rows[0]?.is_current, 1, "今の値が先頭")
+    assert.match(String(rows[0]?.text), /8月13日/)
+    assert.equal(rows[1]?.is_current, 0)
+    // 読む側が古い値を今の値と取り違えないよう、ラベルで分ける。
+    assert.match(renderRecall(rows), /確定\(旧版\)/)
+  })
+})
+
+test("同じ本文の繰り返しは畳まれる(1つの話題で枠を埋めない)", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        for (let i = 0; i < 5; i++) yield* mem.remember({ content: "はじめまして。あなたは誰？" })
+        yield* mem.remember({ content: "はじめまして、と何度も訊かれている件" })
+        return yield* mem.recall("はじめまして")
+      }),
+    )
+    assert.equal(rows.length, 2, "同文5件は1件に畳まれる")
+  })
+})
+
+test("recall の描画は JSON 構造を出さず、どの層の1行かを示す", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ source: "owner", content: { said: "歯医者は8月12日" } })
+        return renderRecall(yield* mem.recall("歯医者"))
+      }),
+    )
+    assert.doesNotMatch(out, /\{"said"/)
+    assert.match(out, /owner\]/)
+    assert.match(out, /歯医者は8月12日/)
+  })
+})
+
+test("system 由来の記録はシステム記録と表示する", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ source: "system", content: "次回予約はまだ確認していない" })
+        return renderRecall(yield* mem.recall("次回予約"))
+      }),
+    )
+    assert.match(out, /システム記録/)
+  })
+})
+
+test("未検証のシステム記録は recall でも区別する", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ source: "system", taint: true, content: "外部コードの出力" })
+        return renderRecall(yield* mem.recall("外部コード"))
+      }),
+    )
+    assert.match(out, /システム記録\(未検証\)/)
+  })
+})
+
+test("belief_slots は belief event だけを現在値へ投影する", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const db = yield* Db
+        const observed = yield* mem.remember({ source: "system", content: "未確定の観測" })
+        const eventId = yield* mem.recordBelief("dentist.next_appt", "2026-08-12T18:00:00Z")
+        const slot = yield* mem.currentBelief("dentist.next_appt")
+        const rows = yield* db.all(
+          `SELECT b.resolved_from,e.kind FROM belief_slots b
+             JOIN events e ON e.id=b.resolved_from ORDER BY b.resolved_from`,
+        )
+        return { eventId, observed, slot, rows }
+      }),
+    )
+    assert.equal(out.slot?.value, "2026-08-12T18:00:00Z")
+    assert.equal(out.slot?.resolvedFrom, out.eventId)
+    assert.deepEqual(out.rows, [{ resolved_from: out.eventId, kind: "belief" }])
+    assert.notEqual(out.rows[0]?.resolved_from, out.observed, "observe event は belief projection に入らない")
+  })
+})
+
+test("belief は上書きされるが、履歴は events に残る", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("home.city", "札幌")
+        yield* mem.recordBelief("home.city", "東京")
+        const slot = yield* mem.currentBelief("home.city")
+        const rows = yield* mem.recent(10)
+        return { slot, beliefs: rows.filter((r) => r.kind === "belief").length }
+      }),
+    )
+    assert.equal(out.slot?.value, "東京")
+    assert.equal(out.beliefs, 2)
+  })
+})
+
+/**
+ * 事実が変わったとき、古い値は消えず、区間として閉じる。
+ *
+ * ここが上書きだった頃は「転職活動中だった時期」そのものが DB から消えていた。
+ * 今の値しか持たない DB は現在形の問いにしか答えられず、
+ * 「去年の今ごろ何をしていたか」を聞かれると何も言えない。
+ */
+test("値が変わっても古い区間は残る — 今の値と、あの時点の値が両方引ける", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("work.job_search", "転職活動中。複数社と面談している", {
+          validFrom: "2026-03-01T00:00:00Z",
+        })
+        yield* mem.recordBelief("work.job_search", "終わった。今の会社に残る", {
+          validFrom: "2026-09-01T00:00:00Z",
+          reason: "ユーザーが転職の終了を明言した",
+        })
+        return {
+          now: yield* mem.currentBelief("work.job_search"),
+          past: yield* mem.beliefAsOf("work.job_search", "2026-05-01T00:00:00Z"),
+          history: yield* mem.beliefHistory("work.job_search"),
+        }
+      }),
+    )
+    assert.match(String(out.now?.value), /今の会社に残る/)
+    assert.equal(out.now?.validUntil, null, "今の値は区間が開いている")
+    assert.equal(out.now?.validFrom, "2026-09-01T00:00:00Z")
+
+    // 過去形の問いに答えられる。上書きしていたらここは今の値を返してしまう。
+    assert.match(String(out.past?.value), /転職活動中/)
+    assert.equal(out.past?.validUntil, "2026-09-01T00:00:00Z", "古い区間はそこで閉じている")
+    assert.equal(out.past?.invalidatedReason, "ユーザーが転職の終了を明言した", "なぜ閉じたかが残る")
+
+    assert.equal(out.history.length, 2)
+  })
+})
+
+test("区間は半開 — 境界の瞬間はどちらか一方だけが主張する", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("home.city", "札幌", { validFrom: "2026-01-01T00:00:00Z" })
+        yield* mem.recordBelief("home.city", "東京", { validFrom: "2026-06-01T00:00:00Z" })
+        return {
+          before: yield* mem.beliefAsOf("home.city", "2026-05-31T23:59:59Z"),
+          at: yield* mem.beliefAsOf("home.city", "2026-06-01T00:00:00Z"),
+          way: yield* mem.beliefAsOf("home.city", "2025-12-31T00:00:00Z"),
+        }
+      }),
+    )
+    assert.equal(out.before?.value, "札幌")
+    assert.equal(out.at?.value, "東京", "境界のその瞬間からは新しい値")
+    assert.equal(out.way, undefined, "確定より前のことは知らない — 推測で埋めない")
+  })
+})
+
+test("過去へ遡る訂正は現在区間の開始より前へ戻さない", async () => {
+  await withHarness(async (h) => {
+    const current = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("home.city", "札幌", { validFrom: "2026-06-01T00:00:00Z" })
+        yield* mem.recordBelief("home.city", "東京", { validFrom: "2026-01-01T00:00:00Z" })
+        return yield* mem.currentBelief("home.city")
+      }),
+    )
+    assert.equal(current?.value, "東京")
+    assert.equal(current?.validFrom, "2026-06-01T00:00:00Z")
+  })
+})
+
+test("空のrecall表示と一覧APIの既定値を扱う", async () => {
+  assert.equal(renderRecall([]), "該当なし")
+  const row = {
+    id: "event-1",
+    at: "2026-08-14T00:00:00Z",
+    kind: "observe" as const,
+    source: "owner" as const,
+    taint: 0,
+    exposure: "private" as const,
+    supersedes: null,
+    provenance: "[]",
+    content: null,
+    text: null,
+    is_current: 0,
+  }
+  assert.match(renderRecall([row]), /owner\] $/)
+  assert.match(renderRecall([{ ...row, content: "壊れたJSON" }]), /壊れたJSON/)
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("profile.optional", null)
+        return {
+          belief: yield* mem.currentBelief("profile.optional"),
+          current: yield* mem.currentBeliefs(),
+          recent: yield* mem.recent(),
+        }
+      }),
+    )
+    assert.equal(out.belief?.value, null)
+    assert.equal(out.current.length, 1)
+    assert.equal(out.recent.length, 1)
+  })
+})
+
+test("閉じた区間の belief は検索で『確定』として前に出ない", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("work.job_search", "転職活動中である", {
+          validFrom: "2026-03-01T00:00:00Z",
+        })
+        yield* mem.recordBelief("work.job_search", "転職はもう終わった", {
+          validFrom: "2026-09-01T00:00:00Z",
+        })
+        return yield* mem.recall("転職")
+      }),
+    )
+    const current = rows.filter((r) => r.is_current === 1)
+    assert.equal(current.length, 1, "今の値は1本だけ")
+    assert.match(String(current[0]?.text), /もう終わった/)
+    // 古い値も履歴に残すが、現在の確定値としては表示しない。
+    assert.match(renderRecall(rows), /確定\(旧版\)/)
+  })
+})
+
+test("確かめてから時間が経った事実だけを拾える(陳腐化の検出)", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.recordBelief("work.job_search", "転職活動中", { validFrom: "2026-01-01T00:00:00Z" })
+        yield* mem.recordBelief("home.city", "東京", { validFrom: "2026-08-01T00:00:00Z" })
+        // 閉じた区間は「古い」ではなく「終わった」。聞き直す対象ではない。
+        yield* mem.recordBelief("phone.model", "旧機種", { validFrom: "2026-01-01T00:00:00Z" })
+        yield* mem.recordBelief("phone.model", "新機種", { validFrom: "2026-08-05T00:00:00Z" })
+        return yield* mem.staleBeliefs("2026-06-01T00:00:00Z")
+      }),
+    )
+    assert.deepEqual(
+      out.map((b) => b.slot),
+      ["work.job_search"],
+      "古いまま開いている区間だけが挙がる",
+    )
+  })
+})
+
+test("gmail/web 由来は既定で taint が立つ", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const db = yield* Db
+        yield* mem.remember({ source: "gmail", content: "外部メール" })
+        yield* mem.remember({ source: "owner", content: "本人の発話" })
+        return yield* db.all("SELECT source, taint FROM events ORDER BY source")
+      }),
+    )
+    assert.deepEqual(
+      rows.map((r) => [r.source, r.taint]),
+      [
+        ["gmail", 1],
+        ["owner", 0],
+      ],
+    )
+  })
+})
+
+test("空白で区切った複数語は AND で絞る(フレーズ一致にしない)", async () => {
+  await withHarness(async (h) => {
+    const out = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "エージェントの記憶をどう置くか。メモリの設計を考え直した。" })
+        yield* mem.remember({ content: "エージェントの自走。cycle を systemd timer で回す。" })
+        return {
+          both: yield* mem.recall("エージェント メモリ"),
+          one: yield* mem.recall("エージェント"),
+        }
+      }),
+    )
+    // 語の間に空白を挟んだだけで 0 件になっていた。絞り込みたいときに使えないのが致命的だった。
+    assert.equal(out.both.length, 1, "両方の語を含む行だけが残る")
+    assert.match(String(out.both[0]?.text), /メモリの設計/)
+    assert.equal(out.one.length, 2)
+  })
+})
+
+test("3文字未満の語も、索引で引ける語と重ねて絞れる", async () => {
+  await withHarness(async (h) => {
+    const rows = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "パフォーマンスの会議は14時から" })
+        yield* mem.remember({ content: "パフォーマンスの計測結果をまとめた" })
+        return yield* mem.recall("パフォーマンス 会議")
+      }),
+    )
+    assert.equal(rows.length, 1)
+    assert.match(String(rows[0]?.text), /14時/)
+  })
+})
+
+/**
+ * 盛りすぎた問いの緩め直し。AND で0件なら語ごとに引き直す(1回だけ)。
+ * 実測(eval:recall)で and-overspecify が合成 0/2・実DBの唯一の miss も同型だったための機構。
+ */
+test("語を盛りすぎた recall は絞りを外して引き直す", async () => {
+  await withHarness(async (h) => {
+    await h.run(
+      Effect.flatMap(Memory, (mem) =>
+        mem.remember({
+          source: "system",
+          kind: "observe",
+          content: "presence の再接続で seq を捨てるようにした。",
+          text: "presence の再接続で seq を捨てるようにした。",
+          at: "2026-08-17T00:00:00Z",
+        }),
+      ),
+    )
+    // IDENTIFY は記録に無い語 — AND では0件になる形
+    const rows = await h.run(Effect.flatMap(Memory, (mem) => mem.recall("presence 再接続 IDENTIFY", 10)))
+    assert.ok(
+      rows.some((r) => String((r as { text?: string }).text ?? "").includes("再接続")),
+      "緩め直しで当たるはずの記録が返らない",
+    )
+  })
+})
