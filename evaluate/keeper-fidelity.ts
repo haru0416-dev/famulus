@@ -10,10 +10,10 @@
  *
  * 実行は本物の Runner(grok)+ `:memory:` の本物 schema — 本番 DB には何も書かない。
  * 物理的なクォータは消費する(1回 = fixture 件数ぶんのモデル呼び出し)。
- * 生の結果は .ward/evals/keeper/ に残す。閾値は初回 baseline を記録してから設ける
+ * 生の結果は docs/evals/keeper/ に残す。閾値は初回 baseline を記録してから設ける
  * (回帰検知はこのファイルではなく baseline との差分で行う)。
  *
- * fixture は全部合成(実在の私的データを使わない — .ward は git 管理下にある)。
+ * fixture は全部合成(実在の私的データを使わない — docs は git 管理下にある)。
  */
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
@@ -28,7 +28,7 @@ import { type AppServices, makeAppLayer } from "../src/runtime.ts"
 import { Db, DbLive } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
 
-const OUT = new URL("../.ward/evals/keeper/", import.meta.url).pathname
+const OUT = new URL("../docs/evals/keeper/", import.meta.url).pathname
 
 interface Fixture {
   readonly id: string

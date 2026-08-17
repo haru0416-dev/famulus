@@ -10,7 +10,7 @@
  *   run <n> explore       … explore fan-out(7方向)で実行し、生の結果と dossier を保存する
  *   compare <n>           … 機械で数えられる指標を並べ、判定欄が空の比較表を書き出す
  *
- * 置き場は `.ward/explore-eval/`。生の結果は消さない — 判定は raw artifacts に対して行う。
+ * 置き場は `docs/explore-eval/`。生の結果は消さない — 判定は raw artifacts に対して行う。
  * 実行はクォータを使う(explore は7分岐)。
  */
 import { execFileSync } from "node:child_process"
@@ -34,7 +34,7 @@ import { vs } from "../src/model/schema.ts"
 import { run, runtime } from "../src/runtime.ts"
 import { Research } from "../src/services/Research.ts"
 
-const OUT = new URL("../.ward/explore-eval/", import.meta.url).pathname
+const OUT = new URL("../docs/explore-eval/", import.meta.url).pathname
 
 /**
  * fixture は実際に過去に調べた問い(research_dossiers / questions の実データ)。

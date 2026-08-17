@@ -27,7 +27,7 @@ import { RunnerStub } from "../src/model/Runner.ts"
 import { Db, DbLive } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
 
-const OUT = new URL("../.ward/evals/recall/", import.meta.url).pathname
+const OUT = new URL("../docs/evals/recall/", import.meta.url).pathname
 
 type Category =
   | "exact"

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { afterAll, beforeAll, test } from "vitest"
@@ -10,7 +10,10 @@ let configRoot = ""
 
 beforeAll(() => {
   callerCwd = mkdtempSync(join(tmpdir(), "fam-caller-cwd-"))
-  configRoot = mkdtempSync(join(PROJECT_ROOT, ".ward/scratch/config-bootstrap-"))
+  // 相対 FAMULUS_DB が「設定 root 基準」で絶対化されることを見る検査なので、repo 内に要る。
+  const scratchParent = join(PROJECT_ROOT, "node_modules/.cache")
+  mkdirSync(scratchParent, { recursive: true })
+  configRoot = mkdtempSync(join(scratchParent, "fam-config-bootstrap-"))
 })
 
 afterAll(() => {
