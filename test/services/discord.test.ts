@@ -43,6 +43,7 @@ interface Msg {
   content: string
   author: { id: string }
   reactions?: { emoji: { name: string | null }; count: number; me: boolean }[]
+  attachments?: { url: string; filename?: string; content_type?: string; size?: number }[]
 }
 
 /**
@@ -114,6 +115,10 @@ const fakeDiscord = async (
         return res.writeHead(404).end("{}")
       }
       if (/^\/channels\/\d+\/typing$/.test(path) && req.method === "POST") return res.writeHead(204).end()
+      if (path.startsWith("/cdn/")) {
+        res.writeHead(200, { "content-type": "image/png" })
+        return res.end(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]))
+      }
       const [, messageChannel, messageId] = /^\/channels\/(\d+)\/messages\/(\d+)$/.exec(path) ?? []
       if (messageChannel && messageId && req.method === "GET") {
         const message = at(messageChannel).find((candidate) => candidate.id === messageId)
@@ -1609,4 +1614,64 @@ test("ack は本文を1通も出さず、受信メッセージに直接リアク
       assert.equal(dc.hits.filter((x) => x.method === "POST" && x.path.endsWith("/messages")).length, 0)
     })
   })
+})
+
+test("画像つき・画像だけのメッセージも受け、実体は media に置いて参照を event に残す", async () => {
+  const { mkdtempSync, rmSync, existsSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const savedData = process.env.FAMULUS_DATA
+  const dir = mkdtempSync(join(tmpdir(), "discord-media-"))
+  const dc = await fakeDiscord([{ id: "50", content: "古い一言", author: { id: OWNER } }])
+  try {
+    process.env.FAMULUS_DATA = dir
+    await wired(dc, undefined, async () => {
+      await withHarness(async (h) => {
+        // 初回で cursor を確定してから、新しいメッセージを積む
+        assert.equal(await h.run(drainInbox), 0)
+        dc.msgs.unshift({
+          id: "60",
+          content: "予約票これ",
+          author: { id: OWNER },
+          attachments: [
+            { url: `${dc.url}/cdn/yoyaku.png`, filename: "yoyaku.png", content_type: "image/png", size: 11 },
+            // 画像以外の添付は受けない
+            { url: `${dc.url}/cdn/doc.pdf`, filename: "doc.pdf", content_type: "application/pdf", size: 11 },
+          ],
+        })
+        dc.msgs.unshift({
+          id: "61",
+          content: "",
+          author: { id: OWNER },
+          attachments: [{ url: `${dc.url}/cdn/photo.png`, content_type: "image/png", size: 11 }],
+        })
+        assert.equal(await h.run(drainInbox), 2)
+
+        const rows = await h.run(
+          Effect.flatMap(Db, (db) =>
+            db.all(
+              "SELECT origin_id, json_extract(content,'$.said') said, json_extract(content,'$.images') imgs FROM events WHERE origin_id IN ('60','61') ORDER BY origin_id",
+            ),
+          ),
+        )
+        assert.equal(rows.length, 2)
+        const imgs60 = JSON.parse(String(rows[0]?.imgs)) as {
+          sha: string
+          mediaType: string
+          name?: string
+        }[]
+        assert.equal(imgs60.length, 1) // pdf は落ちる
+        assert.equal(imgs60[0]?.name, "yoyaku.png")
+        assert.ok(existsSync(join(dir, "media", `${imgs60[0]?.sha}.png`)))
+        // 画像だけのメッセージ(本文なし)も1件として入る
+        const imgs61 = JSON.parse(String(rows[1]?.imgs)) as { sha: string }[]
+        assert.equal(imgs61.length, 1)
+        assert.equal(rows[1]?.said, "")
+      })
+    })
+  } finally {
+    if (savedData === undefined) delete process.env.FAMULUS_DATA
+    else process.env.FAMULUS_DATA = savedData
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

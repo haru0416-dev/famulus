@@ -238,7 +238,17 @@ export async function callXai(opts: ModelCallOptions): Promise<ModelCallResult> 
     const { stream } = await model.doStream({
       prompt: [
         { role: "system", content: opts.systemPrompt ?? RUNTIME_PROMPT },
-        { role: "user", content: [{ type: "text", text: opts.prompt }] },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: opts.prompt },
+            ...(opts.images ?? []).map((i) => ({
+              type: "file" as const,
+              data: { type: "data" as const, data: i.data },
+              mediaType: i.mediaType,
+            })),
+          ],
+        },
       ],
       abortSignal: controller.signal,
       ...(opts.jsonSchema !== undefined

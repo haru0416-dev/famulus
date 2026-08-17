@@ -72,6 +72,8 @@ export interface ModelCallOptions {
   readonly systemPrompt?: string
   /** 与えるとResponsesのjson_schemaによる構造化応答を要求する。 */
   readonly jsonSchema?: unknown
+  /** 画像入力。512ピクセル未満は API が拒否する。 */
+  readonly images?: readonly { readonly data: Uint8Array; readonly mediaType: string }[]
   readonly timeoutMs?: number
   readonly signal?: AbortSignal
   /** テキスト差分の逐次通知。 */

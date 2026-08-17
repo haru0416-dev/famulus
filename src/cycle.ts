@@ -19,6 +19,7 @@ import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
 import { compileSkillPlan, renderSkillOverlay } from "./agent/skills.ts"
+import { describePendingImages } from "./agent/vision.ts"
 import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
 import { configureApp } from "./core/config.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
@@ -159,7 +160,12 @@ function discordAck(events: readonly ObservedEvent[]): { channelId: string; mess
   return undefined
 }
 
-function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Workspace[]): string {
+function buildPrompt(
+  d: CyclePlan,
+  spokenTo: boolean,
+  workspaces: readonly Workspace[],
+  imageNotes: readonly string[] = [],
+): string {
   const sections: string[] = []
 
   sections.push(
@@ -184,6 +190,17 @@ function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Works
 
   if (trusted.length > 0) {
     sections.push(["## まだ見ていない入力", ...trusted.map((e) => `- ${renderEvent(e)}`)].join("\n"))
+  }
+  if (imageNotes.length > 0) {
+    sections.push(
+      [
+        "## 受け取った画像(モデルによる記述・未検証)",
+        ...imageNotes,
+        "",
+        "記述は言い換えであって原文ではない。日付・金額のような確定が要る値は、本文か",
+        "ユーザーへの確認で裏を取ってから使う。",
+      ].join("\n"),
+    )
   }
   const watchSection = renderWatchSection(d)
   if (watchSection) sections.push(watchSection)
@@ -468,7 +485,14 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
     // 次のタイマーが同じ条件で実行され、同量のクォータと時間を消費して同じ理由で失敗する。失敗した回も1回動いた回として
     // 締める — 実際にモデルは走り、道具も動いて、その跡は DB に残っている。
     const deadline = AbortSignal.timeout(TIMEOUT_MS)
-    const prompt = buildPrompt(d, spokenTo, await run(listWorkspaces))
+    // 受け取った画像に記述を付ける(looker)。プロンプトより先 — 記述が無いと返信が画像に触れられない。
+    const imageNotes = await run(describePendingImages(d.newEvents, { signal: deadline })).catch(
+      (e: unknown) => {
+        log("画像の記述に失敗:", causeReason(e))
+        return [] as string[]
+      },
+    )
+    const prompt = buildPrompt(d, spokenTo, await run(listWorkspaces), imageNotes)
     // 「載せた」を記録するのはここ。planCycle の中ではない — planCycle は実行条件が無い回にも
     // 走るので、そこで印を付けると誰も読んでいない一覧を載せたことにして順番だけが進む。
     // 切られた回でも記録は残す。載ったことは事実で、次は他のものに順番を渡す。

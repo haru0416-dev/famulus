@@ -20,7 +20,7 @@ import type { RuntimeSchema } from "./schema.ts"
 import { traceOf } from "./trace.ts"
 import { callXai } from "./xai-responses.ts"
 
-export type Role = "structurer" | "scout" | "reviewer"
+export type Role = "structurer" | "scout" | "reviewer" | "looker"
 
 /**
  * 役割→モデル。全て SuperGrok OAuth の Grok で、品質と処理量に応じてmodelを分ける。
@@ -39,6 +39,8 @@ export const ROLE_MODEL: Record<Role, string> = {
   // GPT 解約で崩れて同系列 — 別系列に戻す候補は Claude 経路。それまでは既定の対話modelと同じ id。
   reviewer: "grok-4.6",
   scout: "grok-4.3", // 取り込みの構造化。引用を写す役(Intake.ingest)
+  // 受け取った画像の記述(src/agent/vision.ts)。記述は言い換えなので確定値には昇格させない。
+  looker: "grok-4.3",
 }
 
 export interface RunPlan {
@@ -54,6 +56,8 @@ export interface RunnerRequest {
   /** 与えるとResponsesのjson_schemaによる構造化応答を要求する。 */
   readonly schema?: RuntimeSchema<unknown>
   readonly onText?: (delta: string) => void
+  /** 画像入力。512ピクセル未満は API が拒否する。 */
+  readonly images?: readonly { readonly data: Uint8Array; readonly mediaType: string }[]
   readonly signal?: AbortSignal
   readonly kind: string
   readonly execution?: KernelLoopContext
@@ -129,6 +133,8 @@ const makeRunner = (
           prompt: req.prompt,
           systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,
           schema: req.schema?.jsonSchema ?? null,
+          // 画像は中身まで digest に入れない — 同じ prompt でも画像が違えば別リクエストと分かる程度でよい
+          images: req.images?.map((i) => `${i.mediaType}:${i.data.byteLength}`) ?? null,
         })
         const replay = req.execution
           ? yield* kernel.replayModelResult(req.execution, requestDigest)
@@ -279,6 +285,7 @@ export const RunnerLive = Layer.effect(
             systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,
             ...(req.schema !== undefined ? { jsonSchema: req.schema.jsonSchema } : {}),
             ...(req.onText ? { onText: req.onText } : {}),
+            ...(req.images ? { images: req.images } : {}),
             signal: req.signal ?? abort,
           }),
         catch: (e) =>

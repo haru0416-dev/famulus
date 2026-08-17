@@ -106,6 +106,8 @@ export interface Inbound {
   readonly id: string
   readonly text: string
   readonly draft?: { readonly id: string; readonly decision: DraftDecision }
+  /** 添付されていた画像。取得はここでは行わない — URL を渡し、保存は inbox 側が持つ。 */
+  readonly images?: readonly { url: string; mediaType: string; name?: string; size: number }[]
 }
 
 /**
@@ -173,7 +175,34 @@ interface RawMessage {
   readonly content: string
   readonly author: { id: string }
   readonly reactions?: { emoji: { name: string | null }; count: number; me: boolean }[]
+  readonly attachments?: {
+    readonly url: string
+    readonly filename?: string
+    readonly content_type?: string
+    readonly size?: number
+  }[]
 }
+
+/** 画像として受ける添付の上限。これより大きいものは記述もできないまま容量だけ食う。 */
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+/** 添付から画像だけを拾う。画像以外(zip・pdf)は今は受けない。 */
+const imagesOf = (m: RawMessage): { url: string; mediaType: string; name?: string; size: number }[] =>
+  (m.attachments ?? [])
+    .filter(
+      (a) =>
+        typeof a.url === "string" &&
+        typeof a.content_type === "string" &&
+        a.content_type.startsWith("image/") &&
+        (a.size ?? 0) > 0 &&
+        (a.size ?? 0) <= MAX_IMAGE_BYTES,
+    )
+    .map((a) => ({
+      url: a.url,
+      mediaType: a.content_type as string,
+      ...(a.filename ? { name: a.filename } : {}),
+      size: a.size ?? 0,
+    }))
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null
@@ -1317,8 +1346,15 @@ const makeDiscord = () =>
 
           // 古い順に見る。API は新しい順で返す。
           for (const m of [...msgs].reverse()) {
-            if (cursor && m.author.id === owner && m.content.trim() !== "" && newer(m.id, cursor)) {
-              out.push({ id: m.id, text: m.content })
+            // 画像だけのメッセージ(本文なし)も1件として受ける。本文の空チェックだけだと黙って落ちる。
+            const images = m.author.id === owner ? imagesOf(m) : []
+            if (
+              cursor &&
+              m.author.id === owner &&
+              (m.content.trim() !== "" || images.length > 0) &&
+              newer(m.id, cursor)
+            ) {
+              out.push({ id: m.id, text: m.content, ...(images.length > 0 ? { images } : {}) })
               locations[m.id] = ch
               // 一番新しい自由文のチャンネルを覚える。リアクションでは動かさない
               // (押すのは前に出したものへの返事で、話しかけられたのとは違う)。

@@ -22,6 +22,8 @@ export interface AppConfig {
     readonly db: string
     readonly backups: string
     readonly runs: string
+    /** 受け取った画像の実体。DB には sha256 の参照だけを置く。 */
+    readonly media: string
     readonly runCache: string
     readonly exportRoot: string
     readonly transcriptRoot: string
@@ -226,6 +228,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
       dataDir,
       db: absolutePath(root, text(env, "FAMULUS_DB", resolve(dataDir, "famulus.db")), true),
       backups: absolutePath(root, text(env, "FAMULUS_BACKUPS", resolve(dataDir, "backups"))),
+      media: absolutePath(root, text(env, "FAMULUS_MEDIA", resolve(dataDir, "media"))),
       runs: absolutePath(root, text(env, "FAMULUS_RUNS", resolve(homedir(), ".famulus/runs"))),
       runCache: absolutePath(root, text(env, "FAMULUS_RUN_CACHE", resolve(dataDir, "run-cache"))),
       exportRoot: absolutePath(root, text(env, "FAMULUS_EXPORT_ROOT", resolve(dataDir, "claude-export"))),
