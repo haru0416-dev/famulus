@@ -8,16 +8,18 @@
  * 登録は明示選択のみ(routing は plan 011 Phase B で、曖昧な実例が出てから)。
  * スロットは method / presentation の2つまで。exclusive な Skill は単独で走る。
  */
+import { appConfig } from "../core/config.ts"
 import { canonicalJson, digestOf, type GenerationRef } from "../model/kernel-spec.ts"
 import type { AgentProfileId } from "../model/profiles.ts"
 import { DRAFTING } from "./drafting.ts"
 import { DEEP_TEXT, WIDE_TEMPLATE } from "./explore.ts"
+import { type ImportedSkill, importSkillsFrom } from "./skill-import.ts"
 
 export type SkillSlot = "method" | "presentation"
 export type SkillId = "research-wide" | "research-deep" | "draft-presentation"
 
 export interface SkillDefinition {
-  readonly id: SkillId
+  readonly id: string
   readonly slot: SkillSlot
   /** exclusive は単独で走る。orthogonal だけが method+presentation の対になれる(ホスト分類)。 */
   readonly composition: "exclusive" | "orthogonal"
@@ -54,8 +56,66 @@ export const SKILLS: Record<SkillId, SkillDefinition> = {
   },
 }
 
-export const skillRef = (id: SkillId): GenerationRef => {
-  const skill = SKILLS[id]
+/**
+ * 取り込み skill(~/.claude/skills)のホスト側分類。**ここに無い名前は読み込まれても使えない**
+ * (deny by default — SKILL.md 自身の記述で権限やスロットは決まらない)。
+ * 分類は世代固定の対象: 変えたら SkillPlan の hash も変わる。
+ */
+export const IMPORTED_CLASSIFICATION: Record<
+  string,
+  { slot: SkillSlot; composition: "exclusive" | "orthogonal"; allowedProfiles: readonly AgentProfileId[] }
+> = {
+  // 書く規律の正本。DRAFTING(famulus 固有の材料規律)と重ねる前提なので orthogonal。
+  "jissoku-writing": {
+    slot: "presentation",
+    composition: "orthogonal",
+    allowedProfiles: ["interactive-parent", "autonomous-parent"],
+  },
+  // 調査の視点在庫。単独で使う。
+  "probspace-moves": {
+    slot: "method",
+    composition: "exclusive",
+    allowedProfiles: ["interactive-parent", "autonomous-parent"],
+  },
+  // 計測の規律。単独で使う。
+  "measuring-optimizations": {
+    slot: "method",
+    composition: "exclusive",
+    allowedProfiles: ["interactive-parent", "autonomous-parent"],
+  },
+}
+
+/** 起動時に1回読む(SOUL と同じ扱い — 正本を書き換えたらプロセス再起動で反映)。 */
+let importedCache: { root: string; result: ReturnType<typeof importSkillsFrom> } | undefined
+
+export function importedSkills(root: string = appConfig().paths.skills): ReturnType<typeof importSkillsFrom> {
+  if (importedCache?.root !== root) importedCache = { root, result: importSkillsFrom(root) }
+  return importedCache.result
+}
+
+const importedDefinition = (id: string, root?: string): SkillDefinition | undefined => {
+  const classification = IMPORTED_CLASSIFICATION[id]
+  if (!classification) return undefined
+  const found: ImportedSkill | undefined = importedSkills(root).skills.find((s) => s.name === id)
+  if (!found) return undefined
+  return {
+    id,
+    slot: classification.slot,
+    composition: classification.composition,
+    summary: found.description.slice(0, 120),
+    instructions: found.body,
+    allowedProfiles: classification.allowedProfiles,
+  }
+}
+
+/** 組み込みと取り込みを同じ型に揃えて引く(plan 011: 両者は同じ内部型・同じ実行経路)。 */
+export function resolveSkill(id: string, root?: string): SkillDefinition | undefined {
+  return (SKILLS as Record<string, SkillDefinition>)[id] ?? importedDefinition(id, root)
+}
+
+export const skillRef = (id: string, root?: string): GenerationRef => {
+  const skill = resolveSkill(id, root)
+  if (!skill) throw new SkillPlanRejected(`${id} という skill は登録に無い(未分類の取り込みは使えない)`)
   const snapshot = canonicalJson({
     formatVersion: 1,
     id: skill.id,
@@ -99,12 +159,13 @@ export class SkillPlanRejected extends Error {
  */
 export function compileSkillPlan(input: {
   readonly profile: AgentProfileId
-  readonly method?: SkillId
-  readonly presentation?: SkillId
+  readonly method?: string
+  readonly presentation?: string
 }): SkillPlan {
-  const pick = (id: SkillId | undefined, slot: SkillSlot): SkillDefinition | undefined => {
+  const pick = (id: string | undefined, slot: SkillSlot): SkillDefinition | undefined => {
     if (id === undefined) return undefined
-    const skill = SKILLS[id]
+    const skill = resolveSkill(id)
+    if (!skill) throw new SkillPlanRejected(`${id} という skill は登録に無い(未分類の取り込みは使えない)`)
     if (skill.slot !== slot) throw new SkillPlanRejected(`${id} は ${slot} スロットの Skill ではない`)
     if (!skill.allowedProfiles.includes(input.profile)) {
       throw new SkillPlanRejected(`${id} は profile ${input.profile} に許可されていない`)
@@ -155,8 +216,10 @@ export function renderSkillOverlay(
 ): string {
   const render = (ref: GenerationRef | undefined): string | undefined => {
     if (!ref) return undefined
-    const id = ref.id.replace(/^skill:/, "") as SkillId
-    let text = SKILLS[id].instructions
+    const id = ref.id.replace(/^skill:/, "")
+    const skill = resolveSkill(id)
+    if (!skill) throw new SkillPlanRejected(`${id} という skill は登録に無い(正本が消えたか未分類)`)
+    let text = skill.instructions
     for (const [key, value] of Object.entries(params)) {
       text = text.replaceAll(`{${key}}`, String(value))
     }

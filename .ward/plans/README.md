@@ -109,3 +109,16 @@ P0 through P2 means plans 001 through 006 plus cross-cutting plans 009 and 011 P
   Phase A の保持要件を満たしており、lease 表は最初の消費者(coordinator / 006)と同時にしか
   足せない(README の global stop 「読み書き手なしの新テーブルを作らない」)。
 - 011 Phase B(plugin Skill / router / observer)は 007 / 010 待ちのまま。
+
+## Addendum 2026-08-17 (3) — plan 010 の前倒し分(skill の一本化)
+
+- SKILL.md の no-exec 取り込みを実装(README の前倒し許可「validator は 001 後に可」+
+  「skills 取り込みは Phase A registry が前提」→ 011A 完了により解禁)。
+- 正本は `~/.claude/skills`(`OPEN_ZERO_SKILLS`)。Claude Code と famulus が同じファイルを読む。
+- ホスト側分類(deny by default): jissoku-writing=presentation / probspace-moves・
+  measuring-optimizations=method。未分類は読み込むが使えない。symlink の root 外脱出は拒否
+  (実環境で plugin 由来の3件が実際に弾かれることを確認)。
+- 世代は内容 digest で固定 — 正本の書き換えは SkillPlan hash の変化として見える。
+- 最初の消費者: 下書きの日の cycle プロンプト(jissoku-writing を DRAFTING に重ねる)。
+- market の skill(49万件)は入れない。Agent Plugins の package 取り込み(plugin.json /
+  mcp.json / 出所検証)は plan 010 本体のまま。

@@ -99,6 +99,7 @@ const USAGE = `oz — open-zero の承認 CLI
   oz selfdev [--fresh]     自分のソースの clone を workspace に置き、中でゲートが通るまで確かめる
                            --fresh は clone ごと取り直す(中で直しかけていたものは消える)
   oz grok-login            SuperGrok OAuth の device flow を通す(トークンを保存)
+  oz skills                skill の一覧(組み込み・取り込み・未分類・拒否)と正本の場所
   oz intake --dry [n]      過去の会話を選別だけして圧縮率を見る(モデルを呼ばない)
   oz intake [n]            未取り込みの会話を古い順に n 件(既定 10)DB へ入れる
                            取り込み元は Claude Code のログと Claude.ai の書き出しの両方
@@ -596,6 +597,27 @@ const main = async (): Promise<void> => {
       } finally {
         await migrationRuntime.dispose()
       }
+    }
+    if (command === "skills") {
+      if (args.length !== 0) throw new Error("引数は取らない: oz skills")
+      const { IMPORTED_CLASSIFICATION, importedSkills, SKILLS } = await import("./agent/skills.ts")
+      const lines: string[] = [`正本: ${config.paths.skills}`, "", "組み込み:"]
+      for (const skill of Object.values(SKILLS)) {
+        lines.push(`  ${skill.id}  [${skill.slot}/${skill.composition}]  ${skill.summary}`)
+      }
+      const imported = importedSkills(config.paths.skills)
+      lines.push("", "取り込み(分類済み = 使える):")
+      for (const skill of imported.skills) {
+        const cls = IMPORTED_CLASSIFICATION[skill.name]
+        lines.push(
+          cls
+            ? `  ${skill.name}  [${cls.slot}/${cls.composition}]  ${Math.round(skill.bytes / 1024)}KB  ${skill.digest.slice(0, 8)}`
+            : `  ${skill.name}  [未分類 — 読み込むが使えない]  ${Math.round(skill.bytes / 1024)}KB`,
+        )
+      }
+      for (const r of imported.rejected) lines.push(`  拒否: ${r.path} — ${r.reason}`)
+      console.log(lines.join("\n"))
+      return
     }
     if (command === "grok-login") {
       // device flow。URL とコードを出して、手元のブラウザでの承認を待つ。

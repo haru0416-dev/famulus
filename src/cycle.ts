@@ -21,6 +21,7 @@ import * as Effect from "effect/Effect"
 import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
+import { compileSkillPlan, renderSkillOverlay } from "./agent/skills.ts"
 import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
 import { configureApp } from "./core/config.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
@@ -52,6 +53,16 @@ const CONFIG = configureApp()
  * その内側に収まる範囲で伸ばす。個々のコンテナ走行は180秒で先に切り、締め処理の時間を残す。
  */
 const TIMEOUT_MS = CONFIG.cycle.timeoutMs
+
+/** 共有 skill の書く規律。分類・正本のどちらが欠けても下書き自体は止めない。 */
+function jissokuOverlay(): string | undefined {
+  try {
+    const plan = compileSkillPlan({ profile: "autonomous-parent", presentation: "jissoku-writing" })
+    return renderSkillOverlay(plan)
+  } catch {
+    return undefined
+  }
+}
 
 const short = (id: string) => id.slice(0, 8)
 /** cycle が使うモデル。既定は対話と同じ — 自走のほうを安くしたいときだけ差し替える。 */
@@ -217,6 +228,10 @@ function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Works
         "引いて何も出てこなければ `draft` を呼ばず、「書ける実測が無い」と一行書いて終える。",
         "",
         DRAFTING,
+        // 書く規律の正本は共有 skill(~/.claude/skills/jissoku-writing)。Haru が正本を
+        // 書き換えれば次の下書きの日から反映される(一本化)。読めない日は famulus 固有の
+        // DRAFTING だけで書く — 下書きを止めるほどの依存にはしない。
+        ...(jissokuOverlay() ? ["", jissokuOverlay() as string] : []),
       ].join("\n"),
     )
   }
