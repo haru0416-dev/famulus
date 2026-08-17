@@ -116,7 +116,8 @@ export async function runCursorTask(options: CursorRunOptions): Promise<CursorRu
         if (message.type === "tool_call") {
           if (message.status === "running") {
             toolCalls += 1
-            if (toolCalls > cfg.maxToolCalls) {
+            // 中断理由は最初の一因だけを記録する(cancel 後に stream が数件流れても上書きしない)
+            if (toolCalls > cfg.maxToolCalls && !aborted) {
               aborted = "doomloop-toolcalls"
               void run.cancel().catch(() => {})
             }
