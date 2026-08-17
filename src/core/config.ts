@@ -26,7 +26,10 @@ export interface AppConfig {
     readonly exportRoot: string
     readonly transcriptRoot: string
     readonly xaiAuth: string
-    /** 共有 skill(SKILL.md)の正本。vendor 中立の置き場を直接読む(Claude 側は symlink で同じ正本を読む)。 */
+    /**
+     * 共有 skill(SKILL.md)の正本。`~/.famulus`(famulus の家 — vendor の `~/.openclaw` と同型で、
+     * 属するのは Haru 自身のエージェント)を直接読む。Claude 側は symlink で同じ正本を読む。
+     */
     readonly skills: string
   }
   readonly timeZone: string
@@ -208,7 +211,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
       dataDir,
       db: absolutePath(root, text(env, "OPEN_ZERO_DB", resolve(dataDir, "open-zero.db")), true),
       backups: absolutePath(root, text(env, "OPEN_ZERO_BACKUPS", resolve(dataDir, "backups"))),
-      runs: absolutePath(root, text(env, "OPEN_ZERO_RUNS", resolve(dataDir, "runs"))),
+      runs: absolutePath(root, text(env, "OPEN_ZERO_RUNS", resolve(homedir(), ".famulus/runs"))),
       runCache: absolutePath(root, text(env, "OPEN_ZERO_RUN_CACHE", resolve(dataDir, "run-cache"))),
       exportRoot: absolutePath(root, text(env, "OPEN_ZERO_EXPORT_ROOT", resolve(dataDir, "claude-export"))),
       transcriptRoot: absolutePath(
@@ -216,7 +219,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
         text(env, "OPEN_ZERO_TRANSCRIPT_ROOT", resolve(homedir(), ".claude/projects")),
       ),
       xaiAuth: absolutePath(root, text(env, "OPEN_ZERO_XAI_AUTH", resolve(dataDir, "xai-auth.json"))),
-      skills: absolutePath(root, text(env, "OPEN_ZERO_SKILLS", resolve(homedir(), "Project/skills"))),
+      skills: absolutePath(root, text(env, "OPEN_ZERO_SKILLS", resolve(homedir(), ".famulus/skills"))),
     },
     timeZone,
     models,
