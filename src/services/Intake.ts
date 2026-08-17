@@ -2,7 +2,7 @@
  * DB の取り込み入口。ユーザーが過去に話した記録を開いて、残す価値のある分だけを DB に保存する。
  *
  * 引く先は2つ — Claude Code の作業ログ(`~/.claude/projects` の JSONL)と、
- * Claude.ai の書き出し(`.data/claude-export`)。
+ * Claude.ai の書き出し(config の exportRoot に展開した JSON)。
  *
  * どちらの入口でも、人の言葉は全体のごく一部しか占めない。残りは道具の入出力と応答の地の文。
  * 削るのは比率ではなく、何が人の判断で何が作業の残骸かの境界。
@@ -265,7 +265,8 @@ function readWebChats(): Read[] {
 }
 
 function buildWebChats(path: string): Read[] {
-  const list = readJson(path)
+  // `readJson` を使うと `chats:` と `json:` の2エントリで同じ parse 結果を持つことになる
+  const list = JSON.parse(readFileSync(path, "utf8")) as unknown
   if (!Array.isArray(list)) return []
 
   const out: Read[] = []
@@ -332,7 +333,7 @@ function readDesignFile(path: string): Read | undefined {
 function buildDesignFile(path: string): Read | undefined {
   let j: Record<string, unknown>
   try {
-    j = readJson(path) as Record<string, unknown>
+    j = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>
   } catch {
     return undefined
   }
@@ -399,7 +400,7 @@ function compress(turns: readonly Turn[]): string {
     if (t.who === "owner") {
       folded.push(t)
     } else if (folded.length > 0 && folded[folded.length - 1]?.who === "agent") {
-      folded[folded.length - 1] = t // 直前の途中経過を答えで置き換える
+      folded[folded.length - 1] = t
     } else {
       folded.push(t)
     }
@@ -544,7 +545,6 @@ const HEADER_INSTRUCTION = `これはユーザー(Haru)についての覚え書�
   英語の語に対応する日本語を選ぶ、ということです(例: job-searching → 転職)。
   **本文に書かれていないことは足さないでください。**`
 
-/** 引用を要求する部分は両方で使うので、下の2つで共有する。 */
 const RULES = `- 素材のうち \`owner:\` の行だけがユーザーの言葉です。\`agent:\` の行は文脈にすぎません。
 - **decisions・preferences・corrections のどの項目にも、根拠になった \`owner:\` 行からの引用を
   said に入れてください。** 引用はユーザーが実際に打った文字をそのまま写すもので、
@@ -796,7 +796,7 @@ const makeIntake = () =>
         items.push({ ref: `memory:${p}`, label: p, body, at: iso(f.updated_at) })
       }
       for (const s of sections(String(first.conversations_memory ?? ""))) {
-        items.push({ ref: `memory:${s.title}`, label: s.title, body: s.body, at: iso(undefined) })
+        items.push({ ref: `memory:${s.title}`, label: s.title, body: s.body, at: nowIso() })
       }
 
       const runner = yield* Runner

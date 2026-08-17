@@ -68,7 +68,7 @@ const BRANCH_OBJECT = v.object({
   ),
 })
 
-export const BRANCH_SCHEMA = rs(BRANCH_OBJECT)
+const BRANCH_SCHEMA = rs(BRANCH_OBJECT)
 export type BranchOutput = v.InferOutput<typeof BRANCH_OBJECT>
 
 /**
@@ -113,10 +113,6 @@ export const DEEP_TEXT = [
   "検索の索引で止まらない — 一次資料を開けなかったら、その旨を limitations に書いて未確認として返す。",
   "対象の周辺に話を広げない。",
 ].join("\n")
-
-export function deepInstructions(): string {
-  return DEEP_TEXT
-}
 
 export interface Snapshot {
   readonly url: string
@@ -197,7 +193,7 @@ export interface BranchDeps {
 }
 
 /** 分岐1本を実行する。失敗しても投げない — 空振りと同じく1件の結果として返す。 */
-export async function runBranch(
+async function runBranch(
   deps: BranchDeps,
   seed: string,
   transform: ExploreTransform,

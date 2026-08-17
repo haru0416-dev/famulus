@@ -1,6 +1,5 @@
 /**
  * 統治の検査。ここが通らないなら移植は失敗という性質だけを並べる。
- *
  */
 
 import assert from "node:assert/strict"

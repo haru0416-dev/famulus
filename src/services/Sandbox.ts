@@ -19,7 +19,7 @@ import { timeZone } from "../core/time.ts"
  * 全走行へ影響するためイメージは小さく保つ。ここに無い実体が要る走行は、
  * その走行の中で取る(`fam selfdev` が bun を npx で引くのがそれ — src/core/selfdev.ts)。
  *
- * **札を上げたら、走っているホストでは古いイメージが残る。**`ensureImage` は名前で存在を見るので、
+ * **RUN_IMAGE の版を上げたら、走っているホストでは古いイメージが残る。**`ensureImage` は名前で存在を見るので、
  * 上げた回だけ組み直しが1回入る。古いほうは自動では消えない。
  */
 const RUN_IMAGE = "famulus-run:1"
@@ -60,14 +60,14 @@ export interface RunResult {
   readonly elapsedMs: number
 }
 
-/** 走行の置き場。`.data/` の下に置くので gitignore 済みで、DB と同じく外には出ない。 */
+/** 走行の置き場(config の runs、既定 `~/.famulus/runs`)。repo の外 — git には載らない。 */
 export const runsRoot = (): string => appConfig().paths.runs
 
 /**
  * 取得したパッケージの共有キャッシュ。workspace の外に置く。
  *
  * `HOME=/work` のため、既定のキャッシュは workspace ごとに重複する。
- * `runsRoot()` の下に置いてはいけない。`sweepRuns` は `.data/runs` の直下を全部
+ * `runsRoot()` の下に置いてはいけない。`sweepRuns` は runsRoot() の直下を全部
  * workspace として数えるので、キャッシュが workspace の一覧に出て、14日で消される側に回る。
  */
 export const cacheRoot = (): string => appConfig().paths.runCache

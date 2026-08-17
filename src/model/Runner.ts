@@ -32,7 +32,7 @@ export type Role = "structurer" | "scout" | "reviewer"
  * grok への切り替え(2026-08-17、GPT 解約)後の原文一致率はまだ検証していない。
  */
 export const ROLE_MODEL: Record<Role, string> = {
-  // 締めの keeper(keeper)。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
+  // 締めの keeper。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
   // (keepGrounded)。scout と同じ性質で対話ごとに通るため、処理量を抑えたmodelに置く。
   structurer: "grok-4.3",
   // 下書きの精査(assistant の draft)。外に出る前の最後の検査。ADR 0031 の「書いた側と別の系列」は
@@ -291,13 +291,7 @@ export const RunnerLive = Layer.effect(
         Effect.map((r) => ({
           text: r.text,
           ...(r.structured !== undefined ? { structured: r.structured } : {}),
-          usage: {
-            inTok: r.usage.inTok,
-            outTok: r.usage.outTok,
-            cacheRead: r.usage.cacheRead,
-            cacheWrite: r.usage.cacheWrite,
-            notionalUsd: r.usage.notionalUsd,
-          },
+          usage: r.usage,
           ...(r.quota ? { quota: r.quota } : {}),
         })),
       ),

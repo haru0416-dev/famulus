@@ -63,7 +63,7 @@ export const runtime = (): AppRuntime => {
 const REFUSAL_TAGS = new Set(["Halt", "QuotaCooldown", "DailyRunLimit", "DeliveryRejected"])
 
 /** 拒否を人間に読める Error にして投げる。 */
-export class RefusedError extends Error {
+class RefusedError extends Error {
   readonly refusal: Refusal
   constructor(refusal: Refusal) {
     super(describeRefusal(refusal))

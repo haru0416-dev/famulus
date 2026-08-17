@@ -22,7 +22,7 @@ import { rs } from "../model/schema.ts"
  */
 export const DRAFT_MAX = 1200
 const DRAFT_MIN = 400
-export const DRAFT_TARGET = `${DRAFT_MIN}〜${DRAFT_MAX}字`
+const DRAFT_TARGET = `${DRAFT_MIN}〜${DRAFT_MAX}字`
 
 /** 連絡先の形。伏せる余地が無いもの — 一度出れば取り消せない。 */
 const CONTACT: readonly RegExp[] = [

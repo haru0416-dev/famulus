@@ -70,6 +70,62 @@ const INSERT_CLAIM =
 const INSERT_ARTIFACT_EVIDENCE = `INSERT INTO research_claim_evidence
   (id,claim_id,artifact_id,polarity,quote,location,added_at) VALUES (?,?,?,?,?,?,?)`
 
+/** snapshot 1件を dossier に固定する。取得可否の判定(捨てるか投げるか)は呼ぶ側が持つ。 */
+const insertSnapshot = (
+  tx: DbTx,
+  dossierId: string,
+  snapshot: { url: string; content: string; status: number },
+  meta: Record<string, unknown>,
+  at: string,
+): { url: string; content: string; status: number; id: string } => {
+  const id = randomUUID()
+  tx.run(
+    INSERT_SNAPSHOT,
+    id,
+    dossierId,
+    "text/plain",
+    snapshot.content,
+    sha256(snapshot.content),
+    snapshot.url,
+    at,
+    JSON.stringify(meta),
+    null,
+    at,
+  )
+  return { ...snapshot, id }
+}
+
+/**
+ * claim 1件を evidence ごと固定し、support/refute の集計で状態を確定する。
+ * quote は取得 snapshot に実在すること — web / explore 共通の不変量。
+ */
+const insertClaimWithEvidence = (
+  tx: DbTx,
+  dossierId: string,
+  statement: string,
+  kind: ClaimKind,
+  evidence: readonly { url: string; quote: string; polarity: EvidencePolarity }[],
+  artifacts: readonly { url: string; content: string; id: string }[],
+  at: string,
+): { claimId: string; state: Exclude<ClaimState, "open"> } => {
+  const claimId = randomUUID()
+  tx.run(INSERT_CLAIM, claimId, dossierId, statement, kind, at)
+  let support = 0
+  let refute = 0
+  for (const item of evidence) {
+    if (item.quote.trim().length === 0) throw new Error("Research evidence quote cannot be empty")
+    const artifact = artifacts.find((c) => c.url === item.url && c.content.includes(item.quote))
+    if (!artifact) throw new Error(`Research quote is not present in fetched snapshot: ${item.url}`)
+    tx.run(INSERT_ARTIFACT_EVIDENCE, randomUUID(), claimId, artifact.id, item.polarity, item.quote, null, at)
+    if (item.polarity === "support") support += 1
+    if (item.polarity === "refute") refute += 1
+  }
+  const state: Exclude<ClaimState, "open"> =
+    support > 0 && refute === 0 ? "supported" : refute > 0 && support === 0 ? "refuted" : "inconclusive"
+  tx.run("UPDATE research_claims SET state=?,resolved_at=? WHERE id=?", state, at, claimId)
+  return { claimId, state }
+}
+
 const makeResearch = () =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -402,56 +458,20 @@ const makeResearch = () =>
           ) {
             throw new Error(`Research snapshot was not fetched successfully: ${snapshot.url}`)
           }
-          const id = randomUUID()
-          tx.run(
-            INSERT_SNAPSHOT,
-            id,
-            dossierId,
-            "text/plain",
-            snapshot.content,
-            sha256(snapshot.content),
-            snapshot.url,
-            at,
-            JSON.stringify({ url: snapshot.url, status: snapshot.status }),
-            null,
-            at,
-          )
-          return { ...snapshot, id }
+          return insertSnapshot(tx, dossierId, snapshot, { url: snapshot.url, status: snapshot.status }, at)
         })
         let conclusionId: string | undefined
         for (const item of input.claims) {
           if (item.evidence.length === 0) throw new Error("Research claims require evidence")
-          const claimId = randomUUID()
-          tx.run(INSERT_CLAIM, claimId, dossierId, item.statement.trim(), item.kind, at)
-          let support = 0
-          let refute = 0
-          for (const evidence of item.evidence) {
-            if (evidence.quote.trim().length === 0) throw new Error("Research evidence quote cannot be empty")
-            const artifact = artifacts.find(
-              (candidate) => candidate.url === evidence.url && candidate.content.includes(evidence.quote),
-            )
-            if (!artifact)
-              throw new Error(`Research quote is not present in fetched snapshot: ${evidence.url}`)
-            tx.run(
-              INSERT_ARTIFACT_EVIDENCE,
-              randomUUID(),
-              claimId,
-              artifact.id,
-              evidence.polarity,
-              evidence.quote,
-              null,
-              at,
-            )
-            if (evidence.polarity === "support") support += 1
-            if (evidence.polarity === "refute") refute += 1
-          }
-          const state: Exclude<ClaimState, "open"> =
-            support > 0 && refute === 0
-              ? "supported"
-              : refute > 0 && support === 0
-                ? "refuted"
-                : "inconclusive"
-          tx.run("UPDATE research_claims SET state=?,resolved_at=? WHERE id=?", state, at, claimId)
+          const { claimId, state } = insertClaimWithEvidence(
+            tx,
+            dossierId,
+            item.statement.trim(),
+            item.kind,
+            item.evidence,
+            artifacts,
+            at,
+          )
           if (item.kind === "conclusion" && state === "supported") {
             if (conclusionId) throw new Error("Research dossier must have at most one supported conclusion")
             conclusionId = claimId
@@ -523,23 +543,15 @@ const makeResearch = () =>
             .filter(
               (s) => Number.isInteger(s.status) && s.status >= 200 && s.status < 300 && s.content.length > 0,
             )
-            .map((snapshot) => {
-              const id = randomUUID()
-              tx.run(
-                INSERT_SNAPSHOT,
-                id,
+            .map((snapshot) =>
+              insertSnapshot(
+                tx,
                 dossierId,
-                "text/plain",
-                snapshot.content,
-                sha256(snapshot.content),
-                snapshot.url,
+                snapshot,
+                { url: snapshot.url, status: snapshot.status, transform: branch.transform },
                 at,
-                JSON.stringify({ url: snapshot.url, status: snapshot.status, transform: branch.transform }),
-                null,
-                at,
-              )
-              return { ...snapshot, id }
-            })
+              ),
+            )
 
           note(
             branch.failed
@@ -552,45 +564,15 @@ const makeResearch = () =>
             limitations.push(`${branch.transform}: ${branch.limitations.trim()}`)
 
           for (const item of branch.claims) {
-            const claimId = randomUUID()
-            tx.run(
-              INSERT_CLAIM,
-              claimId,
+            insertClaimWithEvidence(
+              tx,
               dossierId,
               `[${branch.transform}] ${item.statement.trim()}`,
               item.kind,
+              item.evidence,
+              artifacts,
               at,
             )
-            let support = 0
-            let refute = 0
-            for (const evidence of item.evidence) {
-              if (evidence.quote.trim().length === 0)
-                throw new Error("Research evidence quote cannot be empty")
-              const artifact = artifacts.find(
-                (candidate) => candidate.url === evidence.url && candidate.content.includes(evidence.quote),
-              )
-              if (!artifact)
-                throw new Error(`Research quote is not present in fetched snapshot: ${evidence.url}`)
-              tx.run(
-                INSERT_ARTIFACT_EVIDENCE,
-                randomUUID(),
-                claimId,
-                artifact.id,
-                evidence.polarity,
-                evidence.quote,
-                null,
-                at,
-              )
-              if (evidence.polarity === "support") support += 1
-              if (evidence.polarity === "refute") refute += 1
-            }
-            const state =
-              support > 0 && refute === 0
-                ? "supported"
-                : refute > 0 && support === 0
-                  ? "refuted"
-                  : "inconclusive"
-            tx.run("UPDATE research_claims SET state=?,resolved_at=? WHERE id=?", state, at, claimId)
           }
         }
 

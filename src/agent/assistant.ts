@@ -9,10 +9,7 @@
  *                 隔離したコンテナの中で完結する `shell` はこの制限に掛からない。
  *   respond()   … 今答えている入力そのものを observe イベントとして DB に落としてから走る。
  *
- * 道具は `createAssistant()` が1ターンぶんの状態をクロージャで保持して作る。前の形はフックで登録していて、
- * 1回のターンに固有のもの(今の入力の event id)をモジュール変数に置くしかなかった。
- *
- * モデル呼び出しは全て SuperGrok OAuth 経由の Grok を使う。
+ * 道具は `createAssistant()` が1ターンぶんの状態をクロージャで保持して作る。
  */
 
 import { basename } from "node:path"
@@ -297,27 +294,26 @@ export const fetchTool = (fetched?: FetchedEvidence[]) =>
     toModelOutput: untrustedToolOutput("web", "page"),
   })
 
-export const RESEARCH_SCHEMA = rs(
-  v.object({
-    limitations: v.string(),
-    claims: v.array(
-      v.object({
-        statement: v.string(),
-        kind: v.picklist(["observation", "hypothesis", "conclusion"]),
-        evidence: v.pipe(
-          v.array(
-            v.object({
-              url: v.string(),
-              quote: v.string(),
-              polarity: v.picklist(["support", "refute", "context"]),
-            }),
-          ),
-          v.minLength(1),
+const RESEARCH_OBJECT = v.object({
+  limitations: v.string(),
+  claims: v.array(
+    v.object({
+      statement: v.string(),
+      kind: v.picklist(["observation", "hypothesis", "conclusion"]),
+      evidence: v.pipe(
+        v.array(
+          v.object({
+            url: v.string(),
+            quote: v.string(),
+            polarity: v.picklist(["support", "refute", "context"]),
+          }),
         ),
-      }),
-    ),
-  }),
-)
+        v.minLength(1),
+      ),
+    }),
+  ),
+})
+export const RESEARCH_SCHEMA = rs(RESEARCH_OBJECT)
 
 /**
  * web を調べる役の指示。渡す道具は `search` と `fetch` の2つ。
@@ -360,22 +356,6 @@ const DIGGER = `検索役。DB を検索して、要る行を**原文のまま**
 - 見つけた行は [日時 層] ごと写す。**要約しない。** 固有名・日付・金額・引用は1文字も変えない。
 - 無かったら「無い」と書く。それ以上は書かない。埋めた分だけ嘘になる。
 - 解釈を足さない。何を意味するかは呼んだ側が決める。`
-
-/**
- * 委譲エージェントを1回走らせる。委譲側の道具は呼んだ側から見えない
- * (`search` / `fetch` は researcher の中にしか無い)。
- *
- * 道具の表を引数で受けずに組み立て済みのエージェントを受けるのは型の都合。SDK は道具の表から
- * `toolsContext` の要否を条件型で決めるので、表が型変数のままだとその条件が解けない。
- */
-async function delegate(
-  child: { generate: (o: { prompt: string; abortSignal?: AbortSignal }) => Promise<{ text: string }> },
-  task: string,
-  signal: AbortSignal | undefined,
-): Promise<string> {
-  const r = await child.generate({ prompt: task, ...(signal ? { abortSignal: signal } : {}) })
-  return r.text || "(委譲エージェントが何も書かずに返した)"
-}
 
 /** 委譲の結果契約。自由文で返る委譲(digger / explore の描画済み本文)に共通。 */
 const TEXT_CONTRACT = resultContractRef("delegate-text-v1", rs(v.string()))
@@ -585,27 +565,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
               instructions: `${RESEARCHER}${overlay}`,
               tools: gateTools({ search: searchTool(), fetch: fetchTool(fetched) }, gate),
               output: Output.object({
-                schema: vs(
-                  v.object({
-                    limitations: v.string(),
-                    claims: v.array(
-                      v.object({
-                        statement: v.string(),
-                        kind: v.picklist(["observation", "hypothesis", "conclusion"]),
-                        evidence: v.pipe(
-                          v.array(
-                            v.object({
-                              url: v.string(),
-                              quote: v.string(),
-                              polarity: v.picklist(["support", "refute", "context"]),
-                            }),
-                          ),
-                          v.minLength(1),
-                        ),
-                      }),
-                    ),
-                  }),
-                ),
+                schema: vs(RESEARCH_OBJECT),
                 name: "research_dossier",
                 description: "fetchで開いた資料だけに基づくclaimと引用",
               }),
@@ -650,18 +610,16 @@ function buildTools(state: TurnState, gate: ToolGate) {
         }),
       ),
       execute: async ({ task }, { abortSignal }) =>
-        delegationLoop(state, "digger", "digger", { task }, undefined, () =>
-          delegate(
-            new ToolLoopAgent({
-              model: governedModel(workModel()),
-              instructions: DIGGER,
-              tools: gateTools({ recall: recallTool(state) }, gate),
-              ...childOpts(8),
-            }),
-            task,
-            abortSignal,
-          ),
-        ),
+        delegationLoop(state, "digger", "digger", { task }, undefined, async () => {
+          const child = new ToolLoopAgent({
+            model: governedModel(workModel()),
+            instructions: DIGGER,
+            tools: gateTools({ recall: recallTool(state) }, gate),
+            ...childOpts(8),
+          })
+          const r = await child.generate({ prompt: task, ...(abortSignal ? { abortSignal } : {}) })
+          return r.text || "(委譲エージェントが何も書かずに返した)"
+        }),
       toModelOutput: untrustedToolOutput("delegate", "digger"),
     }),
 
@@ -1445,19 +1403,12 @@ function buildTools(state: TurnState, gate: ToolGate) {
             const ledger = yield* Ledger
             const gov = yield* Governance
             const t = yield* ledger.today()
-            // pool ごとに別のクールダウンを持つ。一括りにすると出来ることを取り違える。
-            const now = Date.now()
-            const states: string[] = []
-            for (const pool of [XAI_POOL]) {
-              const cd = yield* gov.quotaCooldown(pool, now)
-              states.push(
-                cd
-                  ? `${pool}: クールダウン中(${cd.window}、${new Date(cd.untilMs).toISOString()} まで)`
-                  : `${pool}: 利用可`,
-              )
-            }
+            const cd = yield* gov.quotaCooldown(XAI_POOL, Date.now())
+            const state = cd
+              ? `${XAI_POOL}: クールダウン中(${cd.window}、${new Date(cd.untilMs).toISOString()} まで)`
+              : `${XAI_POOL}: 利用可`
             // 入力は3列(素・キャッシュ読み・キャッシュ書き)の和。今日の run を全部足したもの。
-            return `${t.day}: run ${t.runs} 回 / 入力 ${t.inTok} tok・出力 ${t.outTok} tok / ${states.join(" / ")}`
+            return `${t.day}: run ${t.runs} 回 / 入力 ${t.inTok} tok・出力 ${t.outTok} tok / ${state}`
           }),
         ),
     }),
@@ -1518,7 +1469,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
     instructions: soulInstruction(),
     tools: buildTools(state, gate),
     stopWhen: stepCountIs(MAX_STEPS),
-    // CLI 1回が分単位なので、SDK 側の自動再試行は入れない。取り直しが要る場面
+    // CLI 1回が分単位なので、SDK 側の自動再試行は入れない。
     maxRetries: 0,
   })
 

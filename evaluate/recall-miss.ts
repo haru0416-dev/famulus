@@ -14,10 +14,12 @@
  * miss と数える(実在しなければ true negative として除外。「grok 移行」の誤判定を繰り返さない)。
  */
 import { execFileSync } from "node:child_process"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import * as Effect from "effect/Effect"
 import * as ManagedRuntime from "effect/ManagedRuntime"
-import { configureApp } from "../src/core/config.ts"
+import { appConfig, configureApp } from "../src/core/config.ts"
 import { loadEnv } from "../src/core/env.ts"
 import { nowIso } from "../src/core/time.ts"
 import { type AppServices, makeAppLayer } from "../src/runtime.ts"
@@ -26,7 +28,6 @@ import { Db, DbLive } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
 
 const OUT = new URL("../.ward/evals/recall/", import.meta.url).pathname
-const SCRATCH = "/tmp/claude-1000/-home-haru-Project-famulus/26059e56-b34f-483b-b348-88375ea485bb/scratchpad"
 
 type Category =
   | "exact"
@@ -144,8 +145,8 @@ async function partA() {
 
 async function partB() {
   // 実DBは複製に対して読む。走行中の cycle と足を踏み合わない。
-  const copy = `${SCRATCH}/recall-eval.db`
-  execFileSync("sqlite3", [`${process.cwd()}/.data/famulus.db`, `.backup ${copy}`])
+  const copy = join(mkdtempSync(join(tmpdir(), "recall-eval-")), "recall-eval.db")
+  execFileSync("sqlite3", [appConfig().paths.db, `.backup ${copy}`])
   const stub = RunnerStub([{ text: "" }])
   const rt = ManagedRuntime.make(makeAppLayer(DbLive(copy), stub.layer))
   const run = <A, E>(e: Effect.Effect<A, E, AppServices>) => rt.runPromise(e)

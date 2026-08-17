@@ -9,6 +9,7 @@
 import assert from "node:assert/strict"
 import fc from "fast-check"
 import { test, vi } from "vitest"
+import { withFetch } from "./helpers.ts"
 
 // 名前解決は外に出る。ここは止める条件の検査なので、解決そのものは差し替えて
 // ネットワークから切り離す(src/services/Web.ts の denyReason が node:dns/promises を使う)。
@@ -183,76 +184,74 @@ test("そっくりなホスト名を本物と取り違えない", () => {
 
 test("同じ URL を続けて開いたら取りに行かず「さっき開いた」と返す", async () => {
   // 実測: 1回の対話で外へ出た 18 回のうち 10 回が同じ registry のページだった。
-  const originalFetch = globalThis.fetch
   let hits = 0
-  globalThis.fetch = (async () => {
-    hits++
-    return new Response("<html><body>本文</body></html>", {
-      status: 200,
-      headers: { "content-type": "text/html; charset=utf-8" },
-    })
-  }) as unknown as typeof fetch
-  try {
-    const url = `https://example.com/memo-${Math.random().toString(36).slice(2)}`
-    const t0 = 1_000_000
-    const a = await fetchPage(url, { nowMs: t0 })
-    const b = await fetchPage(url, { nowMs: t0 + 3_000 })
-    assert.equal(hits, 1, "2回目は取りに行かない")
-    assert.equal(b.text, a.text)
-    assert.match(b.note ?? "", /3 秒前にも開いた/)
-    assert.equal(a.note, undefined, "1回目には付けない")
+  await withFetch(
+    async () => {
+      hits++
+      return new Response("<html><body>本文</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      })
+    },
+    async () => {
+      const url = `https://example.com/memo-${Math.random().toString(36).slice(2)}`
+      const t0 = 1_000_000
+      const a = await fetchPage(url, { nowMs: t0 })
+      const b = await fetchPage(url, { nowMs: t0 + 3_000 })
+      assert.equal(hits, 1, "2回目は取りに行かない")
+      assert.equal(b.text, a.text)
+      assert.match(b.note ?? "", /3 秒前にも開いた/)
+      assert.equal(a.note, undefined, "1回目には付けない")
 
-    // 期限が切れたら取り直す。古いページを永遠に返し続けない。
-    const c = await fetchPage(url, { nowMs: t0 + 6 * 60_000 })
-    assert.equal(hits, 2)
-    assert.equal(c.note, undefined)
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+      // 期限が切れたら取り直す。古いページを永遠に返し続けない。
+      const c = await fetchPage(url, { nowMs: t0 + 6 * 60_000 })
+      assert.equal(hits, 2)
+      assert.equal(c.note, undefined)
+    },
+  )
 })
 
 test("続きを読むのに取り直さない(全文を覚えて切り出す)", async () => {
   // 実測: 「effect の最新安定版と公開日」1問で外へ出た 10 回が全部
   // https://registry.npmjs.org/effect だった。12,000字に収まらない JSON を offset 違いで
   // 読み進めるたび、頭から取り直していた。
-  const originalFetch = globalThis.fetch
   let hits = 0
   const body = "あ".repeat(30_000)
-  globalThis.fetch = (async () => {
-    hits++
-    return new Response(body, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } })
-  }) as unknown as typeof fetch
-  try {
-    const url = `https://example.com/long-${Math.random().toString(36).slice(2)}`
-    const t0 = 2_000_000
-    const p1 = await fetchPage(url, { nowMs: t0 })
-    assert.equal(p1.text.length, 12_000)
-    assert.equal(p1.nextOffset, 12_000)
-    assert.equal(p1.truncated, true)
+  await withFetch(
+    async () => {
+      hits++
+      return new Response(body, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } })
+    },
+    async () => {
+      const url = `https://example.com/long-${Math.random().toString(36).slice(2)}`
+      const t0 = 2_000_000
+      const p1 = await fetchPage(url, { nowMs: t0 })
+      assert.equal(p1.text.length, 12_000)
+      assert.equal(p1.nextOffset, 12_000)
+      assert.equal(p1.truncated, true)
 
-    const p2 = await fetchPage(url, { offset: p1.nextOffset ?? 0, nowMs: t0 + 1_000 })
-    assert.equal(hits, 1, "続きは取りに行かない")
-    assert.equal(p2.text, body.slice(12_000, 24_000))
-    assert.doesNotMatch(p2.note ?? "", /さっき|秒前/, "順に読み進めているだけなら咎めない")
+      const p2 = await fetchPage(url, { offset: p1.nextOffset ?? 0, nowMs: t0 + 1_000 })
+      assert.equal(hits, 1, "続きは取りに行かない")
+      assert.equal(p2.text, body.slice(12_000, 24_000))
+      assert.doesNotMatch(p2.note ?? "", /さっき|秒前/, "順に読み進めているだけなら咎めない")
 
-    const p3 = await fetchPage(url, { offset: p2.nextOffset ?? 0, nowMs: t0 + 2_000 })
-    assert.equal(hits, 1)
-    assert.equal(p3.text, body.slice(24_000))
-    assert.equal(p3.nextOffset, undefined)
-    assert.equal(p3.truncated, false)
+      const p3 = await fetchPage(url, { offset: p2.nextOffset ?? 0, nowMs: t0 + 2_000 })
+      assert.equal(hits, 1)
+      assert.equal(p3.text, body.slice(24_000))
+      assert.equal(p3.nextOffset, undefined)
+      assert.equal(p3.truncated, false)
 
-    // 末尾より先を求められたら、黙って空を返さず「先は無い」と言う。
-    const past = await fetchPage(url, { offset: 60_000, nowMs: t0 + 3_000 })
-    assert.equal(past.text, "")
-    assert.match(past.note ?? "", /先は無い/)
+      // 末尾より先を求められたら、黙って空を返さず「先は無い」と言う。
+      const past = await fetchPage(url, { offset: 60_000, nowMs: t0 + 3_000 })
+      assert.equal(past.text, "")
+      assert.match(past.note ?? "", /先は無い/)
 
-    // 同じ範囲をもう一度求めたときだけ「さっき開いた」。
-    const again = await fetchPage(url, { offset: 12_000, nowMs: t0 + 4_000 })
-    assert.equal(hits, 1)
-    assert.match(again.note ?? "", /3 秒前にも開いた/)
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+      // 同じ範囲をもう一度求めたときだけ「さっき開いた」。
+      const again = await fetchPage(url, { offset: 12_000, nowMs: t0 + 4_000 })
+      assert.equal(hits, 1)
+      assert.match(again.note ?? "", /3 秒前にも開いた/)
+    },
+  )
 })
 
 test("大きいページは固定長の範囲を順に読まず、語で検索する", () => {
@@ -288,117 +287,115 @@ test("全文検索は大文字小文字を問わず、重ならない一致を�
 })
 
 test("find は取りに行かず、覚えた全文の中を探す", async () => {
-  const originalFetch = globalThis.fetch
   let hits = 0
   const body = `{"time":{"3.22.0":"2026-07-13","3.22.1":"2026-07-30"},"pad":"${"z".repeat(40_000)}"}`
-  globalThis.fetch = (async () => {
-    hits++
-    return new Response(body, { status: 200, headers: { "content-type": "application/json" } })
-  }) as unknown as typeof fetch
-  try {
-    const url = `https://example.com/reg-${Math.random().toString(36).slice(2)}`
-    const t0 = 3_000_000
-    const first = await fetchPage(url, { nowMs: t0 })
-    // 刻み始める前に、固定長で読むと何回かかるかを数字で見せる。
-    assert.match(first.note ?? "", /12000字ずつ頭から読むと 4 回/)
-    assert.match(first.note ?? "", /`find` に語を渡す/)
+  await withFetch(
+    async () => {
+      hits++
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } })
+    },
+    async () => {
+      const url = `https://example.com/reg-${Math.random().toString(36).slice(2)}`
+      const t0 = 3_000_000
+      const first = await fetchPage(url, { nowMs: t0 })
+      // 刻み始める前に、固定長で読むと何回かかるかを数字で見せる。
+      assert.match(first.note ?? "", /12000字ずつ頭から読むと 4 回/)
+      assert.match(first.note ?? "", /`find` に語を渡す/)
 
-    const found = await fetchPage(url, { find: "3.22.1", nowMs: t0 + 1_000 })
-    assert.equal(hits, 1, "探すのに取り直さない")
-    assert.match(found.text, /2026-07-30/)
-    assert.equal(found.truncated, false)
+      const found = await fetchPage(url, { find: "3.22.1", nowMs: t0 + 1_000 })
+      assert.equal(hits, 1, "探すのに取り直さない")
+      assert.match(found.text, /2026-07-30/)
+      assert.equal(found.truncated, false)
 
-    const missing = await fetchPage(url, { find: "9.9.9", nowMs: t0 + 2_000 })
-    assert.equal(hits, 1)
-    assert.equal(missing.text, "")
-    assert.match(missing.note ?? "", /「9\.9\.9」はこのページ.*に無い/)
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+      const missing = await fetchPage(url, { find: "9.9.9", nowMs: t0 + 2_000 })
+      assert.equal(hits, 1)
+      assert.equal(missing.text, "")
+      assert.match(missing.note ?? "", /「9\.9\.9」はこのページ.*に無い/)
+    },
+  )
 })
 
 test("本文が頭 400KB より後ろにあるページも読む", async () => {
   // 実測: JS で組み立てるページは、人が読む文字を JS の後ろに置く。
   // 東京都は `<title>` まで 400KB 以上あり、上限 400KB では 38字、上限を上げると 5,962字。
   // メルカリ 32→206字、YouTube 0→426字(`<title>` が 684,015 バイト目)。
-  const originalFetch = globalThis.fetch
   const filler = `<script>${"var x=1;".repeat(60_000)}</script>` // 約 480KB
   // 本文は 2,000字を超える長さにする。実際に読めた東京都は 5,962字で、
   // これより短いと「薄い」の判定に当たり、読めていることを確かめられない。
   const article = "お知らせ 令和8年の支援の取組。".repeat(200)
   const body = `<html><head>${filler}<title>都庁総合ホームページ</title></head><body><main>${article}</main></body></html>`
-  globalThis.fetch = (async () =>
-    new Response(body, {
-      status: 200,
-      headers: { "content-type": "text/html; charset=utf-8" },
-    })) as unknown as typeof fetch
-  try {
-    const p = await fetchPage(`https://example.com/heavy-${Math.random().toString(36).slice(2)}`, {
-      nowMs: 3_000_000,
-    })
-    assert.match(p.text, /お知らせ 令和8年の支援の取組。/, "400KB の JS の後ろにある本文が読めている")
-    assert.match(p.text, /都庁総合ホームページ/, "同じく後ろにある題も読めている")
-    assert.doesNotMatch(p.text, /var x=1/, "JS そのものは本文に混ぜない")
-    assert.equal(p.note, undefined, "読めたページに「薄い」とは言わない")
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+  await withFetch(
+    async () =>
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    async () => {
+      const p = await fetchPage(`https://example.com/heavy-${Math.random().toString(36).slice(2)}`, {
+        nowMs: 3_000_000,
+      })
+      assert.match(p.text, /お知らせ 令和8年の支援の取組。/, "400KB の JS の後ろにある本文が読めている")
+      assert.match(p.text, /都庁総合ホームページ/, "同じく後ろにある題も読めている")
+      assert.doesNotMatch(p.text, /var x=1/, "JS そのものは本文に混ぜない")
+      assert.equal(p.note, undefined, "読めたページに「薄い」とは言わない")
+    },
+  )
 })
 
 test("上限で切ったときは、切ったと分かる言い方をする", async () => {
   // 切ったのか、そもそも入っていないのかを言い分ける。診断を間違えると、
   // 読み手は取れるはずのものを諦める。上限の数字は定数から作るので、上げたら文面も変わる。
-  const originalFetch = globalThis.fetch
   const body = `<html><head><script>${"var y=2;".repeat(200_000)}</script></head><body><main>ここまで届かない</main></body></html>`
-  globalThis.fetch = (async () =>
-    new Response(body, {
-      status: 200,
-      headers: { "content-type": "text/html; charset=utf-8" },
-    })) as unknown as typeof fetch
-  try {
-    const p = await fetchPage(`https://example.com/huge-${Math.random().toString(36).slice(2)}`, {
-      nowMs: 4_000_000,
-    })
-    assert.equal(p.text, "", "閉じない script は本文にしない")
-    assert.equal(p.truncated, true, "上限で切ったページは、全部は読めていないと伝える")
-    assert.match(p.note ?? "", /本文がほとんど無い/)
-    assert.match(p.note ?? "", /頭 1500KB を読んだ範囲に本文が無かった/)
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+  await withFetch(
+    async () =>
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    async () => {
+      const p = await fetchPage(`https://example.com/huge-${Math.random().toString(36).slice(2)}`, {
+        nowMs: 4_000_000,
+      })
+      assert.equal(p.text, "", "閉じない script は本文にしない")
+      assert.equal(p.truncated, true, "上限で切ったページは、全部は読めていないと伝える")
+      assert.match(p.note ?? "", /本文がほとんど無い/)
+      assert.match(p.note ?? "", /頭 1500KB を読んだ範囲に本文が無かった/)
+    },
+  )
 })
 
 test("読めているページに「別を当たれ」と言わない", async () => {
   // 実測(86件の巡回): 一段の判定だと tenki.jp 1,719字・Yahoo 天気 1,954字・
   // JR東 運行情報 1,146字・みんかぶ 1,559字に「別の出典を当たったほうが早い」が付いた。
   // どれも目的の語は本文に入っていた。無いのと少ないのは別のことなので、言い方を分ける。
-  const originalFetch = globalThis.fetch
   const shell = `<script>${"var z=3;".repeat(12_000)}</script>` // 約 96KB
   const page = (main: string) =>
     `<html><head>${shell}<title>天気</title></head><body><main>${main}</main></body></html>`
-  const serve = (html: string) => {
-    globalThis.fetch = (async () =>
+  let html = ""
+  const serve = (h: string) => {
+    html = h
+  }
+  await withFetch(
+    async () =>
       new Response(html, {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" },
-      })) as unknown as typeof fetch
-  }
-  try {
-    serve(page("東京地方の天気は晴れのち曇り。".repeat(80))) // 約 1,100字
-    const slim = await fetchPage(`https://example.com/slim-${Math.random().toString(36).slice(2)}`, {
-      nowMs: 5_000_000,
-    })
-    assert.match(slim.text, /東京地方の天気は晴れのち曇り。/)
-    assert.match(slim.note ?? "", /読めたのは 1\d\d\d字/)
-    assert.doesNotMatch(slim.note ?? "", /^本文がほとんど無い/)
+      }),
+    async () => {
+      serve(page("東京地方の天気は晴れのち曇り。".repeat(80))) // 約 1,100字
+      const slim = await fetchPage(`https://example.com/slim-${Math.random().toString(36).slice(2)}`, {
+        nowMs: 5_000_000,
+      })
+      assert.match(slim.text, /東京地方の天気は晴れのち曇り。/)
+      assert.match(slim.note ?? "", /読めたのは 1\d\d\d字/)
+      assert.doesNotMatch(slim.note ?? "", /^本文がほとんど無い/)
 
-    serve(page("読み込み中")) // 約 10字
-    const empty = await fetchPage(`https://example.com/empty-${Math.random().toString(36).slice(2)}`, {
-      nowMs: 5_001_000,
-    })
-    assert.match(empty.note ?? "", /本文がほとんど無い/)
-    assert.match(empty.note ?? "", /別の出典を当たったほうが早い/)
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+      serve(page("読み込み中")) // 約 10字
+      const empty = await fetchPage(`https://example.com/empty-${Math.random().toString(36).slice(2)}`, {
+        nowMs: 5_001_000,
+      })
+      assert.match(empty.note ?? "", /本文がほとんど無い/)
+      assert.match(empty.note ?? "", /別の出典を当たったほうが早い/)
+    },
+  )
 })

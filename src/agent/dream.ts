@@ -25,7 +25,7 @@ import { KEEP_MS, keep } from "./keeper.ts"
 export const DREAM_DAYS = 7
 
 /** 1回で読む発言の上限。超えた分は次の回に残る(取りこぼさない)。 */
-export const DREAM_MAX = 60
+const DREAM_MAX = 60
 
 /** ここまで見た、を置く場所。 */
 export const DREAM_CURSOR = "dream:through"
@@ -34,13 +34,7 @@ export const DREAM_CURSOR = "dream:through"
 export const DREAM_DAILY = "daily:dream"
 
 /**
- * ユーザーの時計でこの時刻を過ぎてから回す。既定は 4 時。
- *
- * 前日ぶんの発言が出揃っていて、かつユーザーがモデルを使っていない時間帯に置く。
- * 日付の境界(0 時)より後でなければ、その日ぶんの目印とずれる。
- */
-/**
- * この cycle で回すかどうか。1日1回。
+ * この cycle で回すかどうか。1日1回、dreamHour(前日ぶんが出揃い、ユーザーが使っていない時間帯)以降。
  *
  * 判定だけで、済んだ印は付けない — 付けるのは実際に回した側(src/cycle.ts)。
  * ここで付けると、呼んだが回さなかった回にも印が立つ。

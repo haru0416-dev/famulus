@@ -60,17 +60,5 @@ export const ZERO_SKILL_PLAN = {
 export const ZERO_SKILL_PLAN_JSON = canonicalJson(ZERO_SKILL_PLAN)
 export const ZERO_SKILL_PLAN_HASH = digestOf(ZERO_SKILL_PLAN_JSON)
 
-export const NO_TOOL_POLICY = generationRef("core-tool-policy:none", 1, {
-  formatVersion: 1,
-  effectAtoms: [],
-})
-
-export const NO_TOOL_IMPLEMENTATION = generationRef("core-tool-implementation:none", 1, {
-  formatVersion: 1,
-  codeGeneration: "none",
-  inputSchemaDigest: digestOf({}),
-  outputSchemaDigest: digestOf({}),
-})
-
 export const resultContractRef = (id: string, schema: RuntimeSchema<unknown>): GenerationRef =>
   generationRef(`result-contract:${id}`, 1, { formatVersion: 1, jsonSchema: schema.jsonSchema })

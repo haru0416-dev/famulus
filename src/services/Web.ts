@@ -64,7 +64,7 @@ export function deniedByName(host: string): string | undefined {
 }
 
 /** URL の origin。読めない文字列は `undefined`(比較で必ず外れる値にする)。 */
-export function originOf(raw: string): string | undefined {
+function originOf(raw: string): string | undefined {
   try {
     return new URL(raw).origin
   } catch {
@@ -108,7 +108,6 @@ export interface FetchedPage {
 
 /**
  * ホスト名の一致。`endsWith` だけで書くと `evilqiita.com` が `qiita.com` に当たる。
- * 前は3通りの書き方(完全一致・`endsWith`・`/(^|\.)x$/`)が混ざっていたので、ここに寄せた。
  */
 const isHost = (u: URL, domain: string): boolean => u.hostname === domain || u.hostname.endsWith(`.${domain}`)
 
@@ -117,7 +116,7 @@ const isHost = (u: URL, domain: string): boolean => u.hostname === domain || u.h
  * 「取れないから」だけなら普通の `detour`(取ってから言う)で足りる。
  * ここに入れるのは、確かめに行くこと自体をしないと決めた先。
  */
-export function refusedBeforeFetch(u: URL): boolean {
+function refusedBeforeFetch(u: URL): boolean {
   return isHost(u, "x.com") || isHost(u, "twitter.com")
 }
 

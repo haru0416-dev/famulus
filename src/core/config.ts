@@ -272,7 +272,6 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
 
 let current: AppConfig | undefined
 
-/** Validate and install the process-wide deployment config before constructing runtime services. */
 export function configureApp(env: Env = process.env, rootDir: string = PROJECT_ROOT): AppConfig {
   current = parseConfig(env, rootDir)
   return current

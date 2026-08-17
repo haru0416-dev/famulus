@@ -1,8 +1,6 @@
 #!/usr/bin/env bun
 /**
  * 対話の入口。人が打って動かす側(自走は src/cycle.ts)。
- *
- * 前はフレームワークが持っていた REPL を使っていた。それが無くなったので、要るものだけを置く:
  * 1行読んで1ターン答え、既読位置を進める。それだけ。
  *
  *   bun run agent         … 対話を始める
@@ -79,8 +77,12 @@ try {
       const kept = await run(
         keep({
           material: `owner: ${line}`,
-          ...(turn.inputEventId ? { evidence: [{ id: turn.inputEventId, text: `owner: ${line}` }] } : {}),
-          ...(turn.inputEventId ? { executionOwner: { kind: "owner-event", id: turn.inputEventId } } : {}),
+          ...(turn.inputEventId
+            ? {
+                evidence: [{ id: turn.inputEventId, text: `owner: ${line}` }],
+                executionOwner: { kind: "owner-event", id: turn.inputEventId },
+              }
+            : {}),
           signal: AbortSignal.timeout(KEEP_MS),
         }),
       ).catch((e: unknown) => `keeper: 落ちた(${causeReason(e)})`)

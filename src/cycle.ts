@@ -1,10 +1,7 @@
 #!/usr/bin/env bun
 /**
- * cycle。話しかけられなくても動くための唯一の入口。
- *
- * ここまでの構造は全部「人が話しかけたら動く」形だった(`bun run agent` も `fam` も人が起動する)。
- * 自走にするというのは、起動の理由を人の発話から DB の状態に移すこと。
- * このファイルがその置き換えで、systemd のタイマーから定期的に呼ばれる。
+ * cycle。話しかけられなくても動くための唯一の入口。起動の理由を人の発話ではなく
+ * DB の状態に置く。systemd のタイマーから定期的に呼ばれる。
  *
  *   1. Attention.planCycle() …SQL だけでモデル実行が必要かを決める。ここでモデルは呼ばない。
  *   2. 実行条件を満たさなければ何もせず終わる(モデル利用量を消費しない)。定期実行の大半はこの経路を通る。
@@ -202,6 +199,10 @@ function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Works
   // 下書きの規律は出す日にだけ載せる。毎回渡すと、書かない回にもコンテキスト容量を使う。
   if (d.draftDue) {
     const pending = d.pendingDraft
+    // 書く規律の正本は共有 skill(~/.famulus/skills/jissoku-writing)。Haru が正本を
+    // 書き換えれば次の下書きの日から反映される(一本化)。読めない日は famulus 固有の
+    // DRAFTING だけで書く — 下書きを止めるほどの依存にはしない。
+    const overlay = jissokuOverlay()
     sections.push(
       [
         "## 今日ぶんの下書き",
@@ -228,10 +229,7 @@ function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Works
         "引いて何も出てこなければ `draft` を呼ばず、「書ける実測が無い」と一行書いて終える。",
         "",
         DRAFTING,
-        // 書く規律の正本は共有 skill(~/.claude/skills/jissoku-writing)。Haru が正本を
-        // 書き換えれば次の下書きの日から反映される(一本化)。読めない日は famulus 固有の
-        // DRAFTING だけで書く — 下書きを止めるほどの依存にはしない。
-        ...(jissokuOverlay() ? ["", jissokuOverlay() as string] : []),
+        ...(overlay ? ["", overlay] : []),
       ].join("\n"),
     )
   }

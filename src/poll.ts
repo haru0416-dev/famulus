@@ -27,9 +27,6 @@ const CONFIG = configureApp()
 
 const exec = promisify(execFile)
 
-/** 起動する unit。検査のときだけ空にして、実際に systemd を呼ばない。 */
-const cycleUnit = (): string => CONFIG.cycle.unit
-
 /**
  * 再起動を試すまでの最小間隔。クォータ枯渇や停止で cycle が即時終了したとき、未読は残るので
  * 毎回起動を試すことになる。30秒ごとにそれを行うと処理されない起動要求が積み上がる。
@@ -42,9 +39,10 @@ const RETRY_MS = 180_000
  * されない。走行中に届いたぶんは DB に未読として残るので、次の起動で拾い直す。
  */
 async function wake(): Promise<{ started: boolean; note: string }> {
-  const unit = cycleUnit()
+  // 検査は unit を空にして、実際に systemd を呼ばない
+  const unit = CONFIG.cycle.unit
   if (!unit) return { started: true, note: "起動しない(検査)" }
-  // 実行中なら起動要求を送らない。送っても併合され、呼び出し側には成功として返る。
+  // 実行中なら起動要求を送らない。
   // `is-active` は使えない。Type=oneshot は ExecStart の間ずっと `activating` で、
   // `is-active` はそれを終了コード 3 で返す。`show` なら状態がそのまま出て終了コードは 0。
   const state = await exec("systemctl", ["--user", "show", unit, "-p", "ActiveState", "--value"])

@@ -850,8 +850,7 @@ const makeDiscord = () =>
                 id,
                 claimAt,
               )
-              if (result.changes !== 1) return false
-              return true
+              return result.changes === 1
             })
             if (!claimed) {
               stopped = true
@@ -897,11 +896,7 @@ const makeDiscord = () =>
             if (requested._tag === "Failure") {
               outcome = "unknown"
               error = String(requested.failure)
-            } else if (
-              requested.success.status >= 500 ||
-              requested.success.status < 200 ||
-              requested.success.status >= 300
-            ) {
+            } else if (requested.success.status < 200 || requested.success.status >= 300) {
               outcome =
                 requested.success.status >= 400 && requested.success.status < 500 ? "failed" : "unknown"
               error = `HTTP ${requested.success.status}`
@@ -1293,7 +1288,7 @@ const makeDiscord = () =>
         }
         if (!currentHeardAt && b.heard !== undefined && b.heardAt !== undefined) {
           const heard = tx.get("SELECT value FROM schema_meta WHERE key='discord:heard_in'")?.value
-          if (!currentHeardAt && heard) {
+          if (heard) {
             currentHeardAt = tx.get(
               "SELECT value FROM schema_meta WHERE key=?",
               `discord:last:${heard}`,

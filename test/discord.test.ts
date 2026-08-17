@@ -194,6 +194,21 @@ const wire = (url: string | undefined, ch?: { talk?: string; draft?: string; log
   if (ch?.log) process.env.FAMULUS_DISCORD_CH_LOG = ch.log
 }
 
+/** wire を張って本文を回し、終わりに必ず外して fake を閉じる。 */
+const wired = async (
+  dc: Awaited<ReturnType<typeof fakeDiscord>>,
+  ch: Parameters<typeof wire>[1],
+  fn: () => Promise<void>,
+): Promise<void> => {
+  wire(dc.url, ch)
+  try {
+    await fn()
+  } finally {
+    wire(undefined)
+    await dc.close()
+  }
+}
+
 test("トークンが無ければ何もしない — 叩かないし落ちない", async () => {
   const dc = await fakeDiscord()
   wire(undefined)
@@ -213,8 +228,7 @@ test("トークンが無ければ何もしない — 叩かないし落ちない
 
 test("出したらリアクションも自分で付く — 押す側は絵文字を探さない", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       const id = await h.run(
         post({
@@ -231,16 +245,12 @@ test("出したらリアクションも自分で付く — 押す側は絵文字
         ["✅", "🛑"],
       )
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("2000 字を超えたら分ける — リアクションは最後の1通に付く", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       const text = `${"あ".repeat(1500)}\n${"い".repeat(1500)}`
       const id = await h.run(post({ text, taps: [{ emoji: "✅", reply: "了解" }] }))
@@ -250,16 +260,12 @@ test("2000 字を超えたら分ける — リアクションは最後の1通に
       assert.equal(String(sent[1]?.body?.content), "い".repeat(1500))
       assert.equal(dc.hits.find((x) => x.method === "PUT")?.path.includes(`/messages/${id}/`), true)
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("押されるまでは空。押されたら割り当てた文が返る", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       const id = await h.run(post({ text: "出していいか", taps: [{ emoji: "🛑", reply: "やめて" }] }))
       // 自分で付けたぶんだけ。ここで拾うと、誰も押していない通知が承認になる。
@@ -272,16 +278,12 @@ test("押されるまでは空。押されたら割り当てた文が返る", as
       // 二度は返らない。返ると同じ指示が cycle のたびに効き続ける。
       assert.deepEqual(await h.run(pollInbound), [])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("下書きのリアクションは対象draftへ一度だけ適用する", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       const { draftId, messageId, outboundState, actionStates, health } = await h.run(
         Effect.gen(function* () {
@@ -329,10 +331,7 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
       assert.equal(stored?.state, "revise_requested")
       assert.equal(stored?.decision_origin_id, `${messageId}:✏️`)
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("初回は自由文を取り込まない — DM に残っている過去の一言は指示ではない", async () => {
@@ -340,23 +339,18 @@ test("初回は自由文を取り込まない — DM に残っている過去の
     { id: "50", content: "去年の話", author: { id: OWNER } },
     { id: "51", content: "おはよう", author: { id: OWNER } },
   ])
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       assert.deepEqual(await h.run(pollInbound), [])
       dc.msgs.unshift({ id: "52", content: "今日はこれをやって", author: { id: OWNER } })
       assert.deepEqual(await h.run(pollInbound), [{ id: "52", text: "今日はこれをやって" }])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("owner自由文のeventには返信先channelをprovenanceとして残す", async () => {
   const dc = await fakeDiscord([{ id: "80", content: "位置合わせ", author: { id: OWNER } }])
-  wire(dc.url, { talk: CH })
-  try {
+  await wired(dc, { talk: CH }, async () => {
     await withHarness(async (h) => {
       await h.run(pollInbound)
       dc.at(CH).unshift({ id: "81", content: "ここで続けて", author: { id: OWNER } })
@@ -368,16 +362,12 @@ test("owner自由文のeventには返信先channelをprovenanceとして残す",
       )
       assert.deepEqual(JSON.parse(String(event?.provenance)), [{ kind: "discord", ref: CH }])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("記録完了前に終了した回の項目は、次の回にもう一度取得する", async () => {
   const dc = await fakeDiscord([{ id: "70", content: "位置合わせ", author: { id: OWNER } }])
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       await h.run(pollInbound)
       dc.msgs.unshift({ id: "71", content: "歯医者を来週にずらして", author: { id: OWNER } })
@@ -388,16 +378,12 @@ test("記録完了前に終了した回の項目は、次の回にもう一度�
       assert.deepEqual(await h.run(pollInbound), [{ id: "71", text: "歯医者を来週にずらして" }])
       assert.deepEqual(await h.run(pollInbound), [])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("未読が100件を超えても全件を古い順に取得してからcursorを進める", async () => {
   const dc = await fakeDiscord([{ id: "1000", content: "位置合わせ", author: { id: OWNER } }])
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       await h.run(pollInbound)
       for (let id = 1001; id <= 1125; id++) {
@@ -415,10 +401,7 @@ test("未読が100件を超えても全件を古い順に取得してからcurso
       )
       assert.deepEqual(await h.run(pollInbound), [])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("後続ページの取得失敗では取得済みページより先へcursorを進めない", async () => {
@@ -429,8 +412,7 @@ test("後続ページの取得失敗では取得済みページより先へcurso
     page++
     return page === 2 ? { status: 503 } : undefined
   })
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       await h.run(pollInbound)
       for (let id = 2001; id <= 2125; id++) {
@@ -448,10 +430,7 @@ test("後続ページの取得失敗では取得済みページより先へcurso
       assert.equal(recovered[0]?.id, "2001")
       assert.equal(recovered.at(-1)?.id, "2125")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("cursorより古いリアクション待ちはmessage IDで直接確認する", async () => {
@@ -466,8 +445,7 @@ test("cursorより古いリアクション待ちはmessage IDで直接確認す�
       }
     }),
   )
-  wire(dc.url, { talk: CH })
-  try {
+  await wired(dc, { talk: CH }, async () => {
     await withHarness(async (h) => {
       await h.run(
         Effect.gen(function* () {
@@ -482,10 +460,7 @@ test("cursorより古いリアクション待ちはmessage IDで直接確認す�
         true,
       )
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("権限を失った過去channelのtapは破棄して現在channelの受信を続ける", async () => {
@@ -497,8 +472,7 @@ test("権限を失った過去channelのtapは破棄して現在channelの受信
     { id: "301", content: "現在の指示", author: { id: OWNER } },
     { id: "300", content: "位置合わせ", author: { id: OWNER } },
   )
-  wire(dc.url, { talk: CH })
-  try {
+  await wired(dc, { talk: CH }, async () => {
     await withHarness(async (h) => {
       await h.run(
         Effect.gen(function* () {
@@ -513,10 +487,7 @@ test("権限を失った過去channelのtapは破棄して現在channelの受信
       assert.deepEqual(await h.run(pollInbound), [{ id: "301", text: "現在の指示" }])
       assert.equal(await h.run(Effect.flatMap(Db, (db) => db.meta("discord:taps"))), "{}")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("古いbatchを後からcommitしてもcursorと返信先を巻き戻さない", async () => {
@@ -590,8 +561,7 @@ test("古いbatchを後からcommitしてもcursorと返信先を巻き戻さな
 
 test("押されたリアクションも、記録し終えるまでは消えない", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       const id = await h.run(post({ text: "出していいか", taps: [{ emoji: "✅", reply: "出していい" }] }))
       const r = dc.msgs.find((x) => x.id === id)?.reactions?.[0]
@@ -621,25 +591,18 @@ test("押されたリアクションも、記録し終えるまでは消えな�
       assert.deepEqual(left["999"], { "✅": { reply: "新着" } }, "poll中に追加されたtap対応表は消さない")
       assert.deepEqual(await h.run(pollInbound), [])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("自分の発言は拾わない — 出した文が次の cycle の入力に化けない", async () => {
   const dc = await fakeDiscord([{ id: "60", content: "位置合わせ", author: { id: OWNER } }])
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       await h.run(pollInbound)
       await h.run(post({ text: "こちらから出した文" }))
       assert.deepEqual(await h.run(pollInbound), [])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("DM専用構成でDiscordが落ちたら空受信ではなく失敗する", async () => {
@@ -666,8 +629,7 @@ const DRAFT = "7002"
  */
 test("下書きは下書きの場所へ、会話は会話の場所へ出る", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK, draft: DRAFT })
-  try {
+  await wired(dc, { talk: TALK, draft: DRAFT }, async () => {
     await withHarness(async (h) => {
       await h.run(post({ text: "返事" }))
       await h.run(post({ text: "下書き本文", to: "draft" }))
@@ -681,16 +643,12 @@ test("下書きは下書きの場所へ、会話は会話の場所へ出る", as
         false,
       )
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("リアクションは出した場所に付く — 会話の場所に出した通知へ間違って付けない", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK, draft: DRAFT })
-  try {
+  await wired(dc, { talk: TALK, draft: DRAFT }, async () => {
     await withHarness(async (h) => {
       const id = await h.run(
         post({ text: "出していいか", to: "draft", taps: [{ emoji: "✅", reply: "出す" }] }),
@@ -703,17 +661,13 @@ test("リアクションは出した場所に付く — 会話の場所に出し
       if (r) r.count = 2
       assert.deepEqual(await h.run(pollInbound), [{ id: `${id}:✅`, text: "出す" }])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 /** 訊かれたチャンネルに返す。別のチャンネルに返すのは、書いた側からは返事が無いのと同じ。 */
 test("返事は最後に話しかけられた場所に返る — DM に書かれたら DM に返す", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK, draft: DRAFT })
-  try {
+  await wired(dc, { talk: TALK, draft: DRAFT }, async () => {
     await withHarness(async (h) => {
       dc.at(TALK).unshift({ id: "200", content: "位置合わせ", author: { id: OWNER } })
       dc.msgs.unshift({ id: "201", content: "位置合わせ", author: { id: OWNER } })
@@ -729,10 +683,7 @@ test("返事は最後に話しかけられた場所に返る — DM に書かれ
       await h.run(post({ text: "チャンネルへの返事" }))
       assert.equal(dc.at(TALK)[0]?.content, "チャンネルへの返事")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 /**
@@ -741,8 +692,7 @@ test("返事は最後に話しかけられた場所に返る — DM に書かれ
  */
 test("返事は、複数のチャンネルに未読があっても新しいほうへ返る", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       dc.at(TALK).unshift({ id: "200", content: "位置合わせ", author: { id: OWNER } })
       dc.msgs.unshift({ id: "201", content: "位置合わせ", author: { id: OWNER } })
@@ -763,16 +713,12 @@ test("返事は、複数のチャンネルに未読があっても新しいほ�
       await h.run(post({ text: "DM へ" }))
       assert.equal(dc.msgs[0]?.content, "DM へ")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("既読位置は場所ごとに持つ — 片方に書いても、もう片方の過去ログは指示にならない", async () => {
   const dc = await fakeDiscord([{ id: "50", content: "DM の去年の話", author: { id: OWNER } }])
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       dc.at(TALK).unshift({ id: "51", content: "チャンネルの去年の話", author: { id: OWNER } })
       assert.deepEqual(await h.run(pollInbound), [])
@@ -780,10 +726,7 @@ test("既読位置は場所ごとに持つ — 片方に書いても、もう片
       // DM 側は位置が動いていないが、そこに残っている過去の一言は出てこない。
       assert.deepEqual(await h.run(pollInbound), [{ id: "52", text: "今日の指示" }])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("旧い全体 cursor は読まず、DM の位置をチャンネル単位で初期化する", async () => {
@@ -791,8 +734,7 @@ test("旧い全体 cursor は読まず、DM の位置をチャンネル単位で
     { id: "60", content: "去年の話", author: { id: OWNER } },
     { id: "61", content: "おととしの話", author: { id: OWNER } },
   ])
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       await h.run(
         Effect.gen(function* () {
@@ -804,26 +746,19 @@ test("旧い全体 cursor は読まず、DM の位置をチャンネル単位で
       dc.msgs.unshift({ id: "62", content: "今日の指示", author: { id: OWNER } })
       assert.deepEqual(await h.run(pollInbound), [{ id: "62", text: "今日の指示" }])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("呼びかけはチャンネルにだけ付く — DM では字が増えるだけ", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { draft: DRAFT })
-  try {
+  await wired(dc, { draft: DRAFT }, async () => {
     await withHarness(async (h) => {
       await h.run(post({ text: "下書き", to: "draft", ping: true }))
       assert.equal(dc.at(DRAFT)[0]?.content, `<@${OWNER}>\n下書き`)
       await h.run(post({ text: "返事", ping: true }))
       assert.equal(dc.msgs[0]?.content, "返事")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 /**
@@ -832,25 +767,20 @@ test("呼びかけはチャンネルにだけ付く — DM では字が増える
  */
 test("スレッドの名前を渡すと、出した1通からスレッドが立つ", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { draft: DRAFT })
-  try {
+  await wired(dc, { draft: DRAFT }, async () => {
     await withHarness(async (h) => {
       const id = await h.run(post({ text: "下書き本文", to: "draft", thread: "題名" }))
       const made = dc.hits.find((x) => x.method === "POST" && x.path.endsWith("/threads"))
       assert.equal(made?.path, `/channels/${DRAFT}/messages/${id}/threads`)
       assert.equal(made?.body?.name, "題名")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 /** 生やした場所は位置を持たない。規則をそのまま当てると、最初の1通が黙って消える。 */
 test("スレッドに書かれた1通目から拾う — 立てた時点で位置を置く", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK, draft: DRAFT })
-  try {
+  await wired(dc, { talk: TALK, draft: DRAFT }, async () => {
     await withHarness(async (h) => {
       const id = await h.run(post({ text: "下書き本文", to: "draft", thread: "題名" }))
       dc.at(String(id)).unshift({ id: "900", content: "ここの数字を直して", author: { id: OWNER } })
@@ -859,16 +789,12 @@ test("スレッドに書かれた1通目から拾う — 立てた時点で位�
       await h.run(post({ text: "直した" }))
       assert.equal(dc.at(String(id))[0]?.content, "直した")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("聞き続けるスレッドには上限がある — 古いものから落ちる", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { draft: DRAFT })
-  try {
+  await wired(dc, { draft: DRAFT }, async () => {
     await withHarness(async (h) => {
       const ids: (string | undefined)[] = []
       for (const n of [1, 2, 3, 4]) {
@@ -885,10 +811,7 @@ test("聞き続けるスレッドには上限がある — 古いものから落
       dc.at(String(ids[0])).unshift({ id: "910", content: "古いスレッドへの返事", author: { id: OWNER } })
       assert.deepEqual(await h.run(pollInbound), [])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 const LOG = "7003"
@@ -899,8 +822,7 @@ const LOG = "7003"
  */
 test("進み具合は指した場所にしか出ない — 指していなければ DM にも会話にも落ちない", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       assert.equal(await h.run(post({ text: "3手 41秒", to: "log" })), undefined)
       assert.deepEqual(
@@ -911,48 +833,36 @@ test("進み具合は指した場所にしか出ない — 指していなけれ
       await h.run(post({ text: "返事" }))
       assert.equal(dc.at(TALK)[0]?.content, "返事")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("進み具合の場所を指すとそこへ出る — 呼びかけは付けない", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK, log: LOG })
-  try {
+  await wired(dc, { talk: TALK, log: LOG }, async () => {
     await withHarness(async (h) => {
       await h.run(post({ text: "3手 41秒", to: "log" }))
       assert.equal(dc.at(LOG)[0]?.content, "3手 41秒")
       assert.deepEqual(dc.at(TALK), [])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 /** こちらから返事を求めない場所でも、ユーザーは書く。聞かない場所は黙って消える場所になる。 */
 test("進み具合の場所に書かれたものも拾う", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK, log: LOG })
-  try {
+  await wired(dc, { talk: TALK, log: LOG }, async () => {
     await withHarness(async (h) => {
       dc.at(LOG).unshift({ id: "400", content: "位置合わせ", author: { id: OWNER } })
       assert.deepEqual(await h.run(pollInbound), [])
       dc.at(LOG).unshift({ id: "401", content: "この回のこれ何やってるの", author: { id: OWNER } })
       assert.deepEqual(await h.run(pollInbound), [{ id: "401", text: "この回のこれ何やってるの" }])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("行数でも分ける — 2000 字に収まっていても縦に長いと畳まれる", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       await h.run(post({ text: Array.from({ length: 40 }, (_, i) => `行${i}`).join("\n") }))
       const sent = dc.hits.filter((x) => x.method === "POST" && x.path.endsWith("/messages"))
@@ -961,16 +871,12 @@ test("行数でも分ける — 2000 字に収まっていても縦に長いと�
       assert.equal(joined.split("\n").length, 40)
       assert.equal(joined.split("\n").at(-1), "行39")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("enqueue は HTTP を使わず、同じ dedupe は同じ行、内容変更は Conflict", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const input = { purpose: "reply", dedupeKey: "event-1", text: "返事" } as const
       const first = await h.run(Effect.flatMap(Discord, (d) => d.enqueue(input)))
@@ -990,16 +896,12 @@ test("enqueue は HTTP を使わず、同じ dedupe は同じ行、内容変更�
       )
       assert.equal((conflict as { _tag?: unknown })._tag, "Conflict")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("DM cache が無ければ open_dm を先に永続化し、flush が receipt と cache を残す", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url)
-  try {
+  await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       const queued = await h.run(
         Effect.flatMap(Discord, (d) => d.enqueue({ purpose: "tell", dedupeKey: "dm-1", text: "本文" })),
@@ -1016,10 +918,7 @@ test("DM cache が無ければ open_dm を先に永続化し、flush が receipt
       assert.equal(body?.enforce_nonce, true)
       assert.equal(String(body?.nonce).length, 25)
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("2通目の 429 は partial で止まり、自動再送しない", async () => {
@@ -1028,8 +927,7 @@ test("2通目の 429 は partial で止まり、自動再送しない", async ()
     if (hit.method === "POST" && hit.path.endsWith("/messages") && ++messages === 2) return { status: 429 }
     return undefined
   })
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const queued = await h.run(
         Effect.flatMap(Discord, (d) =>
@@ -1050,10 +948,7 @@ test("2通目の 429 は partial で止まり、自動再送しない", async ()
       assert.equal(messages, 2)
       assert.equal(done?.id, queued?.id)
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("5xx は unknown で止まり、自動再送しない", async () => {
@@ -1065,8 +960,7 @@ test("5xx は unknown で止まり、自動再送しない", async () => {
     }
     return undefined
   })
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const draft = await h.run(
         Effect.gen(function* () {
@@ -1093,10 +987,7 @@ test("5xx は unknown で止まり、自動再送しない", async () => {
       await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
       assert.equal(messages, 1)
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("配送先が無ければdraftを失敗で終端化してhealthへ残す", async () => {
@@ -1140,17 +1031,13 @@ test("受信GETの5xxを空受信にせず失敗として返す", async () => {
   const dc = await fakeDiscord([], (hit) =>
     hit.method === "GET" && hit.path.includes("/messages?") ? { status: 503 } : undefined,
   )
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const result = await h.run(Effect.result(Effect.flatMap(Discord, (d) => d.pollInbound())))
       assert.equal(result._tag, "Failure")
       if (result._tag === "Failure") assert.equal(result.failure._tag, "ConnectorFailed")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("受信GETの不正な200応答を空受信にせず失敗として返す", async () => {
@@ -1159,17 +1046,13 @@ test("受信GETの不正な200応答を空受信にせず失敗として返す",
       ? { status: 200, body: { message: "upstream error" } }
       : undefined,
   )
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const result = await h.run(Effect.result(Effect.flatMap(Discord, (d) => d.pollInbound())))
       assert.equal(result._tag, "Failure")
       if (result._tag === "Failure") assert.equal(result.failure._tag, "ConnectorFailed")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("削除済みcustom emojiのname=nullは受信障害にしない", async () => {
@@ -1181,22 +1064,17 @@ test("削除済みcustom emojiのname=nullは受信障害にしない", async ()
       reactions: [{ emoji: { name: null }, count: 1, me: false }],
     },
   ])
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const result = await h.run(Effect.result(peek))
       assert.equal(result._tag, "Success")
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("別workerが送信中のactionをreceiptなしでsentにしない", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const outbound = await h.run(
         Effect.flatMap(Discord, (d) =>
@@ -1224,17 +1102,13 @@ test("別workerが送信中のactionをreceiptなしでsentにしない", async 
       assert.equal(stillSending?.actions[0]?.state, "sending")
       assert.equal(dc.hits.length, 0)
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("receipt永続化後に停止したoutboundは残りのactionから再開する", async () => {
   const dc = await fakeDiscord()
   dc.at(TALK).unshift({ id: "4242", content: "本文", author: { id: "bot" } })
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const outbound = await h.run(
         Effect.flatMap(Discord, (d) =>
@@ -1283,17 +1157,13 @@ test("receipt永続化後に停止したoutboundは残りのactionから再開�
         "✅": { reply: "了解", outboundId: outbound.id, channelId: TALK },
       })
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("旧版が安全な中間状態をunknownにしたoutboundもaction状態から再開する", async () => {
   const dc = await fakeDiscord()
   dc.at(TALK).unshift({ id: "4343", content: "本文", author: { id: "bot" } })
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const outbound = await h.run(
         Effect.flatMap(Discord, (d) =>
@@ -1337,16 +1207,12 @@ test("旧版が安全な中間状態をunknownにしたoutboundもaction状態�
         `/channels/${TALK}/messages/4343/reactions/✅/@me`,
       )
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("旧版で全receipt後に停止したoutboundはtap metadataを補修してsentになる", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const outbound = await h.run(
         Effect.flatMap(Discord, (d) =>
@@ -1395,10 +1261,7 @@ test("旧版で全receipt後に停止したoutboundはtap metadataを補修し�
       })
       assert.equal(dc.hits.length, 0)
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("一部のtap配送に失敗したoutboundでは成功済みtapも入力にしない", async () => {
@@ -1407,8 +1270,7 @@ test("一部のtap配送に失敗したoutboundでは成功済みtapも入力に
     if (hit.method === "PUT" && ++reactions === 2) return { status: 429 }
     return undefined
   })
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const retained = Object.fromEntries(
         Array.from({ length: 20 }, (_, index) => [
@@ -1449,16 +1311,12 @@ test("一部のtap配送に失敗したoutboundでは成功済みtapも入力に
       )
       assert.deepEqual(await h.run(pollInbound), [])
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("別outboundの完了時も送信中tapは有効tap20件の枠を奪わない", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const retained = Object.fromEntries(
         Array.from({ length: 20 }, (_, index) => [
@@ -1528,16 +1386,12 @@ test("別outboundの完了時も送信中tapは有効tap20件の枠を奪わな�
       ) as Record<string, unknown>
       assert.deepEqual(after, retained)
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })
 
 test("HTTP中に停止した古いactionはunknownで閉じて再送しない", async () => {
   const dc = await fakeDiscord()
-  wire(dc.url, { talk: TALK })
-  try {
+  await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const outbound = await h.run(
         Effect.flatMap(Discord, (d) =>
@@ -1566,8 +1420,5 @@ test("HTTP中に停止した古いactionはunknownで閉じて再送しない", 
       assert.equal(done?.actions[0]?.state, "unknown")
       assert.equal(dc.hits.length, 0)
     })
-  } finally {
-    wire(undefined)
-    await dc.close()
-  }
+  })
 })

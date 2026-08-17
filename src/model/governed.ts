@@ -27,10 +27,6 @@ import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal } from
 import { traceOf } from "./trace.ts"
 import { XAI_PROVIDER_META, xaiResponsesModel } from "./xai-responses.ts"
 
-/**
- * この経路がどちらのクォータを消費するかはプロセス単位で決まる。
- * cycle(src/cycle.ts)はモデルを組み立てる前にprocess-local laneを切り替える。
- */
 /** 呼ぶ前の検査。拒否は Error にして投げる — 道具ループの外まで理由付きで出る。 */
 async function gate(model: string): Promise<void> {
   const refusal = await run(
@@ -50,22 +46,6 @@ async function gate(model: string): Promise<void> {
   throw new Error(isRefusal(refusal) ? describeRefusal(refusal) : `${refusal._tag}: ${refusal.message}`)
 }
 
-/** `providerMetadata` に載せたクォータシグナルを型のある形に戻す。解析できなくても処理は止めない。 */
-function readQuota(meta: unknown): QuotaSignal | undefined {
-  if (typeof meta !== "object" || meta === null) return undefined
-  const q = (meta as { quota?: unknown }).quota
-  if (typeof q !== "object" || q === null) return undefined
-  const o = q as Record<string, unknown>
-  if (typeof o.pool !== "string" || typeof o.window !== "string") return undefined
-  return {
-    pool: o.pool,
-    window: o.window,
-    ...(typeof o.usedPercent === "number" ? { usedPercent: o.usedPercent } : {}),
-    ...(typeof o.resetsAtMs === "number" ? { resetsAtMs: o.resetsAtMs } : {}),
-    ...(typeof o.exhausted === "boolean" ? { exhausted: o.exhausted } : {}),
-  }
-}
-
 /**
  * 会計とクォータ状態の更新。この経路と Runner 経路が同じ DB に載るようにしてある。
  * ここを飛ばすと ledger が空のままになり、日次 run 数の上限(ledger を数える)を適用できない。
@@ -76,14 +56,12 @@ async function account(
   usage: { inTok: number; outTok: number; cacheRead: number; cacheWrite: number },
   text: string,
   notionalUsd: number,
-  quota: QuotaSignal | undefined,
 ): Promise<void> {
   const at = nowIso()
   await run(
     Effect.gen(function* () {
       const gov = yield* Governance
       const ledger = yield* Ledger
-      if (quota) yield* gov.noteQuota(quota, at, Date.now())
       yield* ledger.record({
         kind: "turn",
         role: accountingRole("dialogue"),
@@ -152,7 +130,6 @@ export function governance(): LanguageModelV4Middleware {
         },
         result.content.map((c) => (c.type === "text" ? c.text : "")).join(""),
         typeof meta?.notionalUsd === "number" ? meta.notionalUsd : 0,
-        readQuota(meta),
       )
       return result
     },

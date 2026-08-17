@@ -98,7 +98,7 @@ export interface KeptValue {
   readonly reason?: string
 }
 
-export interface EvidenceSource {
+interface EvidenceSource {
   readonly id: string
   readonly text: string
 }

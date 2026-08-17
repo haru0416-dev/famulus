@@ -4,30 +4,7 @@ import { resolve } from "node:path"
  * ユーザー向け管理 CLI。提案の承認・却下、停止、状態確認、記憶や watch の操作をまとめる。
  * 提案の承認を記録する入口はこの CLI だけで、承認後の実行コネクタはまだ無い。
  *
- *   fam status              … 停止/クォータ/今日の使用量/承認待ち件数/自動処理の最終実行状態
- *   fam halt <理由>         … 全停止。自動では明けない
- *   fam resume              … 停止解除
- *   fam attention           …自動処理の対象(watch・問い・次回の実行条件)
- *   fam journal [n]         …自動処理が実際に何をしたか(呼んだ道具・残った行・モデル使用量)
- *   fam answer <id> <答え>  … 問いに答えて閉じる
- *   fam drop <id> <理由>    … 追跡を終了する問いを、答えずに取り下げる
- *   fam watch <やること>    …watch に置く(既定は famulus = 自動処理の実行条件になる)
- *   fam unwatch <id>        … 決着した watch を閉じる
- *   fam list [status]       … 提案一覧(既定は承認待ち)
- *   fam show <id>           … 承認カード全文(id は前方一致でよい)
- *   fam approve <id>        … 承認actionを書き、payloadを指紋で固定する
- *   fam deny <id> <理由>    … 却下。理由は次の生成へ還流させるので必須
- *   fam recall <語>         … 記憶を引く
- *   fam dossier [id]        … 調査dossier一覧または引用・実験・限界の全文
- *   fam belief <slot> [値]  … 事実の今の値と変遷。値を渡すと前の区間を閉じて継ぐ
- *   fam dream [日数] [--dry]… 何日ぶんかをまとめて見直して確定値として保存する(1回ぶんでは見えない値)
- *   fam cleanup [日数] [--dry]… `.data/` の増え続けるものを削除する(events は触らない)
- *   fam backup              … DBのsnapshotを作り、一時復元して検証してから保持する
- *   fam restore --verify [path]… backupを一時DBへ復元して検証する
- *   fam doctor              … 設定・live DB・最新backupを診断する
- *   fam ws                  … workspace の一覧(名前・用途・大きさ・最後に触った時刻)
- *   fam selfdev [--fresh]   … 自分のソースの clone を workspace に置く(コンテナから直せるようにする)
- *   fam intake [--dry] [n]  … 過去の会話を圧縮して DB に入れる(DB の入口)
+ * コマンドの一覧と説明は下の USAGE が正。
  *
  * 承認しても実行はされない。コネクタ(送信・予約)が1つも無いので、approved は
  * 「承認済み・未実行」で止まる。ここを実行したことにするのが一番大きい嘘なので、そうしない。
@@ -69,7 +46,7 @@ const kb = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `$
 const place = (ch: string | undefined, dm: string | undefined) =>
   ch === undefined ? "出せない" : ch === dm ? "DM" : `チャンネル ${ch}`
 
-const USAGE = `fam — famulus の承認 CLI(別名: fam)
+const USAGE = `fam — famulus の承認 CLI
 
   fam status                今の停止状態・クォータ・今日の使用量・承認待ち件数・自動処理の最終実行状態
   fam halt <理由>           全停止(自動解除しない)
@@ -212,16 +189,10 @@ const program = (argv: readonly string[]) =>
         const db = yield* Db
         const halt = yield* gov.readHalt
         // production modelは全て同じSuperGrokクォータを使う。
-        const nowMs = Date.now()
-        const pools: string[] = []
-        for (const pool of [XAI_POOL]) {
-          const cd = yield* gov.quotaCooldown(pool, nowMs)
-          pools.push(
-            cd
-              ? `クォータ ${pool}/${cd.window}: クールダウン中(${new Date(cd.untilMs).toISOString()} まで)`
-              : `クォータ ${pool}: 利用可`,
-          )
-        }
+        const cd = yield* gov.quotaCooldown(XAI_POOL, Date.now())
+        const poolLine = cd
+          ? `クォータ ${XAI_POOL}/${cd.window}: クールダウン中(${new Date(cd.untilMs).toISOString()} まで)`
+          : `クォータ ${XAI_POOL}: 利用可`
         const t = yield* ledger.today()
         const pending = yield* proposals.list("proposed", 100)
         const day = localDayRange(nowIso())
@@ -254,7 +225,7 @@ const program = (argv: readonly string[]) =>
         )
         return [
           halt ? `停止中: ${halt.reason}(${halt.at}) — fam resume で解除` : "停止: なし",
-          ...pools,
+          poolLine,
           `${t.day}: run ${t.runs} 回(うち自走 ${Number(a?.n ?? 0)}/${appConfig().governance.autonomousRuns})` +
             ` / 入力 ${fmtTok(t.inTok)} 出力 ${fmtTok(t.outTok)}`,
           // 自動処理は通知なしに停止しうる。最後に呼ばれた時刻を出しておかないと、

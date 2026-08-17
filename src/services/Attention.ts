@@ -17,8 +17,7 @@ import { localDayRange, localHour, nowIso } from "../core/time.ts"
 import { Db, type Row } from "./Db.ts"
 
 /**
- * 次に処理する主体。`famulus` は自律エージェント(SOUL.md の名前)。
- * `counterparty`(第三者)は実データ0件のまま落とした。
+ * 次に処理する主体。`human` か `famulus` の2値。`famulus` は自律エージェント(SOUL.md の名前)。
  */
 export type NextMove = "human" | "famulus"
 

@@ -250,7 +250,7 @@ function toShowHnTerm(q: string): string | undefined {
   const m = /(?:^|\s)["'“”]?show[\s._-]?hn\s*:?["'“”]?(?=\s|$)/i.exec(q)
   if (!m) return undefined
   // Algolia は `site:` を語として読むだけなので、他の先と同じく落としてから渡す。
-  return plainQuery(q.replace(m[0], " ")).replace(/\s+/g, " ").trim()
+  return plainQuery(q.replace(m[0], " "))
 }
 const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : {}

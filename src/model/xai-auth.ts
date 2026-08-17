@@ -1,6 +1,6 @@
 /**
  * SuperGrok OAuth の資格情報。`auth.x.ai` の device-code flow(RFC 8628)で取得し、
- * 600 権限の JSON(`FAMULUS_XAI_AUTH`、既定 `.data/xai-auth.json`)に置く。
+ * 600 権限の JSON(`FAMULUS_XAI_AUTH`、既定 `~/.famulus/data/xai-auth.json`)に置く。
  *
  * client_id は公認ハーネス(OpenClaw)がソースに公開している device flow の公開クライアント。
  * secret は無い。トークンは grok.com アカウントの契約枠(週次共有プール)に紐づく —
@@ -15,8 +15,8 @@ import { dirname } from "node:path"
 import { appConfig } from "../core/config.ts"
 import { ModelCallError } from "./models.ts"
 
-export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
-export const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access"
+const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
+const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access"
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth2/token"
 const DEVICE_ENDPOINT = "https://auth.x.ai/oauth2/device/code"
 

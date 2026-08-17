@@ -12,21 +12,12 @@ import { readFileSync } from "node:fs"
 import { test } from "vitest"
 import { AGENT_PROFILES, agentProfileRef, PARENT_TOOLS } from "../src/model/profiles.ts"
 import { DelegationDenied, type EffectiveScope, intersectScope, withinScope } from "../src/model/scope.ts"
+import { registeredTools } from "./helpers.ts"
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
 
-/** assistant のソースから登録済み道具名を取る(test/prompt-tools.test.ts と同じ形)。 */
-function registered(): Set<string> {
-  const src = read("src/agent/assistant.ts")
-  const names = [...src.matchAll(/\b([a-z][a-z0-9_]*):\s*(?:tool\(\{|[a-zA-Z_]*[Tt]ool\b)/g)].map(
-    (m) => m[1] as string,
-  )
-  assert.ok(names.length > 5, `道具が採れていない(${names.length}件)`)
-  return new Set(names)
-}
-
 test("親 profile の道具全数は assistant の登録と一致する", () => {
-  const actual = registered()
+  const actual = registeredTools()
   // 子にだけ渡る道具(search / fetch は researcher・explore の中、recall は digger の中)を除くと親の全数。
   for (const name of PARENT_TOOLS) {
     assert.ok(actual.has(name), `profile が宣言する ${name} が assistant に無い`)

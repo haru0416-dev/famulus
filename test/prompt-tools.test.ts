@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url"
 import { test } from "vitest"
 import { gateTools, replyStepText, untrustedToolOutput } from "../src/agent/assistant.ts"
 import { readSoul } from "../src/agent/soul.ts"
+import { registeredTools } from "./helpers.ts"
 
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8")
@@ -47,24 +48,8 @@ const NOT_TOOLS = new Set([
   "c_who", // proposals の列名(誰がやるか)
 ])
 
-/**
- * 登録されている道具の名前。
- *
- * 拾う形は2つ: 表に直接置いたもの(`remember: tool({`)と、変数に切り出したものを
- * 表に差したもの(`recall: recallTool(state)` / `search: searchTool`)。
- * 子に渡す表も同じ書き方なので、1つの正規表現で両方が採れる。
- */
-function registered(): Set<string> {
-  const src = read("src/agent/assistant.ts")
-  const names = [...src.matchAll(/\b([a-z][a-z0-9_]*):\s*(?:tool\(\{|[a-zA-Z_]*[Tt]ool\b)/g)].map(
-    (m) => m[1] as string,
-  )
-  assert.ok(names.length > 5, `道具が採れていない(${names.length}件)— 登録の書き方が変わった可能性`)
-  return new Set(names)
-}
-
 test("プロンプトが名指す道具は全部登録されている", () => {
-  const tools = registered()
+  const tools = registeredTools()
   const missing: string[] = []
   for (const file of PROMPTS) {
     for (const m of read(file).matchAll(/`([a-z][a-z0-9_]*)`/g)) {
@@ -89,7 +74,7 @@ test("SOUL は確定日や改訂日をモデルへ渡さない", () => {
 })
 
 test("免除表に道具の名前を入れて検査を素通しさせていない", () => {
-  const tools = registered()
+  const tools = registeredTools()
   for (const word of NOT_TOOLS) {
     assert.ok(!tools.has(word), `${word} は実在する道具なので免除表に要らない`)
   }

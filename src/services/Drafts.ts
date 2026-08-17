@@ -42,17 +42,18 @@ export type DraftDecision = "accept" | "revise" | "discard"
 
 const row = (value: Row): DraftRow => value as unknown as DraftRow
 
+const SELECT_DAY = "SELECT * FROM drafts WHERE local_day = ?"
+const SELECT_PENDING = `SELECT * FROM drafts
+  WHERE delivered_at IS NULL AND state IN ('review_pending','revision_needed','delivery_pending')
+  ORDER BY local_day,created_at LIMIT 1`
+
 const selectDay = (tx: DbTx, day: string): DraftRow | undefined => {
-  const found = tx.get("SELECT * FROM drafts WHERE local_day = ?", day)
+  const found = tx.get(SELECT_DAY, day)
   return found ? row(found) : undefined
 }
 
 const selectPending = (tx: DbTx): DraftRow | undefined => {
-  const found = tx.get(
-    `SELECT * FROM drafts
-      WHERE delivered_at IS NULL AND state IN ('review_pending','revision_needed','delivery_pending')
-      ORDER BY local_day,created_at LIMIT 1`,
-  )
+  const found = tx.get(SELECT_PENDING)
   return found ? row(found) : undefined
 }
 
@@ -61,18 +62,9 @@ const makeDrafts = () =>
     const db = yield* Db
 
     const forDay = (at: string = nowIso()) =>
-      db
-        .get("SELECT * FROM drafts WHERE local_day = ?", localDayRange(at).key)
-        .pipe(Effect.map((found) => (found ? row(found) : undefined)))
+      db.get(SELECT_DAY, localDayRange(at).key).pipe(Effect.map((found) => (found ? row(found) : undefined)))
 
-    const pending = () =>
-      db
-        .get(
-          `SELECT * FROM drafts
-            WHERE delivered_at IS NULL AND state IN ('review_pending','revision_needed','delivery_pending')
-            ORDER BY local_day,created_at LIMIT 1`,
-        )
-        .pipe(Effect.map((found) => (found ? row(found) : undefined)))
+    const pending = () => db.get(SELECT_PENDING).pipe(Effect.map((found) => (found ? row(found) : undefined)))
 
     const materialize = (input: DraftInput, at: string = nowIso()) =>
       db.withImmediateTransaction("materialize draft", (tx) => {

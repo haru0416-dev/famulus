@@ -16,7 +16,7 @@ import { DEEP_TEXT, WIDE_TEMPLATE } from "./explore.ts"
 import { type ImportedSkill, importSkillsFrom } from "./skill-import.ts"
 
 export type SkillSlot = "method" | "presentation"
-export type SkillId = "research-wide" | "research-deep" | "draft-presentation"
+type SkillId = "research-wide" | "research-deep" | "draft-presentation"
 
 export interface SkillDefinition {
   readonly id: string
