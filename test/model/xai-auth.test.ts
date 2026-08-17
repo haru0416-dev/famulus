@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, test } from "vitest"
 import { configureApp } from "../../src/core/config.ts"
-import { loadXaiAccess, type XaiAuth } from "../../src/model/xai-auth.ts"
+import { loadXaiAccess, readXaiAuth, type XaiAuth } from "../../src/model/xai-auth.ts"
 import { withFetch } from "../helpers.ts"
 
 const NOW = 10_000_000
@@ -126,4 +126,37 @@ test("ファイルが同値のままの拒否は本当の失効として投げ�
       await assert.rejects(loadXaiAccess(NOW), /refresh が拒否された: invalid_grant/)
     },
   )
+})
+
+test("auth ファイルが無ければ grok-login への導線付きで落とす", () => {
+  const dir = mkdtempSync(join(tmpdir(), "xai-auth-test-"))
+  roots.push(dir)
+  assert.throws(() => readXaiAuth(join(dir, "nai.json")), /grok-login/)
+})
+
+test("token endpoint が error 欄の無い非 2xx を返したら status で落とす", async () => {
+  authFile(EXPIRED)
+  await withFetch(
+    // JSON でない本文 → error 欄が読めない → status を理由にする経路。
+    async () => new Response("busy", { status: 503 }),
+    async () => {
+      await assert.rejects(loadXaiAccess(NOW), /auth\.x\.ai\/token が 503 を返した/)
+    },
+  )
+})
+
+test("2xx でも欄の揃わないトークン応答は落とす(黙って半端に保存しない)", async () => {
+  const path = authFile(EXPIRED)
+  await withFetch(
+    async () =>
+      new Response(JSON.stringify({ access_token: "a-new", expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    async () => {
+      await assert.rejects(loadXaiAccess(NOW), /access\/refresh\/expires_in が揃っていない/)
+    },
+  )
+  // 失敗した応答でファイルを上書きしていないこと。
+  assert.equal((JSON.parse(readFileSync(path, "utf8")) as XaiAuth).refresh, "r-old")
 })

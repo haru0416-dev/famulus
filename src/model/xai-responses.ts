@@ -72,7 +72,7 @@ export function classifyXaiFailure(
  * doStream の出力を1回ぶんの応答にまとめる。doGenerate と構造化呼び出しはこれで作る。
  * ストリーム中の失敗は素のまま投げ、呼び出し側の catch が toXaiError で変換する。
  */
-async function collect(
+export async function collect(
   stream: ReadableStream<LanguageModelV4StreamPart>,
 ): Promise<Omit<LanguageModelV4GenerateResult, "warnings">> {
   const content: LanguageModelV4Content[] = []

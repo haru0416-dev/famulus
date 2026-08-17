@@ -38,7 +38,7 @@ const RETRY_MS = 180_000
  * cycle の systemd unit を起動する。実行中の oneshot に `start` を重ねても待ち行列には積まれず、2回目は実行
  * されない。走行中に届いたぶんは DB に未読として残るので、次の起動で拾い直す。
  */
-async function wake(): Promise<{ started: boolean; note: string }> {
+export async function wake(): Promise<{ started: boolean; note: string }> {
   // 検査は unit を空にして、実際に systemd を呼ばない
   const unit = CONFIG.cycle.unit
   if (!unit) return { started: true, note: "起動しない(検査)" }
@@ -58,7 +58,7 @@ async function wake(): Promise<{ started: boolean; note: string }> {
   }
 }
 
-async function poll(): Promise<string> {
+export async function poll(): Promise<string> {
   const state = await run(
     Effect.gen(function* () {
       const db = yield* Db
@@ -123,4 +123,5 @@ const main = async (): Promise<void> => {
   }
 }
 
-await main()
+// 入口として走ったときだけ。検査から import したときに受信処理を走らせない(src/presence.ts と同じ)。
+if (import.meta.main) await main()
