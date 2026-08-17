@@ -11,7 +11,7 @@
     "gate": "tsc --noEmit && biome check . && bun run test:coverage",
     "typecheck": "tsc --noEmit",
     "test": "bunx --bun vitest run",
-    "test:coverage": "bunx --bun vitest run --coverage",
+    "test:coverage": "rm -rf coverage && bunx --bun vitest run --coverage",
     "test:watch": "bunx --bun vitest",
     "lint": "biome check .",
     "fmt": "biome check --write .",

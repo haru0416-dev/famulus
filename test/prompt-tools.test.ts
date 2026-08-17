@@ -23,11 +23,20 @@ const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8")
 
 /** モデルに渡る文が入っている場所。ここに文を足す先が増えたら、この表にも足す。 */
-const PROMPTS = ["SOUL.md", "src/agent/soul.ts", "src/agent/assistant.ts", "src/cycle.ts"]
+const PROMPTS = [
+  "SOUL.md",
+  "src/agent/soul.ts",
+  "src/agent/assistant.ts",
+  "src/cycle.ts",
+  "src/agent/explore.ts",
+]
 
 /** 道具ではないと分かっている語。足すときは「なぜ道具ではないか」を書く。 */
 const NOT_TOOLS = new Set([
   "fam", // CLI の名前(ユーザーが端末で叩くもの)
+  "wide", // researcher の mode 値(道具は researcher のほう)
+  "deep", // 同上
+  "explore", // 同上
   "owner", // DB の列の値
   "source", // DB の列名(誰が書いたか)。keeper と dream が材料を絞るのに使う
   "completeCycle", // Attention の関数(cooldownの起点を進める側)。モデルからは呼べない
@@ -82,7 +91,11 @@ test("免除表に道具の名前を入れて検査を素通しさせていな�
 
 test("親 Agent の remember は確定値を直接書かない", () => {
   const src = read("src/agent/assistant.ts")
-  const remember = src.slice(src.indexOf("remember: tool({"), src.indexOf("recall: recallTool(state)"))
+  const start = src.indexOf("remember: tool({")
+  const end = src.indexOf("recall: recallTool(state)", start)
+  assert.ok(start >= 0 && end > start, "remember/recall の登録が見つからない — 切り出しの目印が変わった")
+  const remember = src.slice(start, end)
+  assert.ok(remember.length > 0, "remember の本文が切り出せていない")
   assert.doesNotMatch(remember, /mem\.recordBelief|\bslot\b/, "確定値は引用照合を通す keeper だけが書く")
 })
 

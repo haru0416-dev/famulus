@@ -5,6 +5,7 @@
  */
 
 import assert from "node:assert/strict"
+import type { LanguageModelV4 } from "@ai-sdk/provider"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import {
@@ -12,6 +13,7 @@ import {
   branchBrief,
   EXPLORE_TRANSFORMS,
   findDuplicates,
+  runExplore,
   salvageClaims,
   TRANSFORM_GOAL,
   wideInstructions,
@@ -202,4 +204,54 @@ test("照合できない claim は落とし、できた分だけ残す", () => {
   assert.equal(kept.length, 1)
   assert.deepEqual(kept[0]?.evidence, [{ url: "https://a", quote: "実在する本文" }])
   assert.deepEqual(dropped, ["捏造", "取得失敗先"])
+})
+
+const branchModel = (failGoal: string): LanguageModelV4 => {
+  const usage = {
+    inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 1, text: 1, reasoning: undefined },
+  }
+  return {
+    specificationVersion: "v4",
+    provider: "test",
+    modelId: "fake",
+    supportedUrls: {},
+    async doGenerate(options: unknown) {
+      if (JSON.stringify(options).includes(failGoal)) throw new Error("分岐の中で落ちた")
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              empty: true,
+              summary: "試したが出なかった",
+              limitations: "無し",
+              claims: [],
+            }),
+          },
+        ],
+        finishReason: { unified: "stop" as const, raw: undefined },
+        usage,
+        warnings: [],
+      }
+    },
+    async doStream() {
+      throw new Error("stream は使わない")
+    },
+  } as unknown as LanguageModelV4
+}
+
+test("分岐1本の失敗は隔離され、他の分岐と宣言順が保たれる", async () => {
+  const deps = { model: branchModel(TRANSFORM_GOAL.invert), makeTools: () => ({}), maxSteps: 2 }
+  const result = await runExplore(deps, "種となる問い", ["direct", "invert"])
+  assert.equal(result.branches.length, 2)
+  assert.deepEqual(
+    result.branches.map((b) => b.transform),
+    ["direct", "invert"],
+  )
+  const [ok, bad] = result.branches
+  assert.equal(ok?.failed, undefined)
+  assert.equal(ok?.output.empty, true)
+  assert.match(bad?.failed ?? "", /分岐の中で落ちた/)
+  assert.equal(bad?.output.empty, true, "失敗は空振り扱いで dossier に残る形になる")
 })

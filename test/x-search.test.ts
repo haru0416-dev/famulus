@@ -1,11 +1,22 @@
 /**
- * x_search の検査。ネットワークは呼ばない — 要求 body の組み立てと応答の解析だけを見る。
+ * x_search の検査。ネットワークは呼ばない — 要求 body の組み立て・応答の解析と、
+ * 失敗時の統治(ledger 記録と枯渇→cooldown の伝播)を見る。
  * 実疎通は 2026-08-17 に実測済み(grok-4.3 + handle filter で 200 / 約10秒)。
  */
 
 import assert from "node:assert/strict"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import * as Effect from "effect/Effect"
 import { test } from "vitest"
-import { buildXSearchBody, parseXSearchResponse } from "../src/model/x-search.ts"
+import { configureApp } from "../src/core/config.ts"
+import { nowIso } from "../src/core/time.ts"
+import { XAI_POOL } from "../src/model/models.ts"
+import { buildXSearchBody, parseXSearchResponse, xSearch } from "../src/model/x-search.ts"
+import { Db } from "../src/services/Db.ts"
+import { Governance } from "../src/services/Governance.ts"
+import { withFetch, withHarness } from "./helpers.ts"
 
 test("要求 body は filter を検証してから組む", () => {
   const body = buildXSearchBody(
@@ -94,4 +105,51 @@ test("壊れた応答は投げずに空で返す", () => {
   assert.equal(r.answer, "")
   assert.deepEqual(r.citations, [])
   assert.equal(r.searches, 0)
+})
+
+test("429 で落ちたら ledger に失敗が残り、続く precheck はクールダウンで拒否される", async () => {
+  // refresh に行かないよう期限の遠い合成 auth を置く(token 網を回避)。
+  const dir = mkdtempSync(join(tmpdir(), "fam-xai-auth-"))
+  const authPath = join(dir, "xai-auth.json")
+  writeFileSync(
+    authPath,
+    JSON.stringify({
+      access: "synthetic-access",
+      refresh: "synthetic-refresh",
+      expires: Date.now() + 24 * 60 * 60 * 1000,
+    }),
+  )
+  process.env.FAMULUS_XAI_AUTH = authPath
+  try {
+    await withHarness(async (h) => {
+      const failure = await withFetch(
+        async (input: unknown) => {
+          const url = typeof input === "string" ? input : String((input as { url?: string }).url ?? input)
+          assert.ok(url.endsWith("/responses"), `想定外の送信先: ${url}`)
+          return new Response("Too Many Requests: credits exhausted", { status: 429 })
+        },
+        () => h.fail(xSearch({ query: "検査" })),
+      )
+      assert.equal(failure._tag, "RunnerFailed")
+      const failed = failure as Extract<typeof failure, { _tag: "RunnerFailed" }>
+      assert.match(failed.message, /HTTP 429/)
+      assert.equal(failed.exhausted, true)
+
+      const row = await h.run(
+        Effect.flatMap(Db, (db) => db.get("SELECT provenance FROM ledger WHERE kind='x-search'")),
+      )
+      assert.equal(JSON.parse(String(row?.provenance)).outcome, "failed")
+
+      const refusal = await h.fail(
+        Effect.flatMap(Governance, (gov) =>
+          gov.precheck({ pool: XAI_POOL, at: nowIso(), nowMs: Date.now() }),
+        ),
+      )
+      assert.equal(refusal._tag, "QuotaCooldown")
+    })
+  } finally {
+    delete process.env.FAMULUS_XAI_AUTH
+    configureApp()
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

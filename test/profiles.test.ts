@@ -10,6 +10,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { test } from "vitest"
+import { configureApp } from "../src/core/config.ts"
 import { AGENT_PROFILES, agentProfileRef, PARENT_TOOLS } from "../src/model/profiles.ts"
 import { DelegationDenied, type EffectiveScope, intersectScope, withinScope } from "../src/model/scope.ts"
 import { registeredTools } from "./helpers.ts"
@@ -58,7 +59,7 @@ test("モデル呼び出しの実装が provider 側 tools を注入しない(x-
     "xai-responses に tools 注入が現れた(provider 実行道具は使わない方針への違反の疑い)",
   )
   const xsearch = read("src/model/x-search.ts")
-  assert.ok(/type: "x_search"/.test(xsearch), "x-search の隔離実装が変わった — 逸脱記録を見直す")
+  assert.ok(/type: "x_search"/.test(xsearch), "x-search の隔離実装が変わった — 隔離の前提から確かめ直す")
 })
 
 test("profile 参照は世代固定で、道具の宣言が変わると digest が変わる", () => {
@@ -97,4 +98,25 @@ test("要求を省いた委譲も深さは必ず1減る", () => {
   assert.equal(grandchild.maxDelegationDepth, 0)
   // 葉からの委譲は拒否 — 際限のない再委譲を型ではなく実行時にも塞ぐ。
   assert.throws(() => intersectScope(grandchild, {}), DelegationDenied)
+})
+
+test("profile ごとのモデル配線は既定 config で固定される", () => {
+  configureApp({}, "/tmp/famulus-profiles")
+  try {
+    const actual = Object.fromEntries(Object.values(AGENT_PROFILES).map((p) => [p.id, p.model()]))
+    assert.deepEqual(actual, {
+      "interactive-parent": "grok-4.6",
+      "autonomous-parent": "grok-4.6",
+      researcher: "grok-4.3",
+      digger: "grok-4.3",
+      "explore-branch": "grok-4.3",
+      "x-search": "grok-4.3",
+      keeper: "grok-4.3",
+      dream: "grok-4.3",
+      scout: "grok-4.3",
+      reviewer: "grok-4.6",
+    })
+  } finally {
+    configureApp()
+  }
 })
