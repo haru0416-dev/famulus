@@ -467,6 +467,42 @@ export const beliefMissMessage = (slot: string, slots: readonly { readonly slot:
     ? `'${slot}' は確定していない(確定値はまだ1件も無い)`
     : [`'${slot}' は確定していない。既存の slot:`, ...slots.map((s) => `  ${s.slot}`)].join("\n")
 
+/** stats 道具の集計。コード固定の SQL だけ — 道具の入力が SQL に混ざる経路を作らない。 */
+export const STATS_QUERIES: Record<
+  "runs" | "watch_runs" | "dossiers" | "drafts" | "events",
+  { readonly sql: string; readonly header: string; readonly line: (r: Record<string, unknown>) => string }
+> = {
+  runs: {
+    sql: `SELECT substr(at,1,10) d, COUNT(*) n, SUM(role = 'autonomous') a, SUM(in_tok) i, SUM(out_tok) o
+            FROM ledger WHERE at >= ? GROUP BY d ORDER BY d`,
+    header: "日付 run 自走run 入力tok 出力tok",
+    line: (r) => `${r.d} ${r.n} ${r.a} ${r.i} ${r.o}`,
+  },
+  watch_runs: {
+    sql: "SELECT substr(at,1,10) d, COUNT(*) n FROM watch_runs WHERE at >= ? GROUP BY d ORDER BY d",
+    header: "日付 実行数",
+    line: (r) => `${r.d} ${r.n}`,
+  },
+  dossiers: {
+    sql: `SELECT substr(created_at,1,10) d, COUNT(*) n, SUM(question LIKE '[explore]%') e
+            FROM research_dossiers WHERE created_at >= ? GROUP BY d ORDER BY d`,
+    header: "日付 dossier explore経由",
+    line: (r) => `${r.d} ${r.n} ${r.e}`,
+  },
+  drafts: {
+    sql: `SELECT substr(created_at,1,10) d, COUNT(*) n, SUM(state = 'delivered' OR state = 'accepted') ok
+            FROM drafts WHERE created_at >= ? GROUP BY d ORDER BY d`,
+    header: "日付 下書き 配送済以上",
+    line: (r) => `${r.d} ${r.n} ${r.ok}`,
+  },
+  events: {
+    sql: `SELECT substr(at,1,10) d, COUNT(*) n, SUM(kind = 'import') imp, SUM(kind = 'belief') b
+            FROM events WHERE at >= ? GROUP BY d ORDER BY d`,
+    header: "日付 記録 取り込み belief",
+    line: (r) => `${r.d} ${r.n} ${r.imp} ${r.b}`,
+  },
+}
+
 /**
  * 図を media に置き、Discord の送信 queue に積む。送信そのものは返信の flush と一緒に出る。
  * spec の誤り(FigureError)は文で返す — 呼んだモデルが直して呼び直せる形。
@@ -1267,12 +1303,42 @@ function buildTools(state: TurnState, gate: ToolGate) {
      * 出し先は Discord の会話。`draft` とは場所を分ける — あちらはリアクションで判断を返す文、
      * こちらは読むだけの文。混在させると、返答が必要な投稿を見落としやすくなる。
      */
+    // ── 自分の運用数列。集計はコード固定の SQL だけ — 任意の SQL は書かせない。
+    stats: tool({
+      description:
+        "自分の運用記録の日別数列を返す。グラフを頼まれたら、まずここで数字を取ってから chart で描く。" +
+        "series: runs(モデル呼び出しとトークン)/ watch_runs(watch の実行)/ dossiers(調査)/ " +
+        "drafts(下書き)/ events(記録の増分)。",
+      inputSchema: vs(
+        v.object({
+          series: v.pipe(
+            v.picklist(["runs", "watch_runs", "dossiers", "drafts", "events"]),
+            v.description("取る数列。"),
+          ),
+          days: v.optional(v.pipe(v.number(), v.description("さかのぼる日数。既定 14、最大 60。"))),
+        }),
+      ),
+      execute: async ({ series, days }) =>
+        run(
+          Effect.gen(function* () {
+            const db = yield* Db
+            const n = Math.min(Math.max(Math.round(days ?? 14), 1), 60)
+            const since = new Date(Date.now() - n * 86_400_000).toISOString()
+            const q = STATS_QUERIES[series]
+            const rows = yield* db.all(q.sql, since)
+            if (rows.length === 0) return `${series}: この期間に行が無い`
+            return [q.header, ...rows.map((r) => q.line(r))].join("\n")
+          }),
+        ),
+    }),
+
     // ── 図の作成。モデルは spec(option_json / dot / カードの中身)だけを書き、
     // 描画はコードが決定的に行う(src/core/figure.ts)。SVG の直書きはさせない。
     chart: tool({
       description:
         "チャート(折れ線・棒・円・散布など)を描いて Discord に画像で載せる。option_json は " +
         "Apache ECharts の option をそのまま JSON で書く(xAxis / yAxis / series など)。" +
+        "自分の運用の数字なら先に stats で取る。データの無いグラフを推測で描かない。" +
         "spec の誤りは文で返るので、直して呼び直す。載った図には本文で触れてよい。",
       inputSchema: vs(
         v.object({
@@ -1304,7 +1370,8 @@ function buildTools(state: TurnState, gate: ToolGate) {
     card: tool({
       description:
         "統計カード(見出し+数行の要点)を画像にして Discord に載せる。週報や節目の報告に。" +
-        "レイアウトは固定で、書くのは中身だけ。",
+        "レイアウトは固定で、書くのは中身だけ。**グラフの代替にしない** — 数値の系列を" +
+        "頼まれたら stats + chart で折れ線・棒にする。",
       inputSchema: vs(
         v.object({
           title: v.pipe(v.string(), v.description("見出し。一行。")),

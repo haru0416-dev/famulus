@@ -60,6 +60,7 @@ export const PARENT_TOOLS: readonly string[] = [
   "workspaces",
   "tell",
   "draft",
+  "stats",
   "chart",
   "diagram",
   "card",

@@ -14,6 +14,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import {
   beliefMissMessage,
@@ -23,7 +24,7 @@ import {
 } from "../../src/agent/assistant.ts"
 import { readSoul } from "../../src/agent/soul.ts"
 import { PROJECT_ROOT } from "../../src/core/config.ts"
-import { registeredTools } from "../helpers.ts"
+import { registeredTools, withHarness } from "../helpers.ts"
 
 const read = (rel: string): string => readFileSync(join(PROJECT_ROOT, rel), "utf8")
 
@@ -181,4 +182,21 @@ test("lease gateはtool実行の前後に通り失敗時は実行しない", asy
   )
   await assert.rejects(() => checkedAfterFailure.sample.execute(), /tool failed/)
   assert.deepEqual(failed, ["gate", "execute", "gate"])
+})
+
+test("stats の集計 SQL は全系列が実 schema で実行できる", async () => {
+  const { STATS_QUERIES } = await import("../../src/agent/assistant.ts")
+  const { Db } = await import("../../src/services/Db.ts")
+  const { Memory } = await import("../../src/services/Memory.ts")
+  await withHarness(async (h) => {
+    await h.run(
+      Effect.flatMap(Memory, (m) => m.remember({ content: "系列の種", at: "2026-08-08T09:00:00Z" })),
+    )
+    for (const [name, q] of Object.entries(STATS_QUERIES)) {
+      const rows = await h.run(Effect.flatMap(Db, (db) => db.all(q.sql, "2026-01-01T00:00:00Z")))
+      assert.ok(Array.isArray(rows), name)
+      // 行があれば line() が日付始まりの1行になる(空 DB では0行で素通り)
+      for (const r of rows) assert.match(q.line(r), /^\d{4}-\d{2}-\d{2} /, name)
+    }
+  })
 })
