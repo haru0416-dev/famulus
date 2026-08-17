@@ -110,6 +110,23 @@ interface TurnState {
   confusion: string | undefined
 }
 
+/**
+ * 道具呼び出しから「何に対して呼んだか」を1つ拾う。名前だけだと `recall×3` が
+ * 「3回引いた」としか読めず、同じ語を引き直したのか別の語なのかが記録から消える。
+ * 欄の優先順は親道具の入力に合わせる(query → task → command → …)。
+ */
+const DETAIL_KEYS = ["query", "task", "command", "question", "subject", "slot", "title", "summary"] as const
+
+export function toolTarget(input: unknown): string | undefined {
+  if (input === null || typeof input !== "object") return undefined
+  const o = input as Record<string, unknown>
+  for (const key of DETAIL_KEYS) {
+    const v = o[key]
+    if (typeof v === "string" && v.trim() !== "") return v.replace(/\s+/g, " ").trim().slice(0, 24)
+  }
+  return undefined
+}
+
 /** 自由文のツール結果を、親モデルへの指示ではなく参照データとして渡す。 */
 export const untrustedToolOutput =
   (source: string, label: string) =>
@@ -1445,6 +1462,8 @@ export interface AssistantTurnResult {
    * 切られた回も、そこまでに呼ばれたぶんは残る。
    */
   readonly tools: readonly string[]
+  /** 道具ごとの対象(最初の1回ぶん)。何に対して呼んだかが名前と回数だけでは残らない。 */
+  readonly toolTargets?: Readonly<Record<string, string>>
   /** 止まった理由。最後まで書けていれば undefined。 */
   readonly cutOff?: string
   /** 指示や仕組みへの戸惑い(confusion 道具の自己申告)。 */
@@ -1537,13 +1556,21 @@ export function createAssistant(opts: AssistantOptions = {}) {
       let steps = 0
       // 呼ばれた道具は step ごとに積む。最後に res から取ると、切られた回のぶんが残らない。
       const tools: string[] = []
+      const toolTargets: Record<string, string> = {}
       try {
         const res = await agent.generate({
           messages: sent,
           ...(o.signal ? { abortSignal: o.signal } : {}),
           onStepFinish: (s) => {
             steps += 1
-            for (const c of s.toolCalls ?? []) tools.push(c.toolName)
+            for (const c of s.toolCalls ?? []) {
+              tools.push(c.toolName)
+              // 対象は道具ごとに最初の1回だけ残す。同じ道具の2回目以降は回数で足りる。
+              if (!(c.toolName in toolTargets)) {
+                const target = toolTarget(c.input)
+                if (target) toolTargets[c.toolName] = target
+              }
+            }
             const t = replyStepText(s.text, s.toolCalls ?? [])
             if (t && t !== said.at(-1)) said.push(t)
           },
@@ -1553,6 +1580,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
           text: said.join("\n\n"),
           steps: res.steps.length,
           tools,
+          ...(Object.keys(toolTargets).length > 0 ? { toolTargets } : {}),
           ...(state.confusion ? { confusion: state.confusion } : {}),
           ...(inputEventId ? { inputEventId } : {}),
         }
@@ -1563,6 +1591,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
           text: said.join("\n\n"),
           steps,
           tools,
+          ...(Object.keys(toolTargets).length > 0 ? { toolTargets } : {}),
           cutOff: causeReason(e),
           ...(state.confusion ? { confusion: state.confusion } : {}),
           ...(inputEventId ? { inputEventId } : {}),

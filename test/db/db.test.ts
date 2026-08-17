@@ -10,10 +10,16 @@ import { assertCurrentSchema, enableWalJournalMode, openDb, SCHEMA_SQL } from ".
 import { RunnerStub } from "../../src/model/Runner.ts"
 import { makeRuntime } from "../../src/runtime.ts"
 import { Db, DbLive, type DbTxAbort } from "../../src/services/Db.ts"
+import { legacyV4Sql } from "../helpers.ts"
 
 let root = ""
+/**
+ * migration 台帳より前の DB を作る。現行 schema から作り、以後の migration が加えた差を
+ * 文字列の段階で戻す — v4 の指紋(LEGACY_V4_SCHEMA_FINGERPRINT)と一致させるため。
+ * migration を足したら、その差をここでも戻すこと。
+ */
 const makeLegacyV4 = (db: ReturnType<typeof openDb>): void => {
-  db.exec(SCHEMA_SQL)
+  db.exec(legacyV4Sql(SCHEMA_SQL))
   db.exec("DROP TABLE schema_migrations")
 }
 
@@ -111,8 +117,9 @@ test("空DBは現行schemaで一度だけ作られ再オープンできる", asy
 
   const reopened = openDb(path)
   assertCurrentSchema(reopened, path)
-  assert.deepEqual(reopened.prepare("SELECT version,name FROM schema_migrations").all(), [
+  assert.deepEqual(reopened.prepare("SELECT version,name FROM schema_migrations ORDER BY version").all(), [
     { version: 1, name: "migration-ledger" },
+    { version: 2, name: "discord-ack" },
   ])
   assert.throws(() => reopened.exec("DELETE FROM schema_migrations"), /immutable/)
   reopened.close()
@@ -141,8 +148,9 @@ test("既知のbaseline DBはデータを保ったままcurrent schemaへ移行�
   assert.deepEqual(reopened.prepare("SELECT value FROM schema_meta WHERE key='preserved'").get(), {
     value: "yes",
   })
-  assert.deepEqual(reopened.prepare("SELECT version,name FROM schema_migrations").all(), [
+  assert.deepEqual(reopened.prepare("SELECT version,name FROM schema_migrations ORDER BY version").all(), [
     { version: 1, name: "migration-ledger" },
+    { version: 2, name: "discord-ack" },
   ])
   reopened.close()
 })
@@ -222,7 +230,7 @@ test("未知のmigration historyは変更せず拒否する", async () => {
   const db = openDb(path)
   db.exec(SCHEMA_SQL)
   db.exec("DROP TRIGGER schema_migrations_immutable; DROP TRIGGER schema_migrations_no_delete")
-  db.prepare("INSERT INTO schema_migrations(version,name,checksum,applied_at)VALUES(2,'unknown',?,?)").run(
+  db.prepare("INSERT INTO schema_migrations(version,name,checksum,applied_at)VALUES(9,'unknown',?,?)").run(
     "f".repeat(64),
     new Date().toISOString(),
   )
@@ -238,7 +246,7 @@ test("未知のmigration historyは変更せず拒否する", async () => {
 
   const reopened = openDb(path)
   assert.equal(
-    (reopened.prepare("SELECT count(*) n FROM schema_migrations WHERE version=2").get() as { n: number }).n,
+    (reopened.prepare("SELECT count(*) n FROM schema_migrations WHERE version=9").get() as { n: number }).n,
     1,
   )
   reopened.close()

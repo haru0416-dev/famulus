@@ -22,6 +22,7 @@ const migration = (version: number, name: string, url: URL): Migration => {
 
 const MIGRATIONS: readonly Migration[] = [
   migration(1, "migration-ledger", new URL("./migrations/0001-migration-ledger.sql", import.meta.url)),
+  migration(2, "discord-ack", new URL("./migrations/0002-discord-ack.sql", import.meta.url)),
 ]
 
 const sqlString = (value: string): string => `'${value.replaceAll("'", "''")}'`

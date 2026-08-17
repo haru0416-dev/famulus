@@ -29,6 +29,8 @@ export interface Entry {
   readonly reasons: readonly string[]
   /** 呼ばれた道具の並び。古い回は記録が無いので undefined。 */
   readonly tools?: readonly string[]
+  /** 道具ごとの対象(最初の1回ぶん)。回数だけでは「同じ語を引き直したか」が読めない。 */
+  readonly toolTargets?: Readonly<Record<string, string>>
   readonly steps?: number
   readonly ms?: number
   /** 止まった理由。最後まで書けていれば undefined。 */
@@ -60,6 +62,16 @@ const arr = (v: unknown): string[] | undefined =>
   Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined)
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined)
+
+/** 道具名→対象の表。値が文字列でないものは落とす(DB の JSON は何でも入りうる)。 */
+const strMap = (v: unknown): Record<string, string> | undefined => {
+  if (v === null || typeof v !== "object") return undefined
+  const out: Record<string, string> = {}
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val === "string" && val !== "") out[k] = val
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
 
 /**
  * 直近 n 回。実際に動いた回だけ返す(idle の回は cycle の記録を書かない)。
@@ -100,6 +112,7 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
         wroteAt,
       )
       const tools = arr(c.tools)
+      const toolTargets = strMap(c.toolTargets)
       const steps = num(c.steps)
       const spent = num(c.ms)
       const cutOff = str(c.cutOff)
@@ -108,6 +121,7 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
         at,
         reasons: arr(c.reasons) ?? [],
         ...(tools ? { tools } : {}),
+        ...(toolTargets ? { toolTargets } : {}),
         ...(steps === undefined ? {} : { steps }),
         ...(spent === undefined ? {} : { ms: spent }),
         ...(cutOff ? { cutOff } : {}),
@@ -169,17 +183,21 @@ const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed
  * 「10回呼んで0本残っていない」というずれは数だけでも見えるので、そちらを取った。
  * 順番は `runs()` が持っていて、`fam journal` から読める。
  */
-export const tally = (tools: readonly string[]): string => {
+export const tally = (tools: readonly string[], targets: Readonly<Record<string, string>> = {}): string => {
   const seen = new Map<string, number>()
   for (const t of tools) seen.set(t, (seen.get(t) ?? 0) + 1)
   return [...seen]
     .sort((a, b) => b[1] - a[1]) // 同数なら先に呼んだ順(Map が挿入順を持っている)
-    .map(([name, n]) => (n > 1 ? `${name}×${n}` : name))
+    .map(([name, n]) => `${label(name, targets)}${n > 1 ? `×${n}` : ""}`)
     .join(" · ")
 }
 
+/** 道具名に対象を1つ添える。何に対して呼んだかは、名前と回数だけでは残らない。 */
+const label = (name: string, targets: Readonly<Record<string, string>>): string =>
+  targets[name] ? `${name}(${targets[name]})` : name
+
 /** `shell shell ran shell` → `shell×2 → ran → shell`。並びは崩さない — 何の後に何を呼んだかが読める。 */
-export const runs = (tools: readonly string[]): string =>
+export const runs = (tools: readonly string[], targets: Readonly<Record<string, string>> = {}): string =>
   tools
     .reduce<{ name: string; n: number }[]>((acc, t) => {
       const last = acc.at(-1)
@@ -187,7 +205,7 @@ export const runs = (tools: readonly string[]): string =>
       else acc.push({ name: t, n: 1 })
       return acc
     }, [])
-    .map((r) => (r.n > 1 ? `${r.name}×${r.n}` : r.name))
+    .map((r) => `${label(r.name, targets)}${r.n > 1 ? `×${r.n}` : ""}`)
     .join(" → ")
 
 /**
@@ -260,7 +278,7 @@ export const logPost = (e: Entry): string =>
     `- 実行条件 ${e.reasons.join(" / ") || "記録なし"}`,
     `- 実働 ${e.steps === undefined ? "手数の記録なし" : `${e.steps}手`}${e.ms === undefined ? "" : ` / ${took(e.ms)}`}`,
     `- 推論 ${e.runs}run / 出力${tok(e.outTok)}`,
-    `- 道具 ${e.tools?.length ? tally(e.tools) : "記録なし"}`,
+    `- 道具 ${e.tools?.length ? tally(e.tools, e.toolTargets ?? {}) : "記録なし"}`,
     `- 残った ${leftLine(e.left, "なし")}`,
   ].join("\n")
 
@@ -275,7 +293,7 @@ export const renderJournal = (entries: readonly Entry[]): string => {
       `── ${localStamp(e.at)} ${"─".repeat(20)}`,
       `  条件    ${e.reasons.join(" / ") || "実行条件の記録なし"}`,
       `  実働    ${workLine(e)}`,
-      `  道具    ${e.tools?.length ? runs(e.tools) : "記録なし(この回より前)"}`,
+      `  道具    ${e.tools?.length ? runs(e.tools, e.toolTargets ?? {}) : "記録なし(この回より前)"}`,
       `  残った  ${leftLine(e.left)}`,
       `  言った  ${saidLine(e.said)}`,
       ...(e.confusion ? [`  戸惑い  ${e.confusion}`] : []),

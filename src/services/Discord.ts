@@ -65,13 +65,19 @@ export interface Enqueue {
   readonly ping?: boolean
   /** スレッドの名前。渡すと出した1通からスレッドを立て、そこも読みに行く。 */
   readonly thread?: string
+  /**
+   * 受信済みメッセージに直接付けるリアクション(既読の合図)。
+   * `taps` と違い自分の投稿ではなくユーザーの発言に付くので、本文を1通も増やさずに
+   * 「見えている・動いている」だけを出せる。数分かかる回の沈黙を埋めるのが用途。
+   */
+  readonly ack?: { readonly channelId: string; readonly messageId: string; readonly emoji: string }
 }
 
 export type OutboundState = "queued" | "sending" | "sent" | "failed" | "partial" | "unknown"
 
 export interface OutboundAction {
   readonly ordinal: number
-  readonly kind: "open_dm" | "message" | "thread" | "reaction"
+  readonly kind: "open_dm" | "message" | "thread" | "reaction" | "ack"
   readonly state: "queued" | "sending" | "succeeded" | "failed" | "unknown"
   readonly spec: unknown
   readonly nonce?: string
@@ -404,6 +410,12 @@ const makeDiscord = () =>
           readonly reply: string
           readonly draft?: { readonly id: string; readonly decision: DraftDecision }
         }
+      | {
+          readonly kind: "ack"
+          readonly channelId: string
+          readonly messageId: string
+          readonly emoji: string
+        }
 
     const parse = (raw: unknown): unknown => JSON.parse(String(raw)) as unknown
 
@@ -545,7 +557,14 @@ const makeDiscord = () =>
         const head = p.ping && !destination.dm ? `<@${owner}>\n` : ""
         const actionSpecs: ActionSpec[] = []
         if (!destination.id) actionSpecs.push({ kind: "open_dm", recipientId: owner })
-        const parts = chunks(head + p.text)
+        if (p.ack)
+          actionSpecs.push({
+            kind: "ack",
+            channelId: p.ack.channelId,
+            messageId: p.ack.messageId,
+            emoji: p.ack.emoji,
+          })
+        const parts = p.text === "" ? [] : chunks(head + p.text)
         const messageOrdinals: number[] = []
         for (const [partIndex, content] of parts.entries()) {
           const nonce = digestOf({ purpose: p.purpose, dedupeKey: p.dedupeKey, partIndex }).slice(0, 25)
@@ -557,23 +576,25 @@ const makeDiscord = () =>
           })
         }
         const lastMessage = messageOrdinals.at(-1)
-        if (lastMessage === undefined) return undefined
-        if (p.thread)
+        // ack だけの投稿(本文なし)は成立する。本文もリアクションも無いものは出さない。
+        if (lastMessage === undefined && !p.ack) return undefined
+        if (p.thread && lastMessage !== undefined)
           actionSpecs.push({
             kind: "thread",
             ...(destination.id ? { channelId: destination.id } : {}),
             messageOrdinal: lastMessage,
             name: p.thread.slice(0, 100),
           })
-        for (const tap of p.taps ?? [])
-          actionSpecs.push({
-            kind: "reaction",
-            ...(destination.id ? { channelId: destination.id } : {}),
-            messageOrdinal: lastMessage,
-            emoji: tap.emoji,
-            reply: tap.reply,
-            ...(tap.draft ? { draft: tap.draft } : {}),
-          })
+        if (lastMessage !== undefined)
+          for (const tap of p.taps ?? [])
+            actionSpecs.push({
+              kind: "reaction",
+              ...(destination.id ? { channelId: destination.id } : {}),
+              messageOrdinal: lastMessage,
+              emoji: tap.emoji,
+              reply: tap.reply,
+              ...(tap.draft ? { draft: tap.draft } : {}),
+            })
 
         const spec = canonicalJson({
           purpose: p.purpose,
@@ -881,6 +902,9 @@ const makeDiscord = () =>
                 method: "POST",
                 body: JSON.stringify({ name: spec.name, auto_archive_duration: 1440 }),
               }
+            } else if (spec.kind === "ack") {
+              path = `/channels/${spec.channelId}/messages/${spec.messageId}/reactions/${encodeURIComponent(spec.emoji)}/@me`
+              init = { method: "PUT" }
             } else if (spec.kind === "reaction" && channelId && messageId) {
               path = `/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(spec.emoji)}/@me`
               init = { method: "PUT" }

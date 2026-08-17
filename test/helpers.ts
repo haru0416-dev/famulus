@@ -72,3 +72,14 @@ export const withFetch = async <T>(impl: unknown, fn: () => Promise<T>): Promise
     globalThis.fetch = original
   }
 }
+
+/**
+ * migration 台帳より前(v4)の schema SQL。現行 schema から、以後の migration が加えた差を
+ * 文字列の段階で戻す — LEGACY_V4_SCHEMA_FINGERPRINT と一致させるため。
+ * migration を足したら、その差をここでも戻すこと。
+ */
+export const legacyV4Sql = (schemaSql: string): string =>
+  schemaSql.replace(
+    "kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction','ack')),",
+    "kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction')),",
+  )

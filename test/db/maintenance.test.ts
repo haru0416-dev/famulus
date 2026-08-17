@@ -16,6 +16,7 @@ import { openDb, SCHEMA_SQL } from "../../src/db/sqlite.ts"
 import { RunnerStub } from "../../src/model/Runner.ts"
 import { makeRuntime } from "../../src/runtime.ts"
 import { Db, DbLive } from "../../src/services/Db.ts"
+import { legacyV4Sql } from "../helpers.ts"
 
 let root = ""
 let source = ""
@@ -182,7 +183,7 @@ test("schemaを失ったbackupを復元成功として記録しない", () => {
 test("pre-ledger backupは一時復元側だけを移行して検証する", () => {
   const backup = join(root, "legacy-backup.db")
   const db = openDb(backup)
-  db.exec(SCHEMA_SQL)
+  db.exec(legacyV4Sql(SCHEMA_SQL))
   db.exec("DROP TABLE schema_migrations")
   db.prepare("INSERT INTO schema_meta(key,value)VALUES('legacy-sentinel','kept')").run()
   db.close()

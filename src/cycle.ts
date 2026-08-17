@@ -141,6 +141,24 @@ function renderRefusedSection(d: CyclePlan): string | undefined {
  * 実行された以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を出す。
  * 実行条件と対象だけ渡して、処理する必要が無ければ一行で終えてよいと書く。
  */
+/**
+ * 既読の合図を付ける先。owner の未読のうち最後の1件を採る — 連投された回に全部へ付けても
+ * 意味は増えない。場所は provenance(`[{"kind":"discord","ref":"<channel id>"}]`)から読む。
+ */
+function discordAck(events: readonly ObservedEvent[]): { channelId: string; messageId: string } | undefined {
+  for (const e of [...events].reverse()) {
+    if (e.source !== "owner" || !e.origin_id || !e.provenance) continue
+    try {
+      const refs = JSON.parse(e.provenance) as { kind?: string; ref?: string }[]
+      const channelId = refs.find((r) => r.kind === "discord" && typeof r.ref === "string")?.ref
+      if (channelId) return { channelId, messageId: e.origin_id }
+    } catch {
+      // 形が違う記録は飛ばす
+    }
+  }
+  return undefined
+}
+
 function buildPrompt(d: CyclePlan, spokenTo: boolean, workspaces: readonly Workspace[]): string {
   const sections: string[] = []
 
@@ -407,6 +425,23 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
   const spokenTo = d.newEvents.some((e) => e.source === "owner")
   log("実行条件:", d.reasons.join(" / "), spokenTo ? "(返信)" : "")
 
+  // 話しかけられた回は、答えが出るまで数分かかる。その間ユーザーの画面には何も起きないので、
+  // 受け取った発言そのものに 👀 を付けて「見えている」だけ先に返す(本文は1通も増やさない)。
+  const acked = spokenTo ? discordAck(d.newEvents) : undefined
+  if (acked) {
+    await run(
+      Effect.flatMap(Discord, (discord) =>
+        discord.enqueue({
+          purpose: "cycle-ack",
+          dedupeKey: acked.messageId,
+          text: "",
+          ack: { ...acked, emoji: "👀" },
+        }),
+      ),
+    ).catch(() => {})
+    await run(Effect.flatMap(Discord, (d2) => d2.flushQueued())).catch(() => {})
+  }
+
   // 道具一式を読み込むのは、モデル実行が必要と決まってから。idle の回(定期実行の大半)は
   // ここを通らないので、その回の起動は DB を1回引くだけで終わる。
   const { createAssistant } = await import("./agent/assistant.ts")
@@ -508,6 +543,7 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
             reasons: d.reasons,
             said: text,
             tools: turn.tools,
+            ...(turn.toolTargets ? { toolTargets: turn.toolTargets } : {}),
             steps: turn.steps,
             ms,
             ...(cutOff ? { cutOff } : {}),
@@ -537,6 +573,16 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         // 書いた記録をそのまま読み直して出す。ここで数え直すと、画面で見る値と
         // `fam journal` の値が別々に変わっていって、食い違ったときにどちらが本当か決められなくなる。
         // 最後に置いてあるのは、enqueue に失敗しても commit まで済んでいるようにするため。
+        // 済んだ合図。👀 は消さない — 「見た」と「終わった」は別の事実で、両方残るほうが読める。
+        if (acked)
+          yield* discord
+            .enqueue({
+              purpose: "cycle-done",
+              dedupeKey: acked.messageId,
+              text: "",
+              ack: { ...acked, emoji: cutOff ? "⚠️" : "✅" },
+            })
+            .pipe(Effect.catch(() => Effect.void))
         const [entry] = yield* readJournal(1)
         if (entry) {
           yield* lease.assertCurrent(token)

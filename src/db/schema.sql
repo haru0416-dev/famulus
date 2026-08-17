@@ -39,7 +39,7 @@ CREATE TABLE discord_outbound (
 CREATE TABLE discord_outbound_actions (
   outbound_id TEXT NOT NULL REFERENCES discord_outbound(id),
   ordinal     INTEGER NOT NULL CHECK (ordinal >= 0),
-  kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction')),
+  kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction','ack')),
   spec        TEXT NOT NULL CHECK (json_valid(spec)),
   spec_hash   TEXT NOT NULL,
   nonce       TEXT CHECK (nonce IS NULL OR length(nonce) <= 25),

@@ -1422,3 +1422,20 @@ test("HTTP中に停止した古いactionはunknownで閉じて再送しない", 
     })
   })
 })
+
+test("ack は本文を1通も出さず、受信メッセージに直接リアクションを付ける", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, { talk: CH }, async () => {
+    await withHarness(async (h) => {
+      // post ヘルパは本文の message id を返すので、本文の無い ack では undefined になる。
+      // ここで見るのは実際に飛んだ HTTP のほう。
+      await h.run(post({ text: "", ack: { channelId: "999", messageId: "12345", emoji: "👀" } }))
+      const puts = dc.hits.filter((x) => x.method === "PUT")
+      assert.equal(puts.length, 1)
+      assert.ok(puts[0]?.path.includes("/channels/999/messages/12345/reactions/"))
+      assert.ok(puts[0]?.path.includes(encodeURIComponent("👀")))
+      // 本文は1通も出ない
+      assert.equal(dc.hits.filter((x) => x.method === "POST" && x.path.endsWith("/messages")).length, 0)
+    })
+  })
+})

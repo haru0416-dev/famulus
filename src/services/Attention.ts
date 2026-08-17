@@ -85,6 +85,10 @@ export interface ObservedEvent {
   /** 1 なら不信データ由来(gmail/web)。cycle はこれを見て境界マーカーで囲う。 */
   readonly taint: number
   readonly content: string
+  /** 受信元のメッセージ id(Discord なら message id)。既読の合図を付ける先。 */
+  readonly origin_id?: string
+  /** 受信場所。`[{"kind":"discord","ref":"<channel id>"}]` の形。 */
+  readonly provenance?: string
 }
 
 /** cycle 1回ぶんの入力。`idle` ならモデルを呼ばない。`reasons` は今回の実行条件。 */
@@ -410,7 +414,7 @@ const makeAttention = () =>
 
         // 自分が書いたもの(source='system')は実行条件にしない。外部入力だけを対象にする。
         const newEvents = (yield* db.all(
-          `SELECT seq AS rowid, id, at, source, taint, content FROM events
+          `SELECT seq AS rowid, id, at, source, taint, content, origin_id, provenance FROM events
             WHERE seq > ?AND source != 'system' AND content IS NOT NULL
             ORDER BY seq ASC LIMIT 50`,
           cursor,
