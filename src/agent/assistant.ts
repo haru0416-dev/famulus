@@ -1549,6 +1549,8 @@ export function createAssistant(opts: AssistantOptions = {}) {
       if (gate) await gate()
       const inputEventId = await observe(input)
       state.lastInputEventId = inputEventId
+      // chat は同じ assistant を使い回すので、前のターンの戸惑いをここで消す。
+      state.confusion = undefined
       const sent: ModelMessage[] = [...history, { role: "user", content: input }]
       // 利用者へ返すのはツールループが終わった step の本文だけ。ツールを呼ぶ step に書かれた
       // 「調べます」の類は経過で、積むと CONDUCT の「経過を書かない」と衝突する。
