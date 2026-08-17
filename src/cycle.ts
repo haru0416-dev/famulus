@@ -475,6 +475,8 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
     const assistant = createAssistant({
       model: cycleModel(),
       leaseToken: token,
+      // 話しかけられた回だけ「頼まれた回で動く」道具(calendar_add)が開く。lane は会計用で代用しない。
+      ownerAsked: spokenTo,
       onLeaseLost: (reason) => leaseAbort.abort(reason),
       ...(display ? { onToolStep: (tools, targets) => display.want(`🛠 ${tally(tools, targets)}`) } : {}),
     })

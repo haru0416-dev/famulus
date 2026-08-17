@@ -101,9 +101,18 @@ test("描画は終日と時刻ありを言い分け、0件は「予定なし」"
       location: "駅前",
     },
     { id: "e3", title: "終日の用", start: "2026-08-25", end: "2026-08-26", allDay: true },
+    {
+      id: "e4",
+      title: "(無題)",
+      start: "2026-08-26T09:00:00+09:00",
+      end: "2026-08-26T09:30:00+09:00",
+      allDay: false,
+    },
   ])
   assert.match(text, /- \[.*10:00〜.*11:00\] 病院 @駅前/)
   assert.match(text, /- \[2026-08-25 終日\] 終日の用/)
+  // 場所なしの時刻あり(@ が付かない側)
+  assert.match(text, /09:30\] \(無題\)$/m)
 })
 
 test("buildEventBody: 終日は排他 end、時刻ありは timeZone 付きで end 省略は1時間後", () => {

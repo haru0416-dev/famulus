@@ -577,7 +577,7 @@ export const gateTools = <T extends Record<string, unknown>>(tools: T, gate: Too
   ) as T
 }
 
-function buildTools(state: TurnState, gate: ToolGate) {
+function buildTools(state: TurnState, gate: ToolGate, ownerAsked: boolean) {
   const tools = {
     // ── 指示への戸惑いを残す。読み手は人間だけ — プロンプト・recall へ還流させない(自家中毒の防止)。
     confusion: tool({
@@ -877,8 +877,9 @@ function buildTools(state: TurnState, gate: ToolGate) {
 
     calendar_add: tool({
       description:
-        "Google カレンダーに予定を1件入れる。**ユーザーに頼まれた回でだけ**使う(日時が曖昧なら先に確かめる)。" +
-        "自走では書けない — その場合は `propose` で提案し、ユーザーが対話で頼み直したときに入れる。",
+        "Google カレンダーに予定を1件入れる。**ユーザーに話しかけられた回でだけ**使える(日時が曖昧なら先に確かめる)。" +
+        "誰も話しかけていない自走の回では書けない — その場合は `propose` か `tell` で伝え、" +
+        "ユーザーが次に話しかけた回(承認の返事を含む)に入れる。",
       inputSchema: vs(
         v.object({
           title: v.pipe(v.string(), v.description("予定の題。")),
@@ -890,10 +891,11 @@ function buildTools(state: TurnState, gate: ToolGate) {
         }),
       ),
       execute: async ({ title, start, end }) => {
-        // 書き込みの承認は「ユーザーがこの回に頼んだ」こと。自走の書き込みは機械で止める —
-        // 規律に書くだけでは通る(下書きの検査と同じ理由)。
-        if (currentLane() === "autonomous") {
-          return "自走ではカレンダーに書かない。`propose` で提案するか、次にユーザーが話しかけた回に頼まれてから入れる。"
+        // 書き込みの承認は「ユーザーがこの回に話しかけて頼んだ」こと。自走の書き込みは機械で止める —
+        // 規律に書くだけでは通る(下書きの検査と同じ理由)。lane は使わない: cycle は会計のため
+        // Discord の依頼でも autonomous lane で走るので、lane で判定すると頼まれた回まで止まる。
+        if (!ownerAsked) {
+          return "誰も話しかけていない回ではカレンダーに書かない。`propose` か `tell` で伝えて、次にユーザーが話しかけた回に頼まれてから入れる。"
         }
         if (!googleConfigured()) {
           return "Google 連携が未設定。`.env` に FAMULUS_GOOGLE_CLIENT_ID / FAMULUS_GOOGLE_CLIENT_SECRET を置いてから `fam google-login` を通すとつながる(手順はユーザーの作業)。"
@@ -1749,6 +1751,12 @@ export interface AssistantOptions {
   readonly onToolStep?:
     | ((tools: readonly string[], targets: Readonly<Record<string, string>>) => void)
     | undefined
+  /**
+   * この回の入力にユーザーの発話が含まれるか。cycle は spokenTo を渡す。
+   * lane では代用できない — cycle は会計のため Discord の依頼でも autonomous lane で走る。
+   * calendar_add のような「頼まれた回でだけ動く」道具の許可はこちらを見る。
+   */
+  readonly ownerAsked?: boolean | undefined
 }
 
 /** ツールを呼ぶ step の文は経過なので、利用者向けの最終本文には入れない。 */
@@ -1785,7 +1793,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
   const agent = new ToolLoopAgent({
     model: governedModel(modelId, turnEffort !== undefined ? { reasoningEffort: turnEffort } : undefined),
     instructions: soulInstruction(),
-    tools: buildTools(state, gate),
+    tools: buildTools(state, gate, opts.ownerAsked ?? currentLane() !== "autonomous"),
     stopWhen: stepCountIs(MAX_STEPS),
     // CLI 1回が分単位なので、SDK 側の自動再試行は入れない。
     maxRetries: 0,

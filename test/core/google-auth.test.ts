@@ -16,6 +16,7 @@ import {
   googleLoginFinish,
   googleLoginStart,
   loadGoogleAccess,
+  parseGoogleAuth,
   parsePasted,
   readGoogleAuth,
 } from "../../src/core/google-auth.ts"
@@ -48,6 +49,9 @@ const token = (body: Record<string, unknown>): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })
 
 test("未設定なら configured が false で、start は設定を要求する", () => {
+  // bun は repo の .env を自動で読むので、本物の client が入っていても密閉されるよう明示で消す。
+  delete process.env.FAMULUS_GOOGLE_CLIENT_ID
+  delete process.env.FAMULUS_GOOGLE_CLIENT_SECRET
   configureApp()
   assert.equal(googleConfigured(), false)
 })
@@ -134,4 +138,10 @@ test("期限内は fetch せず、期限切れは refresh して保存する —
   assert.equal(sent?.get("grant_type"), "refresh_token")
   assert.equal(sent?.get("refresh_token"), "r-keep")
   assert.deepEqual(readGoogleAuth(path), { access: "a-new", refresh: "r-keep", expires: NOW + 3_600_000 })
+})
+
+test("読めない auth は理由付きで拒む", () => {
+  assert.throws(() => parseGoogleAuth("not json"), /JSON として読めない/)
+  assert.throws(() => parseGoogleAuth(JSON.stringify({ access: "a" })), /access\/refresh\/expires/)
+  assert.throws(() => readGoogleAuth("/no/such/google-auth.json"), /が無い/)
 })
