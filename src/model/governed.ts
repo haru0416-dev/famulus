@@ -25,7 +25,7 @@ import { accountingRole, currentLane, Governance } from "../services/Governance.
 import { Ledger } from "../services/Ledger.ts"
 import { assertKnownModel, ModelCallError, poolForModel } from "./models.ts"
 import { traceOf } from "./trace.ts"
-import { XAI_PROVIDER_META, xaiResponsesModel } from "./xai-responses.ts"
+import { XAI_PROVIDER_META, type XaiModelOptions, xaiResponsesModel } from "./xai-responses.ts"
 
 /** 呼ぶ前の検査。拒否は Error にして投げる — 道具ループの外まで理由付きで出る。 */
 async function gate(model: string): Promise<void> {
@@ -143,7 +143,7 @@ export function governance(): LanguageModelV4Middleware {
  * 知らない id はここで失敗させる。呼ばれるのはエージェントを生成するときなので、env の打ち間違いは
  * 起動時に読める理由で止まる(実行を開始してから上流の 4xx で失敗しない)。
  */
-export function governedModel(modelId: string): LanguageModelV4 {
+export function governedModel(modelId: string, xaiOpts?: XaiModelOptions): LanguageModelV4 {
   assertKnownModel(modelId)
-  return wrapLanguageModel({ model: xaiResponsesModel(modelId), middleware: governance() })
+  return wrapLanguageModel({ model: xaiResponsesModel(modelId, xaiOpts), middleware: governance() })
 }

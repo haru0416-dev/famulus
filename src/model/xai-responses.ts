@@ -143,11 +143,22 @@ function toXaiError(e: unknown): ModelCallError {
   return new ModelCallError(`xai: ${message}`, quota)
 }
 
+export interface XaiModelOptions {
+  /**
+   * Responses の reasoning.effort。未指定は API 既定(モデル任せ)。
+   * AI SDK は grok の model 名では `providerOptions.openai.reasoningEffort` を黙って落とす
+   * (o系/gpt-5系の名前でしか効かせない)ため、送信本文へ直接入れる。
+   * 実測(2026-08-18、grok-4.6・同一入力): 既定 164〜223秒(推論 10.4k〜12.8k tok)、
+   * low 12〜20秒(同 0.6k〜0.9k)、medium 107秒(同 6.0k)。いずれも HTTP 200 で受理。
+   */
+  readonly reasoningEffort?: "low" | "medium" | "high"
+}
+
 /**
  * xAI の Responses を1つの V4 モデルとして返す。統治は適用されていない —
  * ゲートと会計は src/model/governed.ts の middleware が外側で適用する。これを直接使わない。
  */
-export function xaiResponsesModel(modelId: string): LanguageModelV4 {
+export function xaiResponsesModel(modelId: string, xaiOpts: XaiModelOptions = {}): LanguageModelV4 {
   const provider = createOpenAI({
     baseURL: XAI_BASE_URL,
     // 認証は fetch 側で付ける。静的な文字列では refresh 後のトークンを反映できない。
@@ -155,7 +166,14 @@ export function xaiResponsesModel(modelId: string): LanguageModelV4 {
     fetch: (async (input: Request | URL | string, init?: RequestInit): Promise<Response> => {
       const h = new Headers(init?.headers)
       h.set("authorization", `Bearer ${await loadXaiAccess()}`)
-      return fetch(input, { ...init, headers: h })
+      let body = init?.body
+      if (xaiOpts.reasoningEffort !== undefined && typeof body === "string" && body.startsWith("{")) {
+        body = JSON.stringify({
+          ...(JSON.parse(body) as Record<string, unknown>),
+          reasoning: { effort: xaiOpts.reasoningEffort },
+        })
+      }
+      return fetch(input, { ...init, ...(body !== init?.body ? { body } : {}), headers: h })
     }) as unknown as typeof fetch,
   })
 

@@ -61,6 +61,12 @@ test("解約済みのGPT modelを起動前に拒否する", () => {
   assert.throws(() => parseConfig({ FAMULUS_MODEL: "gpt-5.6-sol" }, "/tmp/famulus"), ConfigError)
 })
 
+test("FAMULUS_TURN_EFFORT は low/medium/high 以外を起動前に拒否する", () => {
+  assert.throws(() => parseConfig({ FAMULUS_TURN_EFFORT: "max" }, "/tmp/famulus"), ConfigError)
+  assert.equal(parseConfig({ FAMULUS_TURN_EFFORT: "low" }, "/tmp/famulus").models.turnEffort, "low")
+  assert.equal(parseConfig({}, "/tmp/famulus").models.turnEffort, undefined)
+})
+
 test.each(["NaN", "Infinity", "1e3", "-1", "1.5"])("不正な数値 %s を拒否する", (value) => {
   assert.throws(() => parseConfig({ FAMULUS_CYCLE_TIMEOUT_MS: value }, "/tmp/famulus"), ConfigError)
 })

@@ -1713,8 +1713,11 @@ export function createAssistant(opts: AssistantOptions = {}) {
         }
       }
     : undefined
+  // effort を落とすのは対話 turn だけ。委譲(digger/researcher)と精査役は既定のまま —
+  // 精査は同一入力の実測で low の判定が割れた。turn は中間手なので、間違えても次の手で直せる。
+  const turnEffort = appConfig().models.turnEffort
   const agent = new ToolLoopAgent({
-    model: governedModel(modelId),
+    model: governedModel(modelId, turnEffort !== undefined ? { reasoningEffort: turnEffort } : undefined),
     instructions: soulInstruction(),
     tools: buildTools(state, gate),
     stopWhen: stepCountIs(MAX_STEPS),

@@ -42,6 +42,12 @@ export interface AppConfig {
     readonly research: string
     /** ローカル埋め込みの選択。ruri-v3-30m / stub(検査用)/ off。LLM ではないので isKnownModel の対象外。 */
     readonly embedding: string
+    /**
+     * 対話 turn の reasoning.effort。未設定は API 既定(モデル任せ)。
+     * 精査役(reviewer)には効かせない — 判定が揺れることを実測済み(docs/recall-survey とは別、
+     * 精査の同一入力2回で low が 直す/出す に割れた)。
+     */
+    readonly turnEffort?: "low" | "medium" | "high"
   }
   readonly cycle: {
     readonly timeoutMs: number
@@ -194,12 +200,17 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
 
   const model = text(env, "FAMULUS_MODEL", "grok-4.6")
   const embedding = text(env, "FAMULUS_EMBEDDING", "ruri-v3-30m")
+  const turnEffort = optional(env, "FAMULUS_TURN_EFFORT")
+  if (turnEffort !== undefined && !["low", "medium", "high"].includes(turnEffort)) {
+    issues.push(`FAMULUS_TURN_EFFORT: low / medium / high のどれかが必要です: ${turnEffort}`)
+  }
   const models = {
     default: model,
     cycle: text(env, "FAMULUS_CYCLE_MODEL", model),
     work: text(env, "FAMULUS_WORK_MODEL", "grok-4.3"),
     research: text(env, "FAMULUS_RESEARCH_MODEL", "grok-4.3"),
     embedding,
+    ...(turnEffort !== undefined ? { turnEffort: turnEffort as "low" | "medium" | "high" } : {}),
   }
   if (!["ruri-v3-30m", "stub", "off"].includes(embedding)) {
     issues.push(`FAMULUS_EMBEDDING: ruri-v3-30m / stub / off のどれかが必要です: ${embedding}`)

@@ -108,6 +108,25 @@ test("送信 body に store:false、ヘッダに auth ファイルの Bearer が
   assert.equal(captured.auth, "Bearer a-live")
 })
 
+test("reasoningEffort 指定で body に reasoning.effort が入り、未指定なら入らない", async () => {
+  authFile()
+  const bodies: Record<string, unknown>[] = []
+  await withFetch(
+    async (_input: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return sse(...textEvents("ok"))
+    },
+    async () => {
+      await xaiResponsesModel("grok-4.6", { reasoningEffort: "low" }).doGenerate(OPTS)
+      await xaiResponsesModel("grok-4.6").doGenerate(OPTS)
+    },
+  )
+  assert.deepEqual(bodies[0]?.reasoning, { effort: "low" })
+  assert.equal("reasoning" in (bodies[1] ?? {}), false)
+  // 注入は既存の送信契約を崩さない。
+  assert.equal(bodies[0]?.store, false)
+})
+
 test("doGenerate は SSE を1回ぶんに畳み、notionalUsd 0 のメタを付ける", async () => {
   authFile()
   await withFetch(
