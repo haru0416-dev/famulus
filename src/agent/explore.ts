@@ -47,6 +47,11 @@ export const TRANSFORM_GOAL: Record<ExploreTransform, string> = {
 
 /** 分岐1本の構造化出力。conclusion は作らせない — 統合は分岐の仕事ではない。 */
 const BRANCH_OBJECT = v.object({
+  // 必須欄にするのは、指示で「予想を書け」と言っても書かれない回があるため。schema なら欠けない。
+  expected: v.pipe(
+    v.string(),
+    v.description("検索する前に書く: この方向で何が出ると思うか1行。予想どおりなら確認、外れたら発見。"),
+  ),
   empty: v.pipe(v.boolean(), v.description("この方向では何も見つからなかったか。空振りは空振りとして返す。")),
   summary: v.pipe(
     v.string(),
@@ -75,13 +80,25 @@ export type BranchOutput = v.InferOutput<typeof BRANCH_OBJECT>
  * 分岐への指示。決定的に組む — モデルにブリーフを書かせない(親が都合のよいブリーフだけを
  * 選ぶ余地を残さないのが fan-out をコードに置く理由)。
  */
-export function branchBrief(seed: string, transform: ExploreTransform): string {
+export function branchBrief(
+  seed: string,
+  transform: ExploreTransform,
+  priorMiss?: { readonly at: string; readonly summary: string },
+): string {
   return [
     `種となる問い: ${seed}`,
     "",
     `あなたの担当は1方向だけ: **${TRANSFORM_GOAL[transform]}** を探す。`,
     "種の言い換えや、種の枠の中での深掘りはしない。担当方向の外は、見つけても拾わない。",
+    ...(priorMiss
+      ? [
+          "",
+          `この方向は ${priorMiss.at.slice(0, 10)} にも近い種で当てて空振りしている: ${priorMiss.summary}`,
+          "同じ検索語をなぞらない — 別の入り口から当てる。それでも出なければ、それも結果。",
+        ]
+      : []),
     "",
+    "- 最初に expected(何が出ると思うか)を書いてから探す。",
     "- まず `search` で候補を出し、要るものだけ `fetch` で開く。",
     "- claim の evidence には、fetch で実際に開いた URL と、取得本文にそのまま含まれる quote だけを書く。",
     "  開けなかったものは claim にせず limitations に書く。",
@@ -197,13 +214,14 @@ async function runBranch(
   deps: BranchDeps,
   seed: string,
   transform: ExploreTransform,
+  priorMiss?: { readonly at: string; readonly summary: string },
 ): Promise<BranchOutcome> {
   const collector: Snapshot[] = []
   const began = Date.now()
   try {
     const generated = await new ToolLoopAgent({
       model: deps.model,
-      instructions: branchBrief(seed, transform),
+      instructions: branchBrief(seed, transform, priorMiss),
       tools: deps.makeTools(collector),
       output: Output.object({
         schema: vs(BRANCH_OBJECT),
@@ -230,6 +248,7 @@ async function runBranch(
     return {
       transform,
       output: {
+        expected: "",
         empty: true,
         summary: `分岐が失敗した: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`,
         limitations: "実行失敗。結果なし。",
@@ -252,6 +271,7 @@ export async function runExplore(
   seed: string,
   transforms: readonly ExploreTransform[] = EXPLORE_TRANSFORMS,
   concurrency = 2,
+  priorMisses?: ReadonlyMap<string, { readonly at: string; readonly summary: string }>,
 ): Promise<{ branches: BranchOutcome[]; duplicates: ReturnType<typeof findDuplicates> }> {
   const queue = [...transforms]
   const branches: BranchOutcome[] = []
@@ -259,7 +279,7 @@ export async function runExplore(
     for (;;) {
       const transform = queue.shift()
       if (!transform) return
-      branches.push(await runBranch(deps, seed, transform))
+      branches.push(await runBranch(deps, seed, transform, priorMisses?.get(transform)))
     }
   })
   await Promise.all(workers)

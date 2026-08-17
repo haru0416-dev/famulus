@@ -314,6 +314,15 @@ export const fetchTool = (fetched?: FetchedEvidence[]) =>
   })
 
 const RESEARCH_OBJECT = v.object({
+  // 必須欄にするのは、指示だけでは書かれない回があるため(予告の不履行は実測済み)。schema なら欠けない。
+  stopRule: v.pipe(
+    v.string(),
+    v.description("調べ始める前に決めた打ち切り条件(何が出たら十分か・何回外れたらやめるか)。"),
+  ),
+  stopped: v.pipe(
+    v.string(),
+    v.description("実際に何で止まったか(条件を満たした / 手数が尽きた / 出なかった)。"),
+  ),
   limitations: v.string(),
   claims: v.array(
     v.object({
@@ -344,6 +353,8 @@ export const RESEARCH_SCHEMA = rs(RESEARCH_OBJECT)
  */
 export const RESEARCHER = `web を調べる役。fetchで開いた資料からclaim・引用・限界を構造化して返す。
 
+- **調べ始める前に stopRule(打ち切り条件)を決める。** 何が出たら十分か、何回外れたらやめるか。
+  止まったら stopped に実際の止まり方を書く。条件を決めずに調べ続けない。
 - **まず \`search\` で候補を出し、要るものだけ \`fetch\` で開く。** 順番が逆になると、
   推測で組み立てた URL を開いて何も取れない。
 - 主張1つにつき URL を1つ以上付ける。**出典の無い主張は書かない。**
@@ -533,6 +544,10 @@ function buildTools(state: TurnState, gate: ToolGate) {
             return `explore を回す時間が残っていない(${remainingLabel()})。次の回の最初に呼ぶ。`
           }
           return delegationLoop(state, "explore", "explore-branch", { task }, undefined, async () => {
+            // 近い種の過去の空振りを分岐に渡す。空振りの記録は読み手が居ないと目的を果たさない。
+            const misses = await run(Effect.flatMap(Research, (r) => r.priorMisses(task))).catch(
+              () => new Map<string, { at: string; summary: string }>(),
+            )
             const { branches, duplicates } = await runExplore(
               {
                 model: governedModel(AGENT_PROFILES["explore-branch"].model()),
@@ -542,6 +557,9 @@ function buildTools(state: TurnState, gate: ToolGate) {
                 ...(abortSignal ? { signal: abortSignal } : {}),
               },
               task,
+              undefined,
+              undefined,
+              misses,
             )
             return run(
               Effect.gen(function* () {
@@ -554,6 +572,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
                     const kept = salvageClaims(b.output.claims, b.snapshots)
                     return {
                       transform: b.transform,
+                      ...(b.output.expected.trim() ? { expected: b.output.expected } : {}),
                       empty: b.output.empty,
                       summary: b.output.summary,
                       limitations:
@@ -614,10 +633,13 @@ function buildTools(state: TurnState, gate: ToolGate) {
             // 照合できない claim はここで落として limitations に残す。記録側で throw させると
             // 1件の失敗が委譲まるごとを捨てさせる(親が再試行して手数だけ減る — 実測 2026-08-17)。
             const salvage = salvageClaims(parsed.value.claims, fetched)
-            const limitations =
+            const limitations = [
               salvage.dropped.length > 0
                 ? `${parsed.value.limitations}\n引用照合で落とした claim: ${salvage.dropped.join(" / ")}`
-                : parsed.value.limitations
+                : parsed.value.limitations,
+              // 宣言と実際の止まり方を dossier に残す。宣言なし停止との差を後から数えるための材料。
+              `停止規則: ${parsed.value.stopRule} / 止まり方: ${parsed.value.stopped}`,
+            ].join("\n")
             return run(
               Effect.gen(function* () {
                 const research = yield* Research

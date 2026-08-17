@@ -33,14 +33,19 @@ const dossiers = db
 const exploreCount = dossiers.filter((d) => d.question.startsWith("[explore]")).length
 
 // ── 問いの重複。語の集合の Jaccard 係数 0.6 以上を「同じ問い」と数える。
-const tokens = (s: string): Set<string> =>
-  new Set(
-    s
-      .toLowerCase()
-      .replace(/\[explore\]/g, "")
-      .split(/[^a-z0-9ぁ-んァ-ヶ一-龠ー]+/)
-      .filter((w) => w.length >= 2),
-  )
+// 日本語は助詞で切れず1連なりになるので、長い連なりは2文字ずつに割る。
+const tokens = (s: string): Set<string> => {
+  const out = new Set<string>()
+  for (const run of s
+    .toLowerCase()
+    .replace(/\[explore\]/g, "")
+    .split(/[^a-z0-9ぁ-んァ-ヶ一-龠ー]+/)) {
+    if (run.length < 2) continue
+    if (/^[a-z0-9]+$/.test(run) || run.length <= 4) out.add(run)
+    else for (let i = 0; i < run.length - 1; i++) out.add(run.slice(i, i + 2))
+  }
+  return out
+}
 const jaccard = (a: Set<string>, b: Set<string>): number => {
   const shared = [...a].filter((x) => b.has(x)).length
   const union = new Set([...a, ...b]).size

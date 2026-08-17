@@ -55,6 +55,20 @@ export interface ExperimentResult {
 const cast = <A>(value: Row): A => value as unknown as A
 const sha256 = (content: string): string => createHash("sha256").update(content).digest("hex")
 
+/**
+ * 問い同士の近さを語の重なりで見るための分かち。日本語は助詞で切れず1連なりになるので、
+ * 長い連なりは2文字ずつに割る。2文字未満は捨てる。
+ */
+const missTokens = (s: string): Set<string> => {
+  const out = new Set<string>()
+  for (const run of s.toLowerCase().split(/[^a-z0-9ぁ-んァ-ヶ一-龠ー]+/)) {
+    if (run.length < 2) continue
+    if (/^[a-z0-9]+$/.test(run) || run.length <= 4) out.add(run)
+    else for (let i = 0; i < run.length - 1; i++) out.add(run.slice(i, i + 2))
+  }
+  return out
+}
+
 const requireOpen = (tx: DbTx, dossierId: string): void => {
   if (!tx.get("SELECT 1 FROM research_dossiers WHERE id=? AND state='open'", dossierId)) {
     throw new Error(`Open research dossier not found: ${dossierId}`)
@@ -508,6 +522,7 @@ const makeResearch = () =>
         exclusions?: readonly string[]
         branches: readonly {
           transform: string
+          expected?: string
           empty: boolean
           summary: string
           limitations: string
@@ -553,6 +568,8 @@ const makeResearch = () =>
               ),
             )
 
+          // 分岐自身の予想を結果より先に置く。親の予想(上の [explore:予想])とは別 — 書き手が違う。
+          if (branch.expected?.trim()) note(`[explore:${branch.transform}] 予想: ${branch.expected.trim()}`)
           note(
             branch.failed
               ? `[explore:${branch.transform}] 失敗: ${branch.summary}`
@@ -590,6 +607,42 @@ const makeResearch = () =>
         return { id: dossierId }
       })
 
+    /**
+     * 同じ種に近い過去の explore で空振り・失敗した方向。次の explore の分岐 brief に渡す —
+     * 空振りの記録は、読み手が居ないと「同じ方向をもう一度掘らない」という書いた目的を果たさない。
+     * 近さは語の重なりで見る(短い側の語集合の半分以上が共通)。方向ごとに最新の1件だけ返す。
+     */
+    const priorMisses = (seed: string, limit = 200) =>
+      db
+        .all(
+          `SELECT d.question, d.created_at, c.statement
+             FROM research_claims c JOIN research_dossiers d ON d.id = c.dossier_id
+            WHERE d.question LIKE '[explore] %'
+              AND (c.statement LIKE '[explore:%] 空振り:%' OR c.statement LIKE '[explore:%] 失敗:%')
+            ORDER BY d.created_at DESC LIMIT ?`,
+          limit,
+        )
+        .pipe(
+          Effect.map((rows) => {
+            const target = missTokens(seed)
+            const found = new Map<string, { at: string; summary: string }>()
+            for (const row of rows) {
+              const question = String(row.question).replace(/^\[explore\]\s*/, "")
+              const own = missTokens(question)
+              const shared = [...own].filter((t) => target.has(t)).length
+              if (shared < Math.max(2, Math.ceil(Math.min(own.size, target.size) / 2))) continue
+              const m = /^\[explore:([a-z]+)\] (?:空振り|失敗): ([\s\S]*)$/.exec(String(row.statement))
+              if (!m?.[1] || !m[2]) continue
+              if (!found.has(m[1]))
+                found.set(m[1], {
+                  at: String(row.created_at),
+                  summary: m[2].replace(/\s+/g, " ").slice(0, 160),
+                })
+            }
+            return found as ReadonlyMap<string, { readonly at: string; readonly summary: string }>
+          }),
+        )
+
     return {
       open,
       addSnapshot,
@@ -605,6 +658,7 @@ const makeResearch = () =>
       render,
       recordWebDossier,
       recordExploreDossier,
+      priorMisses,
     } as const
   })
 

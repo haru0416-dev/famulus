@@ -36,6 +36,21 @@ test("変形は7種で、分岐ブリーフは種と自分の変形しか含ま�
   }
 })
 
+test("分岐ブリーフは予想を先に書かせ、過去の空振りを渡されたときだけ載せる", () => {
+  const seed = "エージェントの自走が空回りする条件"
+  const plain = branchBrief(seed, "direct")
+  assert.ok(plain.includes("expected"))
+  assert.ok(!plain.includes("空振りしている"))
+
+  const withMiss = branchBrief(seed, "direct", {
+    at: "2026-08-16T00:00:00Z",
+    summary: "web/arxiv を日付で絞って0件",
+  })
+  assert.ok(withMiss.includes("2026-08-16"))
+  assert.ok(withMiss.includes("web/arxiv を日付で絞って0件"))
+  assert.ok(withMiss.includes("同じ検索語をなぞらない"))
+})
+
 test("wide の指示は目標件数を持つ", () => {
   assert.ok(wideInstructions(12).includes("12 件"))
 })
@@ -50,6 +65,7 @@ test("重複は兄弟間だけを数え、消さずに一覧で返す", () => {
   const branch = (transform: (typeof EXPLORE_TRANSFORMS)[number], statements: string[]) => ({
     transform,
     output: {
+      expected: "",
       empty: statements.length === 0,
       summary: "",
       limitations: "",
@@ -85,6 +101,7 @@ test("explore dossier は予想・空振り・失敗・重複を残し、inconcl
           branches: [
             {
               transform: "direct",
+              expected: "冷却まわりの議論が出るはず",
               empty: false,
               summary: "測定位置の議論に当たった",
               limitations: "1件だけ",
@@ -134,12 +151,25 @@ test("explore dossier は予想・空振り・失敗・重複を残し、inconcl
     const claims = rows.claims as { statement: string; state: string }[]
     const texts = claims.map((c) => c.statement)
     assert.ok(texts.some((t) => t.startsWith("[explore:予想]")))
+    assert.ok(texts.some((t) => t === "[explore:direct] 予想: 冷却まわりの議論が出るはず"))
     assert.ok(texts.some((t) => t.startsWith("[explore:除外予定]")))
     assert.ok(texts.some((t) => t.includes("[explore:falsify] 空振り")))
     assert.ok(texts.some((t) => t.includes("[explore:human] 失敗")))
     assert.ok(texts.some((t) => t.startsWith("[explore:重複]")))
     const substantive = claims.find((c) => c.statement === "[direct] 計測位置が解決率を分ける")
     assert.equal(substantive?.state, "supported")
+
+    // ── 空振り・失敗の還流。近い種では方向ごとに最新の1件が返り、遠い種では返らない。
+    const near = await h.run(
+      Effect.flatMap(Research, (r) => r.priorMisses("エージェントの自走が空回りするのはどんな条件か")),
+    )
+    assert.deepEqual([...near.keys()].sort(), ["falsify", "human"])
+    assert.match(near.get("falsify")?.summary ?? "", /反証は見つからず/)
+    // 実のある結果が出た方向(direct)は空振りではないので入らない
+    assert.equal(near.get("direct"), undefined)
+
+    const far = await h.run(Effect.flatMap(Research, (r) => r.priorMisses("Techmeme の feed を読む頻度")))
+    assert.equal(far.size, 0)
   })
 })
 
@@ -223,6 +253,7 @@ const branchModel = (failGoal: string): LanguageModelV4 => {
           {
             type: "text" as const,
             text: JSON.stringify({
+              expected: "何か出ると思っていた",
               empty: true,
               summary: "試したが出なかった",
               limitations: "無し",
