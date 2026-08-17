@@ -102,6 +102,28 @@ test("qiita — 途中で切れた応答から、閉じている項だけ拾う"
   assert.equal(parse("qiita", "配列ですらない").length, 0)
 })
 
+test("hatena — RSS 1.0 を item ごとに読み、題の数値実体を解いて users を目印にする", () => {
+  const item = (about: string, title: string, count: number, date: string) =>
+    `<item rdf:about="${about}"><title>${title}</title><link>${about}</link>` +
+    `<description>要約のことば</description><dc:date>${date}</dc:date>` +
+    `<hatena:bookmarkcount>${count}</hatena:bookmarkcount></item>`
+  const hits = parse(
+    "hatena",
+    `<?xml version="1.0" encoding="UTF-8"?><rdf:RDF><channel><title>検索</title></channel>` +
+      // はてブの RSS は非 ASCII を数値実体で書く(&#x672C;&#x6587; = 本文)
+      item("https://example.com/a", "&#x672C;&#x6587;で読む TypeScript", 120, "2026-08-15T13:57:53Z") +
+      item("https://example.com/b", "plain title", 10, "2026-08-14T00:00:00Z") +
+      `</rdf:RDF>`,
+  )
+  assert.equal(hits.length, 2)
+  assert.equal(hits[0]?.title, "本文で読む TypeScript")
+  assert.equal(hits[0]?.url, "https://example.com/a")
+  assert.equal(hits[0]?.at, "2026-08-15T13:57:53Z")
+  assert.match(hits[0]?.note ?? "", /120 users \/ 要約のことば/)
+  // link の無い item は開けないので落とす
+  assert.equal(parse("hatena", `<rdf:RDF><item rdf:about="x"><title>t</title></item></rdf:RDF>`).length, 0)
+})
+
 test("github — 星・言語・説明を1行にまとめる", () => {
   const hits = parse("github", {
     items: [
@@ -222,6 +244,30 @@ test("arxiv — Atom を欄ごとに読む。著者は3人まで", () => {
   assert.equal(hits[0]?.title, "Memory architectures for agents")
   assert.equal(hits[0]?.by, "A One, B Two, C Three")
   assert.equal(hits[0]?.note, "長い要約が 折り返して入る。")
+})
+
+test("hfpapers — paper.id から URL を組み、▲と要旨を目印にする。著者は3人まで", () => {
+  const hits = parse("hfpapers", [
+    {
+      title: "外側の題(使わない)",
+      paper: {
+        id: "2608.14106",
+        title: "Attention Is Enough",
+        summary: "We revisit  attention.\nIt works.",
+        upvotes: 42,
+        publishedAt: "2026-08-14T00:00:00Z",
+        authors: [{ name: "A One" }, { name: "B Two" }, { name: "C Three" }, { name: "D Four" }],
+      },
+    },
+    // 題の無い項は開いても読めないので落とす
+    { paper: { id: "9999.00000" } },
+  ])
+  assert.equal(hits.length, 1)
+  assert.equal(hits[0]?.url, "https://huggingface.co/papers/2608.14106")
+  assert.equal(hits[0]?.title, "Attention Is Enough")
+  assert.equal(hits[0]?.by, "A One, B Two, C Three")
+  assert.equal(hits[0]?.at, "2026-08-14T00:00:00Z")
+  assert.match(hits[0]?.note ?? "", /▲42 \/ We revisit attention\. It works\./)
 })
 
 test("知らない先は undefined。名前を間違えたまま読み取りに入らない", () => {
@@ -373,6 +419,25 @@ test("zenn — 長すぎる語は 100 文字で切る(101 文字だと 400 が�
       await searchSources("あ".repeat(100), { where: ["zenn"] })
       const ja = decodeURIComponent(new URL(called[0] ?? "https://x/").searchParams.get("q") ?? "")
       assert.equal([...ja].length, 100, "全角100文字は通る(実測で 200)")
+    },
+  )
+})
+
+test("hatena と hfpapers — 投げる URL の形(正規の入口・下限・limit)", async () => {
+  const called: string[] = []
+  await withFetch(
+    async (input: unknown) => {
+      called.push(typeof input === "string" ? input : String((input as { url?: string }).url ?? input))
+      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } })
+    },
+    async () => {
+      await searchSources("Claude Code", { where: ["hatena", "hfpapers"], perSource: 4 })
+      const hatena = called.find((u) => u.includes("b.hatena.ne.jp"))
+      const hf = called.find((u) => u.includes("huggingface.co"))
+      // /search/text は 301 で往復が増えるので /q/ を直に叩く。users=10 が「読まれている」の下限
+      assert.match(hatena ?? "", /b\.hatena\.ne\.jp\/q\/Claude%20Code\?mode=rss/)
+      assert.match(hatena ?? "", /users=10/)
+      assert.match(hf ?? "", /api\/papers\/search\?q=Claude%20Code&limit=4/)
     },
   )
 })

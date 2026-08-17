@@ -258,6 +258,12 @@ const obj = (v: unknown): Record<string, unknown> =>
 const plain = (s: string): string =>
   s
     .replace(/<[^>]+>/g, "")
+    // 数値実体は名前付きより先に解く。はてブの RSS は非 ASCII を全部 &#x672C; の形で書く。
+    .replace(/&#x([0-9a-f]{1,6});/gi, (m, h) => {
+      const c = Number.parseInt(h, 16)
+      return c <= 0x10ffff ? String.fromCodePoint(c) : m
+    })
+    .replace(/&#(\d{1,7});/g, (m, d) => (Number(d) <= 0x10ffff ? String.fromCodePoint(Number(d)) : m))
     .replace(
       /&(?:amp|lt|gt|quot|#39);/g,
       (m) => ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" })[m] ?? m,
@@ -470,6 +476,36 @@ const SOURCES: readonly Source[] = [
       }),
   },
   {
+    name: "hatena",
+    what: "はてなブックマーク(日本語圏でいま読まれている記事を媒体横断で)。10 users 以上を新しい順",
+    wide: true,
+    // 入口は /q/<語>。/search/text?q= は /q/ へ 301 するだけなので直に書く。
+    // users=10 が「読まれている」の下限 — 外すと当日の 1 user が並ぶ。
+    // 件数の指定は無いので、切り出しは `perSource` に任せる。
+    url: (q) => `https://b.hatena.ne.jp/q/${enc(q)}?mode=rss&target=text&users=10&sort=recent`,
+    accept: "application/rdf+xml,application/xml;q=0.9,*/*;q=0.5",
+    parse: (b) =>
+      [...b.matchAll(/<item[ >][\s\S]*?<\/item>/g)].flatMap((m) => {
+        const e = m[0]
+        const one = (tag: string) =>
+          plain(e.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`))?.[1] ?? "")
+        const url = e.match(/<link>([\s\S]*?)<\/link>/)?.[1]?.trim()
+        const title = one("title")
+        if (!url || !title) return []
+        const users = e.match(/<hatena:bookmarkcount>(\d+)<\/hatena:bookmarkcount>/)?.[1]
+        const desc = one("description")
+        const note = [users ? `${users} users` : "", desc.slice(0, 120)].filter(Boolean).join(" / ")
+        return [
+          {
+            title,
+            url,
+            ...(one("dc:date") ? { at: one("dc:date") } : {}),
+            ...(note ? { note } : {}),
+          },
+        ]
+      }),
+  },
+  {
     name: "github",
     what: "GitHub のリポジトリ。実装を探すとき",
     wide: true,
@@ -639,6 +675,40 @@ const SOURCES: readonly Source[] = [
             ...(authors.length ? { by: authors.join(", ") } : {}),
             ...(one("published") ? { at: one("published") } : {}),
             ...(summary ? { note: summary.slice(0, 160) } : {}),
+          },
+        ]
+      }),
+  },
+  {
+    name: "hfpapers",
+    what:
+      "Hugging Face Daily Papers(AI 論文の日次選抜)。arxiv の全量と違って**読まれている論文**だけが返る。" +
+      "語は英語。今日の選抜そのものは https://huggingface.co/api/daily_papers?limit=20 を fetch で開く",
+    wide: false,
+    // 1件が大きい(著者の配列を丸ごと含む)ので limit は小さく保つ。
+    url: (q, n) => `https://huggingface.co/api/papers/search?q=${enc(q)}&limit=${Math.min(n, 8)}`,
+    parse: (b) =>
+      rows(JSON.parse(b)).flatMap((r) => {
+        const p = obj(r.paper)
+        const id = str(p.id)
+        const title = str(p.title) ?? str(r.title)
+        if (!id || !title) return []
+        const up = num(p.upvotes)
+        const authors = rows(p.authors)
+          .map((a) => str(a.name))
+          .filter(Boolean)
+          .slice(0, 3)
+        const summary = str(p.summary)?.replace(/\s+/g, " ")
+        const note = [up !== undefined ? `▲${up}` : "", summary?.slice(0, 140) ?? ""]
+          .filter(Boolean)
+          .join(" / ")
+        return [
+          {
+            title: plain(title),
+            url: `https://huggingface.co/papers/${id}`,
+            ...(authors.length ? { by: authors.join(", ") } : {}),
+            ...(str(p.publishedAt) ? { at: str(p.publishedAt) as string } : {}),
+            ...(note ? { note } : {}),
           },
         ]
       }),

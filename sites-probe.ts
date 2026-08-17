@@ -103,6 +103,10 @@ const SITES: readonly Site[] = [
   ["技術", "Go pkg", "https://pkg.go.dev/net/http", "Handler"],
   ["技術", "Zenn トピック", "https://zenn.dev/topics/typescript"],
   ["技術", "Qiita タグ", "https://qiita.com/tags/typescript"],
+  ["技術", "Lobsters", "https://lobste.rs/"],
+  ["技術", "dev.to", "https://dev.to/"],
+  ["報道", "Techmeme", "https://www.techmeme.com/"],
+  ["技術", "HF Daily Papers", "https://huggingface.co/papers"],
 
   // ── 実際に投げる頁 ──
   // **一覧ではなく、記事とファイルの頁のほうを普段は開く。** 一覧だけ測っていると、
@@ -145,6 +149,15 @@ const SITES: readonly Site[] = [
   ["回り道", "GH リポジトリ検索 API", "https://api.github.com/search/repositories?q=effect+typescript", "effect"],
   ["回り道", "Zenn 書き手 feed", "https://zenn.dev/mizchi/feed", "mizchi"],
   ["回り道", "Qiita 書き手 feed", "https://qiita.com/UdukiRenge/feed", "UdukiRenge"],
+  ["回り道", "Lobsters rss", "https://lobste.rs/rss", "lobste.rs"],
+  ["回り道", "Lobsters hottest JSON", "https://lobste.rs/hottest.json", "title"],
+  ["回り道", "dev.to API", "https://dev.to/api/articles?tag=ai&top=7&per_page=5", "title"],
+  ["回り道", "dev.to tag feed", "https://dev.to/feed/tag/ai", "DEV"],
+  ["回り道", "Techmeme feed", "https://www.techmeme.com/feed.xml", "Techmeme"],
+  ["回り道", "HF daily_papers API", "https://huggingface.co/api/daily_papers", "paper"],
+  ["回り道", "はてブ hotentry rss", "https://b.hatena.ne.jp/hotentry/it.rss", "users"],
+  // /search/text?q= は /q/ へ 301 するので、search の hatena と同じ正規の入口で測る。
+  ["回り道", "はてブ 検索 rss", "https://b.hatena.ne.jp/q/TypeScript?mode=rss&target=text&users=10&sort=recent", "TypeScript"],
 ]
 
 const filter = process.argv[2]

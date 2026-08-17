@@ -102,6 +102,11 @@ test("詰まる先には回り道を返す(実測した先だけ)", () => {
     /stackoverflow\.com\/feeds\/tag\/typescript/,
   )
   assert.match(detour("https://www.reddit.com/r/typescript/") ?? "", /reddit\.com\/r\/typescript\/\.rss/)
+
+  assert.match(detour("https://www.techmeme.com/") ?? "", /techmeme\.com\/feed\.xml/)
+  assert.match(detour("https://huggingface.co/papers") ?? "", /api\/daily_papers\?limit=20/)
+  // 論文1件のページは測っていないので回り道を書かない(憶測の案内をしない)
+  assert.equal(detour("https://huggingface.co/papers/2608.14106"), undefined)
   assert.match(detour("https://zenn.dev/topics/typescript") ?? "", /zenn\.dev\/topics\/typescript\/feed/)
   assert.match(detour("https://qiita.com/tags/typescript") ?? "", /qiita\.com\/tags\/typescript\/feed/)
 

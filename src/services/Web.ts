@@ -176,6 +176,12 @@ export function detour(url: string): string | undefined {
     // old.reddit.com も `.json` も 403。通るのは `.rss` だけ。
     return `HTML も .json も 403 で拒否される。https://www.reddit.com/r/${seg[1]}/.rss を開く`
   }
+  if (isHost(u, "techmeme.com") && seg.length === 0) {
+    return `一覧は 6 万字あり頭から 6 回かかる。https://www.techmeme.com/feed.xml を開く(同じ見出しが 9 千字で返る)`
+  }
+  if (isHost(u, "huggingface.co") && seg[0] === "papers" && seg.length === 1) {
+    return `一覧は JS で組み立てるので HTML には無い。https://huggingface.co/api/daily_papers?limit=20 を開く(今日の選抜)。語で引くなら search の hfpapers`
+  }
   if (isHost(u, "youtube.com") && u.pathname === "/watch" && u.searchParams.get("v")) {
     // 視聴ページは題や説明までの転送量が大きい。題と投稿者だけなら oEmbed の応答で足りる。
     const id = u.searchParams.get("v") ?? ""
