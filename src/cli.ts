@@ -76,6 +76,9 @@ const USAGE = `fam — famulus の承認 CLI
   fam selfdev [--fresh]     自分のソースの clone を workspace に置き、中でゲートが通るまで確かめる
                            --fresh は clone ごと取り直す(中で直しかけていたものは消える)
   fam grok-login            SuperGrok OAuth の device flow を通す(トークンを保存)
+  fam code <指示> [--cwd <path>] [--plan] [--model <id>]
+                           コーディングを Cursor へ委譲する(taskブランチに commit。merge はしない)
+  fam code-models           Cursor で使えるモデル一覧(API鍵の生死確認を兼ねる)
   fam skills                skill の一覧(組み込み・取り込み・未分類・拒否)と正本の場所
   fam intake --dry [n]      過去の会話を選別だけして圧縮率を見る(モデルを呼ばない)
   fam intake [n]            未取り込みの会話を古い順に n 件(既定 10)DB へ入れる
@@ -598,6 +601,84 @@ const main = async (): Promise<void> => {
         console.log(`コード: ${code}`)
       })
       console.log(`ログイン完了${auth.email ? `: ${auth.email}` : ""} → ${config.paths.xaiAuth}`)
+      return
+    }
+    if (command === "cursor-hook") {
+      // Cursor のフックランタイムから直接起動される(coder の workspace の guard.sh 経由)。
+      // ここは famulus の runtime も DB も使わない — 判定と stdout だけ。
+      const { runGuardHook } = await import("./core/guard-hook.ts")
+      await runGuardHook(args[0], () => Bun.stdin.text())
+      return
+    }
+    if (command === "code-models") {
+      if (args.length !== 0) throw new Error("引数は取らない: fam code-models")
+      const { listCursorModels } = await import("./model/cursor.ts")
+      const models = await listCursorModels()
+      console.log(models.map((m) => `${m.id}${m.displayName ? `\t${m.displayName}` : ""}`).join("\n"))
+      return
+    }
+    if (command === "code") {
+      // 委譲の入口はここだけ。自走(cycle)からは呼べない — 従量課金のコスト上限が
+      // governance に入るまでこの境界は動かさない。
+      const plan = args.includes("--plan")
+      const cwdAt = args.indexOf("--cwd")
+      const modelAt = args.indexOf("--model")
+      const flagged = new Set<number>()
+      for (const at of [cwdAt, modelAt]) {
+        if (at !== -1) {
+          flagged.add(at)
+          flagged.add(at + 1)
+        }
+      }
+      const task = args
+        .filter((a, i) => a !== "--plan" && !flagged.has(i))
+        .join(" ")
+        .trim()
+      if (!task) throw new Error("何をするかを書く: fam code <指示> [--cwd <path>] [--plan]")
+      const root = resolve(config.rootDir, cwdAt === -1 ? "." : (args[cwdAt + 1] ?? "."))
+      const model = modelAt === -1 ? undefined : args[modelAt + 1]
+      const { runCodeTask } = await import("./agent/coder.ts")
+      const outcome = await runCodeTask({
+        root,
+        task,
+        ...(plan ? { plan: true } : {}),
+        ...(model ? { model } : {}),
+      })
+      // 記帳: 枠の消費としてではなく実費として残す(SuperGrok の pool とは別の kind)。
+      const rt = runtime()
+      try {
+        await rt.runPromise(
+          Effect.flatMap(Ledger, (ledger) =>
+            ledger.record({
+              kind: "code",
+              role: "coder",
+              model: outcome.model,
+              summary: `${outcome.run.status}: ${task.slice(0, 120)}`,
+              provenance: {
+                pool: "cursor-metered",
+                via: "coder",
+                ...(outcome.costUsd !== undefined ? { notionalUsd: outcome.costUsd } : {}),
+                ...(outcome.branch ? { branch: outcome.branch } : {}),
+                ...(outcome.run.aborted ? { aborted: outcome.run.aborted } : {}),
+              },
+            }),
+          ),
+        )
+      } finally {
+        await rt.dispose()
+      }
+      console.log(
+        [
+          `${outcome.run.status}${outcome.run.aborted ? `(打ち切り: ${outcome.run.aborted})` : ""} — ${outcome.model}`,
+          `道具 ${outcome.run.toolCalls} 回(失敗 ${outcome.run.toolErrors})/ ${Math.round(outcome.run.durationMs / 1000)}秒`,
+          outcome.costUsd === undefined
+            ? "概算コスト: 不明(単価未登録)"
+            : `概算コスト: $${outcome.costUsd.toFixed(4)}`,
+          `ブランチ: ${outcome.branchDetail}`,
+          ...(outcome.run.diffStat ? ["", outcome.run.diffStat] : []),
+          ...(outcome.run.error ? ["", `エラー: ${outcome.run.error}`] : []),
+        ].join("\n"),
+      )
       return
     }
     if (command === "backup") {

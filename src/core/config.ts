@@ -65,6 +65,13 @@ export interface AppConfig {
     readonly hostIntervalMs: number
     readonly searxngBase?: string
   }
+  readonly cursor: {
+    readonly apiKey?: string
+    readonly model: string
+    readonly maxToolCalls: number
+    readonly maxDurationMs: number
+    readonly runTokens: number
+  }
   readonly discord: {
     readonly api: string
     readonly token?: string
@@ -202,6 +209,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
   const discordDraft = optional(env, "FAMULUS_DISCORD_CH_DRAFT")
   const discordLog = optional(env, "FAMULUS_DISCORD_CH_LOG")
   const runImage = optional(env, "FAMULUS_RUN_IMAGE")
+  const cursorApiKey = optional(env, "FAMULUS_CURSOR_API_KEY")
   const searxngBase = optionalEndpoint(env, "FAMULUS_SEARXNG", "http://127.0.0.1:8888", issues, {
     allowLoopbackHttp: true,
   })
@@ -244,6 +252,20 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     },
     maintenance: {
       backupKeep: integer(env, "FAMULUS_BACKUP_KEEP", 7, issues, { min: 1, max: 10_000 }),
+    },
+    cursor: {
+      ...(cursorApiKey ? { apiKey: cursorApiKey } : {}),
+      model: text(env, "FAMULUS_CURSOR_MODEL", "composer-2.5"),
+      maxToolCalls: integer(env, "FAMULUS_CURSOR_MAX_TOOL_CALLS", 200, issues, { min: 1, max: 10_000 }),
+      maxDurationMs: integer(env, "FAMULUS_CURSOR_MAX_DURATION_MS", 1_800_000, issues, {
+        min: 60_000,
+        max: 7_200_000,
+      }),
+      // 1run の非キャッシュtoken上限(coder の予算内層)。従量課金の暴走をここで先に切る。
+      runTokens: integer(env, "FAMULUS_CURSOR_RUN_TOKENS", 300_000, issues, {
+        min: 10_000,
+        max: 100_000_000,
+      }),
     },
     web: {
       hostIntervalMs: integer(env, "FAMULUS_HOST_INTERVAL_MS", 1_000, issues, { min: 0, max: 300_000 }),
