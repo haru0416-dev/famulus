@@ -75,7 +75,13 @@ const fakeDiscord = async (
     })
     req.on("end", () => {
       const path = req.url ?? ""
-      const body = raw === "" ? undefined : (JSON.parse(raw) as Record<string, unknown>)
+      // multipart(添付)の本文は JSON ではない。読めない本文は undefined として扱う。
+      let body: Record<string, unknown> | undefined
+      try {
+        body = raw === "" ? undefined : (JSON.parse(raw) as Record<string, unknown>)
+      } catch {
+        body = undefined
+      }
       hits.push({ method: req.method ?? "", path, body })
       const json = (v: unknown) =>
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(v))
@@ -1667,6 +1673,64 @@ test("画像つき・画像だけのメッセージも受け、実体は media �
         const imgs61 = JSON.parse(String(rows[1]?.imgs)) as { sha: string }[]
         assert.equal(imgs61.length, 1)
         assert.equal(rows[1]?.said, "")
+      })
+    })
+  } finally {
+    if (savedData === undefined) delete process.env.FAMULUS_DATA
+    else process.env.FAMULUS_DATA = savedData
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("添付つきの投稿は multipart で送り、参照切れの添付は落として本文だけ出す", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const savedData = process.env.FAMULUS_DATA
+  const dir = mkdtempSync(join(tmpdir(), "discord-files-"))
+  const dc = await fakeDiscord()
+  try {
+    process.env.FAMULUS_DATA = dir
+    await wired(dc, { talk: TALK }, async () => {
+      await withHarness(async (h) => {
+        const { saveMedia } = await import("../../src/core/media.ts")
+        const ref = { ...saveMedia(new Uint8Array([137, 80, 78, 71, 9, 9]), "image/png"), name: "fig.png" }
+        const sent = await h.run(
+          Effect.gen(function* () {
+            const discord = yield* Discord
+            const o = yield* discord.enqueue({
+              purpose: "figure",
+              dedupeKey: ref.sha,
+              text: "計器のグラフ",
+              files: [ref],
+            })
+            assert.ok(o)
+            yield* discord.flushQueued()
+            return yield* discord.getOutbound(o.id)
+          }),
+        )
+        assert.equal(sent?.state, "sent")
+        assert.deepEqual(
+          sent?.actions.map((a) => a.state),
+          ["succeeded"],
+        )
+
+        // 参照切れ(実体の無い sha)は添付を落として本文だけ届く — 投稿ごと失敗させない
+        const broken = await h.run(
+          Effect.gen(function* () {
+            const discord = yield* Discord
+            const o = yield* discord.enqueue({
+              purpose: "figure",
+              dedupeKey: "broken",
+              text: "実体が無い",
+              files: [{ sha: "0".repeat(64), mediaType: "image/png", name: "gone.png" }],
+            })
+            assert.ok(o)
+            yield* discord.flushQueued()
+            return yield* discord.getOutbound(o.id)
+          }),
+        )
+        assert.equal(broken?.state, "sent")
       })
     })
   } finally {

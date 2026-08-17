@@ -19,6 +19,8 @@ import * as v from "valibot"
 import { appConfig } from "../core/config.ts"
 import { remainingLabel, remainingMs } from "../core/deadline.ts"
 import { causeReason } from "../core/errors.ts"
+import { renderCard, renderChart, renderDiagram } from "../core/figure.ts"
+import { saveMedia } from "../core/media.ts"
 import { localStamp, nowIso } from "../core/time.ts"
 import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../core/workspaces.ts"
 import { governedModel } from "../model/governed.ts"
@@ -464,6 +466,40 @@ export const beliefMissMessage = (slot: string, slots: readonly { readonly slot:
   slots.length === 0
     ? `'${slot}' は確定していない(確定値はまだ1件も無い)`
     : [`'${slot}' は確定していない。既存の slot:`, ...slots.map((s) => `  ${s.slot}`)].join("\n")
+
+/**
+ * 図を media に置き、Discord の送信 queue に積む。送信そのものは返信の flush と一緒に出る。
+ * spec の誤り(FigureError)は文で返す — 呼んだモデルが直して呼び直せる形。
+ */
+const sendFigure = async (
+  render: () => Promise<Uint8Array>,
+  name: string,
+  caption?: string,
+): Promise<string> => {
+  let png: Uint8Array
+  try {
+    png = await render()
+  } catch (e) {
+    return `描けなかった: ${e instanceof Error ? e.message : String(e)}`
+  }
+  const ref = { ...saveMedia(png, "image/png"), name }
+  try {
+    await run(
+      Effect.flatMap(Discord, (discord) =>
+        discord.enqueue({
+          purpose: "figure",
+          dedupeKey: ref.sha,
+          text: caption ?? "",
+          files: [ref],
+          to: "talk",
+        }),
+      ),
+    )
+  } catch (e) {
+    return `描けたが送信の queue に積めなかった: ${e instanceof Error ? e.message : String(e)}`
+  }
+  return `図を出した(${name})。返信と一緒に届く。本文で図に触れてよい。`
+}
 
 export const gateTools = <T extends Record<string, unknown>>(tools: T, gate: ToolGate): T => {
   if (!gate) return tools
@@ -1231,6 +1267,58 @@ function buildTools(state: TurnState, gate: ToolGate) {
      * 出し先は Discord の会話。`draft` とは場所を分ける — あちらはリアクションで判断を返す文、
      * こちらは読むだけの文。混在させると、返答が必要な投稿を見落としやすくなる。
      */
+    // ── 図の作成。モデルは spec(option_json / dot / カードの中身)だけを書き、
+    // 描画はコードが決定的に行う(src/core/figure.ts)。SVG の直書きはさせない。
+    chart: tool({
+      description:
+        "チャート(折れ線・棒・円・散布など)を描いて Discord に画像で載せる。option_json は " +
+        "Apache ECharts の option をそのまま JSON で書く(xAxis / yAxis / series など)。" +
+        "spec の誤りは文で返るので、直して呼び直す。載った図には本文で触れてよい。",
+      inputSchema: vs(
+        v.object({
+          option_json: v.pipe(
+            v.string(),
+            v.description("ECharts option の JSON 文字列。animation はこちらで切るので書かない。"),
+          ),
+          caption: v.optional(v.pipe(v.string(), v.description("画像に添える一言。省略で画像だけ。"))),
+        }),
+      ),
+      execute: async ({ option_json, caption }) =>
+        sendFigure(() => renderChart(option_json).then((f) => f.png), "chart.png", caption),
+    }),
+
+    diagram: tool({
+      description:
+        "図解(フロー・依存関係・状態遷移)を描いて Discord に画像で載せる。dot は graphviz の " +
+        "DOT 言語で書く(digraph { a -> b } の形)。日本語ラベル可。構文エラーは文で返る。",
+      inputSchema: vs(
+        v.object({
+          dot: v.pipe(v.string(), v.description("graphviz DOT のソース。")),
+          caption: v.optional(v.pipe(v.string(), v.description("画像に添える一言。省略で画像だけ。"))),
+        }),
+      ),
+      execute: async ({ dot, caption }) =>
+        sendFigure(() => renderDiagram(dot).then((f) => f.png), "diagram.png", caption),
+    }),
+
+    card: tool({
+      description:
+        "統計カード(見出し+数行の要点)を画像にして Discord に載せる。週報や節目の報告に。" +
+        "レイアウトは固定で、書くのは中身だけ。",
+      inputSchema: vs(
+        v.object({
+          title: v.pipe(v.string(), v.description("見出し。一行。")),
+          lines: v.pipe(v.array(v.string()), v.description("要点。1〜6行。")),
+          footer: v.optional(v.pipe(v.string(), v.description("下段の補足。省略可。"))),
+        }),
+      ),
+      execute: async ({ title, lines, footer }) =>
+        sendFigure(
+          () => renderCard({ title, lines: lines.slice(0, 6), ...(footer ? { footer } : {}) }),
+          "card.png",
+        ),
+    }),
+
     tell: tool({
       description:
         "ユーザーに直接届ける(Discord の会話に出る)。**用があるときだけ**。相手が今すぐ知りたいこと・" +

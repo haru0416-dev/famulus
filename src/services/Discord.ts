@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { appConfig } from "../core/config.ts"
 import { Conflict, ConnectorFailed, type DbFailed } from "../core/errors.ts"
+import { readMedia } from "../core/media.ts"
 import { nowIso } from "../core/time.ts"
 import { canonicalJson, digestOf } from "../model/kernel-spec.ts"
 import { Db, type DbTx } from "./Db.ts"
@@ -77,6 +78,8 @@ export interface Enqueue {
     /** 付けるのと同時に外す絵文字(進行中の印の置き換え)。付けてから外す — 逆だと失敗時に印が全部消える。 */
     readonly clear?: string
   }
+  /** 添付する画像。実体は media に置き、ここには参照だけ渡す。最初の1通に載る。 */
+  readonly files?: readonly { readonly sha: string; readonly mediaType: string; readonly name?: string }[]
 }
 
 export type OutboundState = "queued" | "sending" | "sent" | "failed" | "partial" | "unknown"
@@ -312,10 +315,12 @@ const makeDiscord = () =>
           ...init,
           headers: {
             authorization: `Bot ${token()}`,
-            "content-type": "application/json",
+            // multipart(添付)は fetch に boundary を書かせる。content-type を固定すると壊れる。
+            ...(init?.body instanceof FormData ? {} : { "content-type": "application/json" }),
             ...(init?.headers ?? {}),
           },
-          signal: AbortSignal.timeout(10_000),
+          // 添付は 8MB まで受けるので、既定の 10 秒では上りが間に合わないことがある
+          signal: AbortSignal.timeout(init?.body instanceof FormData ? 60_000 : 10_000),
         }),
       )
 
@@ -501,7 +506,17 @@ const makeDiscord = () =>
 
     type ActionSpec =
       | { readonly kind: "open_dm"; readonly recipientId: string }
-      | { readonly kind: "message"; readonly channelId?: string; readonly message: Record<string, unknown> }
+      | {
+          readonly kind: "message"
+          readonly channelId?: string
+          readonly message: Record<string, unknown>
+          /** 添付する画像の参照。実体は media にあり、送信時に読む。 */
+          readonly files?: readonly {
+            readonly sha: string
+            readonly mediaType: string
+            readonly name?: string
+          }[]
+        }
       | {
           readonly kind: "thread"
           readonly channelId?: string
@@ -682,6 +697,8 @@ const makeDiscord = () =>
             })
         }
         const parts = p.text === "" ? [] : chunks(head + p.text)
+        // 添付だけの投稿(本文なし)は、空本文の1通を立てて載せる
+        if ((p.files?.length ?? 0) > 0 && parts.length === 0) parts.push("")
         const messageOrdinals: number[] = []
         for (const [partIndex, content] of parts.entries()) {
           const nonce = digestOf({ purpose: p.purpose, dedupeKey: p.dedupeKey, partIndex }).slice(0, 25)
@@ -690,6 +707,7 @@ const makeDiscord = () =>
             kind: "message",
             ...(destination.id ? { channelId: destination.id } : {}),
             message: { content, nonce, enforce_nonce: true },
+            ...(partIndex === 0 && (p.files?.length ?? 0) > 0 ? { files: p.files } : {}),
           })
         }
         const lastMessage = messageOrdinals.at(-1)
@@ -1012,7 +1030,29 @@ const makeDiscord = () =>
               init = { method: "POST", body: JSON.stringify({ recipient_id: spec.recipientId }) }
             } else if (spec.kind === "message" && channelId) {
               path = `/channels/${channelId}/messages`
-              init = { method: "POST", body: JSON.stringify(spec.message) }
+              const found = (spec.files ?? [])
+                .map((f) => ({ ref: f, bytes: readMedia(f) }))
+                .filter(
+                  (f): f is { ref: (typeof spec.files & object)[number]; bytes: Uint8Array } =>
+                    f.bytes !== undefined,
+                )
+              if (found.length > 0) {
+                // 実体が読めた添付だけ載せる。参照切れで投稿ごと落とさない。
+                const form = new FormData()
+                const attachments = found.map((f, i) => ({
+                  id: i,
+                  filename: f.ref.name ?? `figure-${i}.png`,
+                }))
+                form.append("payload_json", JSON.stringify({ ...spec.message, attachments }))
+                found.forEach((f, i) => {
+                  form.append(
+                    `files[${i}]`,
+                    new Blob([f.bytes.buffer as ArrayBuffer], { type: f.ref.mediaType }),
+                    attachments[i]?.filename ?? `figure-${i}.png`,
+                  )
+                })
+                init = { method: "POST", body: form }
+              } else init = { method: "POST", body: JSON.stringify(spec.message) }
             } else if (spec.kind === "thread" && channelId && messageId) {
               path = `/channels/${channelId}/messages/${messageId}/threads`
               init = {
