@@ -1,7 +1,7 @@
 {
-  "name": "open-zero",
+  "name": "famulus",
   "version": "0.0.0",
-  "description": "famulus の governance/memory を Effect で持ち上げ、Grok の道具ループを AI SDK に載せる層。",
+  "description": "famulus — Haru の代わりに AI の動向を追い、外に出す文を書く常駐エージェント。governance/memory を Effect で持ち、道具ループを AI SDK に載せる。",
   "type": "module",
   "private": true,
   "engines": {

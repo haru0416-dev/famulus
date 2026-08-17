@@ -227,7 +227,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
       timeoutMs,
       heartbeatMs,
       leaseTtlMs,
-      unit: textAllowEmpty(env, "OPEN_ZERO_CYCLE_UNIT", "open-zero-cycle.service"),
+      unit: textAllowEmpty(env, "OPEN_ZERO_CYCLE_UNIT", "famulus-cycle.service"),
     },
     governance: {
       dailyRuns: integer(env, "OPEN_ZERO_DAILY_RUNS", 2_000, issues, { min: 1, max: 1_000_000 }),
