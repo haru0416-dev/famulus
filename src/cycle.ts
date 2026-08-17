@@ -504,6 +504,30 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
     // ことがあり、それが「9回走らせて何が分かったか」の唯一の記録になる。
     const text = (turn.text || (cutOff ? `(${cutOff}。この回の締めの文は書けていない)` : "")).trim()
 
+    // ── 返信の先行配送。返信文はこの時点で確定していて、keeper の後ろに置くと確定から
+    // 届くまでがその分遅れる。durable queue に置いてから flush する — 送信に失敗しても
+    // queue が残り、末尾の flush と poll が再送する。鍵は締めの前に落ちた回の再実行でも
+    // 同じになるので、二重送信にならない。
+    const deliveryKey = digestOf({
+      reasonKey: d.reasonKey,
+      upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
+      inputIds: d.newEvents.map((event) => event.id),
+    })
+    if (spokenTo && text && !cutOff) {
+      await assertLease(token)
+      try {
+        await run(
+          Effect.gen(function* () {
+            const discord = yield* Discord
+            yield* discord.enqueue({ purpose: "cycle-reply", dedupeKey: deliveryKey, text })
+            yield* discord.flushQueued()
+          }),
+        )
+      } catch (e) {
+        log("返信の先行配送に失敗(末尾の flush が再送する):", causeReason(e))
+      }
+    }
+
     // ── 締めの keeper。ユーザーが話した回にだけ通る。
     // 材料はユーザーの発言そのもので、外から来たものは渡さない。切られた回は通さない —
     // 途中で止まった回のやり取りは、確かめられたかどうかが判断できる形になっていない。
@@ -531,20 +555,6 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         const mem = yield* Memory
         const att = yield* Attention
         const discord = yield* Discord
-        const deliveryKey = digestOf({
-          reasonKey: d.reasonKey,
-          upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
-          inputIds: d.newEvents.map((event) => event.id),
-        })
-        // 返信は HTTP に出さず durable queue に置く。切られた回の補完文は enqueue しない。
-        if (spokenTo && text && !cutOff) {
-          yield* discord.enqueue({
-            purpose: "cycle-reply",
-            dedupeKey: deliveryKey,
-            text,
-          })
-          yield* lease.assertCurrent(token)
-        }
         yield* mem.remember({
           kind: "observe",
           source: "system",
