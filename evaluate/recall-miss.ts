@@ -156,6 +156,15 @@ async function partB() {
   const rt = ManagedRuntime.make(makeAppLayer(DbLive(copy), stub.layer))
   const run = <A, E>(e: Effect.Effect<A, E, AppServices>) => rt.runPromise(e)
   try {
+    // 複製には埋め込みが無い(本番でまだ埋めていない行も含む)。probe の前に埋める —
+    // 意味検索込みの recall を測るのがこの評価の目的。埋め込み off の構成ではそのまま素通り。
+    let embedded = 0
+    for (;;) {
+      const batch = await run(Effect.flatMap(Memory, (m) => m.embedMissing(200)))
+      embedded += batch
+      if (batch === 0) break
+    }
+    console.log(`Part B: 複製へ埋め込み ${embedded} 件`)
     const results = []
     for (const probe of REAL_PROBES) {
       const exists = await run(

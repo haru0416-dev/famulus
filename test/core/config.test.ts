@@ -34,13 +34,20 @@ test("SQLiteのmemory pathと空のcycle unitを保持する", () => {
   assert.equal(config.cycle.unit, "")
 })
 
-test("model既定値はGrokだけで構成する", () => {
+test("model既定値はGrokだけで構成する(埋め込みはローカル ONNX で LLM ではない)", () => {
   assert.deepEqual(parseConfig({}, "/tmp/famulus").models, {
     default: "grok-4.6",
     cycle: "grok-4.6",
     work: "grok-4.3",
     research: "grok-4.3",
+    embedding: "ruri-v3-30m",
   })
+})
+
+test("FAMULUS_EMBEDDING は3値だけを受ける", () => {
+  assert.equal(parseConfig({ FAMULUS_EMBEDDING: "off" }, "/tmp/famulus").models.embedding, "off")
+  assert.equal(parseConfig({ FAMULUS_EMBEDDING: "stub" }, "/tmp/famulus").models.embedding, "stub")
+  assert.throws(() => parseConfig({ FAMULUS_EMBEDDING: "gpt-embedding" }, "/tmp/famulus"), ConfigError)
 })
 
 test.each(["FAMULUS_MODEL", "FAMULUS_CYCLE_MODEL", "FAMULUS_WORK_MODEL", "FAMULUS_RESEARCH_MODEL"] as const)(

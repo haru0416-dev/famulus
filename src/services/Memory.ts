@@ -6,12 +6,13 @@
  * `remember` は引数を最小・既定値を厚くしてある。仕組みがあっても記録が溜まらなければ DB は無いのと同じで、
  * 溜まらない原因が API の摩擦なら、それは設計の側で消せる。
  */
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { DbFailed } from "../core/errors.ts"
 import { localStamp, nowIso } from "../core/time.ts"
+import { EMBEDDING_DIM, EMBEDDING_MODEL, embedPassage, embedQuery } from "../model/embedding.ts"
 import { Db, type DbTx, type Row } from "./Db.ts"
 
 export type EventKind = "observe" | "belief" | "redact" | "import"
@@ -20,6 +21,32 @@ export type Exposure = "private" | "public"
 
 /** 現在区間の `valid_from` がこの日数より古い確定事実(belief)を再確認候補として表示する。 */
 export const STALE_BELIEF_DAYS = 90
+
+const sha256Hex = (s: string): string => createHash("sha256").update(s).digest("hex")
+const toBlob = (v: Float32Array): Uint8Array => new Uint8Array(v.buffer, v.byteOffset, v.byteLength)
+
+/**
+ * FTS と意味検索の合流。BM25 と cosine 距離はスケールが違うので順位だけを使う(RRF、k=60)。
+ * 片方が空ならもう片方の順序がそのまま残る — 埋め込みが無い構成では従来の FTS 順に一致する。
+ */
+export const rrfMerge = <T extends { readonly id: string }>(
+  fts: readonly T[],
+  semantic: readonly T[],
+  k = 60,
+): T[] => {
+  const score = new Map<string, { row: T; s: number }>()
+  for (const [list, weight] of [
+    [fts, 1],
+    [semantic, 1],
+  ] as const) {
+    for (const [rank, row] of list.entries()) {
+      const got = score.get(row.id) ?? { row, s: 0 }
+      got.s += weight / (k + rank + 1)
+      score.set(row.id, got)
+    }
+  }
+  return [...score.values()].sort((x, y) => y.s - x.s).map((x) => x.row)
+}
 
 export interface SourceRef {
   readonly kind: string
@@ -247,7 +274,25 @@ const makeMemory = () =>
       return id
     }
 
-    /** イベントとFTS projectionを同じtransactionで追記する。 */
+    /** 埋め込みを2表へ書く。呼ぶ側が埋め込みの有無を判定済み(off・失敗なら呼ばれない)。 */
+    const writeEmbedding = (tx: DbTx, eventId: string, text: string, vec: Float32Array, at: string) => {
+      // events の rowid は seq の別名なので、素の `SELECT rowid` は {seq} で返る。別名で受ける。
+      const row = tx.get("SELECT rowid AS r FROM events WHERE id = ?", eventId)
+      if (!row) return
+      // 重複取り込み(append が既存 id を返す経路)では埋め込みも既にある。二重に書かない。
+      if (tx.get("SELECT 1 FROM events_embedding WHERE rowid = ?", Number(row.r))) return
+      tx.run("INSERT INTO events_vec(rowid, embedding) VALUES (?, ?)", Number(row.r), toBlob(vec))
+      tx.run(
+        "INSERT INTO events_embedding(rowid, model, dim, content_sha, embedded_at) VALUES (?,?,?,?,?)",
+        Number(row.r),
+        EMBEDDING_MODEL,
+        EMBEDDING_DIM,
+        sha256Hex(text),
+        at,
+      )
+    }
+
+    /** イベントとFTS projection・埋め込みを同じtransactionで追記する。 */
     const remember = (input: RememberInput) =>
       Effect.gen(function* () {
         const id = randomUUID()
@@ -255,7 +300,15 @@ const makeMemory = () =>
         const meta = input.origin
           ? { ...EMPTY_META, originKind: input.origin.kind, originId: input.origin.id }
           : EMPTY_META
-        return yield* db.withImmediateTransaction("remember event", (tx) => append(tx, input, id, at, meta))
+        // 埋め込みは tx の外で作る(モデル呼び出しは非同期)。off・失敗は undefined で素通し —
+        // 記憶の書き込みを埋め込みの都合で止めない。取りこぼしは embedMissing が埋め直す。
+        const text = input.text ?? deriveText(input.content)
+        const vec = text.length > 0 ? yield* Effect.promise(() => embedPassage(text)) : undefined
+        return yield* db.withImmediateTransaction("remember event", (tx) => {
+          const eventId = append(tx, input, id, at, meta)
+          if (vec) writeEmbedding(tx, eventId, text, vec, at)
+          return eventId
+        })
       })
 
     /**
@@ -426,6 +479,32 @@ const makeMemory = () =>
      * 自走側は `text: ""` で索引に入れないことで同じ経路を止めているが、対話の入力は索引に要る
      * (溜まらないと引けるようにならない)ので、除外は検索の側でやる。
      */
+    /**
+     * 意味検索。埋め込みが無い構成では空を返し、recall は FTS だけの従来動作に一致する。
+     * KNN は事前フィルタできない(vec0 の制約)ので多めに引き、events 側の条件で絞る。
+     */
+    const semanticRows = (query: string, wide: number, exclude?: string) =>
+      Effect.gen(function* () {
+        const vec = yield* Effect.promise(() => embedQuery(query))
+        if (!vec) return [] as EventRow[]
+        const hits = yield* db.all(
+          "SELECT rowid, distance FROM events_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+          toBlob(vec),
+          wide,
+        )
+        const rows: EventRow[] = []
+        for (const hit of hits) {
+          const row = yield* db.get(
+            `SELECT e.*, f.text AS text, ${IS_CURRENT} AS is_current FROM events e
+               JOIN events_fts f ON f.event_id = e.id
+              WHERE e.rowid = ? AND e.content IS NOT NULL ${exclude ? "AND e.id <> ?" : ""}`,
+            ...(exclude ? [Number(hit.rowid), exclude] : [Number(hit.rowid)]),
+          )
+          if (row) rows.push(row as unknown as EventRow)
+        }
+        return rows
+      })
+
     const recall = (query: string, limit = 10, exclude?: string) =>
       Effect.gen(function* () {
         // 空白は語の区切りとして扱う。1本のフレーズとして投げると空白ごと含む行しか当たらず、
@@ -474,7 +553,12 @@ const makeMemory = () =>
                 ...selfArg,
                 wide,
               )
-        if (rows.length > 0 || terms.length < 2) return dedupe(rows as unknown as EventRow[], limit)
+        if (rows.length > 0) return dedupe(rows as unknown as EventRow[], limit)
+
+        // FTS が0件のときだけ意味検索で拾い直す。当たっている回には足さない — AND の絞りが
+        // 返した結果を薄めない。意味検索は、語の一致では届かない言い換えの回収路。
+        const semantic = yield* semanticRows(query, wide, exclude)
+        if (terms.length < 2) return dedupe(semantic, limit)
 
         // 盛りすぎた問いを1回だけ緩める。AND で0件なら語ごとに引き直して束ねる —
         // Search の broaden と同じ思想で、別の問いを発明するためではない。
@@ -507,7 +591,7 @@ const makeMemory = () =>
                 )
           loose.push(...one)
         }
-        return dedupe(loose as unknown as EventRow[], limit)
+        return dedupe(rrfMerge(loose as unknown as EventRow[], semantic), limit)
       })
 
     const recent = (limit = 20) =>
@@ -528,6 +612,12 @@ const makeMemory = () =>
         return yield* db.withImmediateTransaction("redact event", (tx) => {
           tx.run("UPDATE events SET content = NULL, search_text = NULL WHERE id = ?", eventId)
           tx.run("DELETE FROM events_fts WHERE event_id = ?", eventId)
+          // 埋め込みは原文から作られる。原文を消して埋め込みを残すと、消した意味が無い。
+          const row = tx.get("SELECT rowid AS r FROM events WHERE id = ?", eventId)
+          if (row) {
+            tx.run("DELETE FROM events_vec WHERE rowid = ?", Number(row.r))
+            tx.run("DELETE FROM events_embedding WHERE rowid = ?", Number(row.r))
+          }
           return append(
             tx,
             {
@@ -546,6 +636,51 @@ const makeMemory = () =>
 
     const count = db.get("SELECT COUNT(*)n FROM events").pipe(Effect.map((r) => Number(r?.n ?? 0)))
 
+    /**
+     * 埋め込みの無い行をまとめて埋める。書き込み時に埋められなかった分(off の期間・失敗・
+     * migration 前からの行)の埋め直し。1件ずつ tx を分ける — 長いバッチで書き込みを塞がない。
+     * 埋め込みが使えない構成では最初の1件で 0 を返して終わる。
+     */
+    const embedMissing = (limit = 200) =>
+      Effect.gen(function* () {
+        const targets = yield* db.all(
+          `SELECT e.rowid AS rowid, e.search_text AS text FROM events e
+            WHERE e.search_text IS NOT NULL AND e.content IS NOT NULL
+              AND e.rowid NOT IN (SELECT rowid FROM events_embedding)
+            ORDER BY e.rowid LIMIT ?`,
+          limit,
+        )
+        let done = 0
+        for (const target of targets) {
+          const text = String(target.text)
+          const vec = yield* Effect.promise(() => embedPassage(text))
+          if (!vec) return done
+          yield* db.withImmediateTransaction("embed event", (tx) => {
+            // redact と並んでも、消えた行へは書かない
+            const still = tx.get(
+              "SELECT 1 FROM events WHERE rowid = ? AND content IS NOT NULL",
+              Number(target.rowid),
+            )
+            if (!still) return
+            tx.run(
+              "INSERT INTO events_vec(rowid, embedding) VALUES (?, ?)",
+              Number(target.rowid),
+              toBlob(vec),
+            )
+            tx.run(
+              "INSERT INTO events_embedding(rowid, model, dim, content_sha, embedded_at) VALUES (?,?,?,?,?)",
+              Number(target.rowid),
+              EMBEDDING_MODEL,
+              EMBEDDING_DIM,
+              sha256Hex(text),
+              nowIso(),
+            )
+          })
+          done++
+        }
+        return done
+      })
+
     return {
       remember,
       recordBelief,
@@ -557,6 +692,7 @@ const makeMemory = () =>
       recall,
       recent,
       redact,
+      embedMissing,
       count,
     } as const
   })

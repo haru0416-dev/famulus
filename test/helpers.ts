@@ -79,7 +79,9 @@ export const withFetch = async <T>(impl: unknown, fn: () => Promise<T>): Promise
  * migration を足したら、その差をここでも戻すこと。
  */
 export const legacyV4Sql = (schemaSql: string): string =>
-  schemaSql.replace(
-    "kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction','ack')),",
-    "kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction')),",
-  )
+  schemaSql
+    .replace(
+      "kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction','ack')),",
+      "kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction')),",
+    )
+    .replace(/\n-- 意味検索の索引。[\s\S]*?\) STRICT;\n/, "\n")

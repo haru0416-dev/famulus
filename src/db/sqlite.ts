@@ -3,6 +3,7 @@
 import { Database } from "bun:sqlite"
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
+import * as sqliteVec from "sqlite-vec"
 
 export type Sqlite = Database
 const KERNEL_SQL = readFileSync(new URL("./kernel.sql", import.meta.url), "utf8")
@@ -23,6 +24,7 @@ const migration = (version: number, name: string, url: URL): Migration => {
 const MIGRATIONS: readonly Migration[] = [
   migration(1, "migration-ledger", new URL("./migrations/0001-migration-ledger.sql", import.meta.url)),
   migration(2, "discord-ack", new URL("./migrations/0002-discord-ack.sql", import.meta.url)),
+  migration(3, "recall-vec", new URL("./migrations/0003-recall-vec.sql", import.meta.url)),
 ]
 
 const sqlString = (value: string): string => `'${value.replaceAll("'", "''")}'`
@@ -38,6 +40,9 @@ const LEGACY_V4_SCHEMA_FINGERPRINT = "536dbc2eb1e3b6592b65245fd91361268d1d3decdc
 
 export const openDb = (path: string): Sqlite => {
   const db = new Database(path)
+  // events_vec(vec0 仮想テーブル)を持つ schema は、拡張が載っていない接続では
+  // 形の検査すら通らない。開く場所はここ1つなので、必ずここで載せる。
+  sqliteVec.load(db)
   db.exec("PRAGMA recursive_triggers = ON;")
   return db
 }
@@ -77,6 +82,7 @@ const schemaObjects = (db: Sqlite): Map<string, string> =>
 const objectsFrom = (sql: string): Map<string, string> => {
   const db = new Database(":memory:")
   try {
+    sqliteVec.load(db)
     db.exec(sql)
     return schemaObjects(db)
   } finally {

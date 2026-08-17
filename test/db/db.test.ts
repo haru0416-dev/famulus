@@ -120,6 +120,7 @@ test("空DBは現行schemaで一度だけ作られ再オープンできる", asy
   assert.deepEqual(reopened.prepare("SELECT version,name FROM schema_migrations ORDER BY version").all(), [
     { version: 1, name: "migration-ledger" },
     { version: 2, name: "discord-ack" },
+    { version: 3, name: "recall-vec" },
   ])
   assert.throws(() => reopened.exec("DELETE FROM schema_migrations"), /immutable/)
   reopened.close()
@@ -151,6 +152,7 @@ test("既知のbaseline DBはデータを保ったままcurrent schemaへ移行�
   assert.deepEqual(reopened.prepare("SELECT version,name FROM schema_migrations ORDER BY version").all(), [
     { version: 1, name: "migration-ledger" },
     { version: 2, name: "discord-ack" },
+    { version: 3, name: "recall-vec" },
   ])
   reopened.close()
 })

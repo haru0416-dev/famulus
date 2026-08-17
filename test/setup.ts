@@ -11,3 +11,7 @@
  */
 process.env.TZ = "Asia/Tokyo"
 process.env.FAMULUS_TZ = "Asia/Tokyo"
+
+// 埋め込みは検査用の決定的 stub に固定する。実モデル(ruri)は初回にネットワークから
+// 落ちてくるので、ゲートが外へ出ないようここで止める。実モデルの評価は eval:recall が担う。
+process.env.FAMULUS_EMBEDDING = "stub"

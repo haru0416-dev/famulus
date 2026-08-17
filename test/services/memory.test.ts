@@ -731,3 +731,146 @@ test("語を盛りすぎた recall は絞りを外して引き直す", async () 
     )
   })
 })
+
+test("remember は埋め込みを同じ tx で書き、redact が両方消す", async () => {
+  await withHarness(async (h) => {
+    const { meta, vecCount, afterRedact } = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const db = yield* Db
+        const id = yield* mem.remember({
+          content: "埋め込みの往復を確かめる記録",
+          at: "2026-08-08T09:00:00Z",
+        })
+        const row = yield* db.get("SELECT rowid AS r FROM events WHERE id = ?", id)
+        const meta = yield* db.get(
+          "SELECT model, dim, content_sha FROM events_embedding WHERE rowid = ?",
+          Number(row?.r),
+        )
+        const vecCount = yield* db.get("SELECT COUNT(*) n FROM events_vec WHERE rowid = ?", Number(row?.r))
+        yield* mem.redact(id, "検査")
+        const afterRedact = yield* db.get(
+          "SELECT (SELECT COUNT(*) FROM events_vec WHERE rowid = ?) v, (SELECT COUNT(*) FROM events_embedding WHERE rowid = ?) m",
+          Number(row?.r),
+          Number(row?.r),
+        )
+        return { meta, vecCount, afterRedact }
+      }),
+    )
+    assert.equal(meta?.model, "ruri-v3-30m-q8")
+    assert.equal(Number(meta?.dim), 256)
+    assert.equal(String(meta?.content_sha).length, 64)
+    assert.equal(Number(vecCount?.n), 1)
+    // 原文を消したら埋め込みも消える — 埋め込みは原文から作られる
+    assert.equal(Number(afterRedact?.v), 0)
+    assert.equal(Number(afterRedact?.m), 0)
+  })
+})
+
+test("embedMissing は埋め込みの無い行だけを埋める", async () => {
+  const saved = process.env.FAMULUS_EMBEDDING
+  try {
+    await withHarness(async (h) => {
+      // off の期間に書かれた行は埋め込みを持たない
+      process.env.FAMULUS_EMBEDDING = "off"
+      const { configureApp } = await import("../../src/core/config.ts")
+      configureApp()
+      const id = await h.run(
+        Effect.flatMap(Memory, (m) =>
+          m.remember({ content: "off の間に書かれた記録", at: "2026-08-08T09:00:00Z" }),
+        ),
+      )
+      // stub に戻すと embedMissing が埋め、二度目は 0 件
+      process.env.FAMULUS_EMBEDDING = "stub"
+      configureApp()
+      const { first, second, has } = await h.run(
+        Effect.gen(function* () {
+          const mem = yield* Memory
+          const db = yield* Db
+          const first = yield* mem.embedMissing()
+          const second = yield* mem.embedMissing()
+          const row = yield* db.get("SELECT rowid AS r FROM events WHERE id = ?", id)
+          const has = yield* db.get("SELECT COUNT(*) n FROM events_embedding WHERE rowid = ?", Number(row?.r))
+          return { first, second, has }
+        }),
+      )
+      assert.ok(first >= 1)
+      assert.equal(second, 0)
+      assert.equal(Number(has?.n), 1)
+    })
+  } finally {
+    if (saved === undefined) delete process.env.FAMULUS_EMBEDDING
+    else process.env.FAMULUS_EMBEDDING = saved
+    const { configureApp } = await import("../../src/core/config.ts")
+    configureApp()
+  }
+})
+
+test("recall は FTS が外した言い換えを意味検索で拾う(stub の 2-gram 近さで機構を見る)", async () => {
+  await withHarness(async (h) => {
+    const hits = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "問題空間の誤定義仮説を検証した", at: "2026-08-08T09:00:00Z" })
+        yield* mem.remember({ content: "ポケカ販売サイトのデザイン方向を決めた", at: "2026-08-08T09:01:00Z" })
+        // FTS: 「誤前提」「定義問題」はどちらも本文の連続部分文字列ではない → 索引では 0 件
+        return yield* mem.recall("誤前提 定義問題")
+      }),
+    )
+    assert.ok(hits.length >= 1, "意味検索が有効なら言い換えでも返る")
+    assert.match(String(hits[0]?.text ?? ""), /誤定義仮説/)
+  })
+})
+
+test("rrfMerge は両方に出た行を上へ、片方だけの行を順位で並べる", async () => {
+  const { rrfMerge } = await import("../../src/services/Memory.ts")
+  const row = (id: string) => ({ id })
+  const merged = rrfMerge([row("a"), row("b"), row("c")], [row("b"), row("d")])
+  assert.equal(merged[0]?.id, "b")
+  assert.deepEqual(merged.map((r) => r.id).sort(), ["a", "b", "c", "d"])
+  // 片方が空ならもう片方の順序がそのまま残る
+  assert.deepEqual(
+    rrfMerge([row("x"), row("y")], []).map((r) => r.id),
+    ["x", "y"],
+  )
+})
+
+test("embedMissing は埋め込みが使えない構成では書かずに 0 を返す", async () => {
+  const saved = process.env.FAMULUS_EMBEDDING
+  try {
+    process.env.FAMULUS_EMBEDDING = "off"
+    const { configureApp } = await import("../../src/core/config.ts")
+    configureApp()
+    await withHarness(async (h) => {
+      const done = await h.run(
+        Effect.gen(function* () {
+          const mem = yield* Memory
+          yield* mem.remember({ content: "埋め込まれないはずの記録", at: "2026-08-08T09:00:00Z" })
+          return yield* mem.embedMissing()
+        }),
+      )
+      assert.equal(done, 0)
+    })
+  } finally {
+    if (saved === undefined) delete process.env.FAMULUS_EMBEDDING
+    else process.env.FAMULUS_EMBEDDING = saved
+    const { configureApp } = await import("../../src/core/config.ts")
+    configureApp()
+  }
+})
+
+test("意味検索の回収路でも今のターンの入力は返さない(exclude)", async () => {
+  await withHarness(async (h) => {
+    const { self, others } = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const self = yield* mem.remember({
+          content: "問題空間の誤定義仮説を検証した",
+          at: "2026-08-08T09:00:00Z",
+        })
+        return { self, others: yield* mem.recall("誤前提 定義問題", 10, self) }
+      }),
+    )
+    assert.ok(!others.some((r) => r.id === self), "自分の入力が意味検索で返っている")
+  })
+})

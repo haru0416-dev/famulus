@@ -38,6 +38,8 @@ export interface AppConfig {
     readonly cycle: string
     readonly work: string
     readonly research: string
+    /** ローカル埋め込みの選択。ruri-v3-30m / stub(検査用)/ off。LLM ではないので isKnownModel の対象外。 */
+    readonly embedding: string
   }
   readonly cycle: {
     readonly timeoutMs: number
@@ -189,11 +191,18 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
   }
 
   const model = text(env, "FAMULUS_MODEL", "grok-4.6")
+  // 埋め込みは LLM ではなくローカル ONNX。"ruri-v3-30m"(既定)/ "stub"(検査用の決定的埋め込み)/
+  // "off"(意味検索を使わない)。isKnownModel の対象外。
+  const embedding = text(env, "FAMULUS_EMBEDDING", "ruri-v3-30m")
   const models = {
     default: model,
     cycle: text(env, "FAMULUS_CYCLE_MODEL", model),
     work: text(env, "FAMULUS_WORK_MODEL", "grok-4.3"),
     research: text(env, "FAMULUS_RESEARCH_MODEL", "grok-4.3"),
+    embedding,
+  }
+  if (!["ruri-v3-30m", "stub", "off"].includes(embedding)) {
+    issues.push(`FAMULUS_EMBEDDING: ruri-v3-30m / stub / off のどれかが必要です: ${embedding}`)
   }
   for (const [key, id] of [
     ["FAMULUS_MODEL", models.default],

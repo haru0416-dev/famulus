@@ -27,9 +27,11 @@
     "@ai-sdk/openai": "4.0.41",
     "@ai-sdk/provider": "^4.0.7",
     "@cursor/sdk": "^1.0.28",
+    "@huggingface/transformers": "^4.2.0",
     "@valibot/to-json-schema": "^1.7.1",
     "ai": "7.0.62",
     "effect": "4.0.0-rc.109",
+    "sqlite-vec": "^0.1.9",
     "valibot": "^1.4.2"
   },
   "devDependencies": {
@@ -40,5 +42,9 @@
     "fast-check": "^4.9.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
-  }
+  },
+  "trustedDependencies": [
+    "onnxruntime-node",
+    "protobufjs"
+  ]
 }

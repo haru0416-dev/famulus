@@ -69,6 +69,7 @@ const USAGE = `fam — famulus の承認 CLI
                            --from <ISO> で「いつから真だったか」を遡って書ける
   fam dream [日数] [--dry]   何日ぶんかをまとめて見直し、確定に上げ直す(既定 7 日)
   fam cleanup [日数] [--dry] workspace と読まれない会話を落とす(既定 14 日・events は触らない)
+  fam embed [n]             埋め込み(意味検索の索引)の無い行を埋める。取り込み直後や復元後に
   fam backup                DB snapshotを作成し、一時復元で検証する
   fam restore --verify [path] backupを一時DBへ復元し、整合性とschemaを検証する
   fam doctor                設定・live DB・最新backupを診断する
@@ -456,6 +457,21 @@ const program = (argv: readonly string[]) =>
         const dry = rest.includes("--dry")
         const days = Number(rest.find((a) => /^\d+$/.test(a)) ?? appConfig().cleanup.days)
         return yield* cleanup({ days, ...(dry ? { dry: true } : {}) })
+      }
+
+      case "embed": {
+        if (appConfig().models.embedding === "off")
+          return "埋め込みは off(FAMULUS_EMBEDDING)。埋めるものはあっても作れない。"
+        const cap = rest[0] ? Number(rest[0]) : Number.POSITIVE_INFINITY
+        if (Number.isNaN(cap) || cap < 1) throw new Error("使い方: fam embed [n](n は正の数)")
+        const mem = yield* Memory
+        let total = 0
+        for (;;) {
+          const batch = yield* mem.embedMissing(Math.min(200, cap - total))
+          total += batch
+          if (batch === 0 || total >= cap) break
+        }
+        return `埋め込みを ${total} 件足した(未処理は残っていない)`
       }
 
       case "ws": {
