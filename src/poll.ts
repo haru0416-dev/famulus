@@ -67,7 +67,10 @@ export async function poll(): Promise<string> {
       // 届いた件数ではなく DB の未読で決める。cycle 実行中に届いたぶんは追加の起動要求が併合されて
       // 落ちるので、消えるまで見る。消すのは cycle 側の completeCycle。
       const cursor = Number((yield* db.meta("cycle:cursor")) ?? 0)
-      const row = yield* db.get("SELECT COUNT(*)n FROM events WHERE rowid > ?AND source = 'owner'", cursor)
+      const row = yield* db.get(
+        "SELECT COUNT(*)n FROM events WHERE rowid > ?AND source = 'owner' AND COALESCE(origin_kind,'') != 'chat'",
+        cursor,
+      )
       const unread = Number(row?.n ?? 0)
       yield* db.setMeta("health:inbound:last_success", nowIso())
       if (unread === 0) return { count: got, unread, wake: false }

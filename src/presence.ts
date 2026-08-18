@@ -59,9 +59,11 @@ export function stateLine(path: string = appConfig().paths.db): string | undefin
       )
       const unread = Number(
         (
-          db.query("SELECT COUNT(*) n FROM events WHERE rowid > ? AND source = 'owner'").get(cursor) as {
-            n: number
-          }
+          db
+            .query(
+              "SELECT COUNT(*) n FROM events WHERE rowid > ? AND source = 'owner' AND COALESCE(origin_kind,'') != 'chat'",
+            )
+            .get(cursor) as { n: number }
         ).n,
       )
       const watches = Number(

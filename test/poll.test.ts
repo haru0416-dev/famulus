@@ -39,14 +39,17 @@ afterAll(async () => {
 
 const meta = (key: string) => run(Effect.flatMap(Db, (db) => db.meta(key)))
 const setMeta = (key: string, value: string) => run(Effect.flatMap(Db, (db) => db.setMeta(key, value)))
-const insertOwnerEvent = (id: string) =>
+const insertOwnerEvent = (id: string, originKind?: string) =>
   run(
     Effect.flatMap(Db, (db) =>
       db.run(
         // content は json_valid 制約があるので JSON 文字列で入れる。
-        `INSERT INTO events (id,at,kind,source,taint,exposure,provenance,content)VALUES (?,?,'observe','owner',0,'private','[]','"こんにちは"')`,
+        `INSERT INTO events (id,at,kind,source,taint,exposure,provenance,content,origin_kind,origin_id)
+         VALUES (?,?,'observe','owner',0,'private','[]','"こんにちは"',?,?)`,
         id,
         nowIso(),
+        originKind ?? null,
+        originKind ? id : null,
       ),
     ),
   )
@@ -58,6 +61,11 @@ test("wake: unit が空なら systemd を呼ばずに起動扱い", async () => 
 test("未読が無ければ起動せず、受信の生存時刻だけ進める", async () => {
   assert.equal(await poll(), "なし")
   assert.ok(await meta("health:inbound:last_success"))
+})
+
+test("対話REPLで処理済みのowner入力は未読に数えない", async () => {
+  await insertOwnerEvent("poll-chat", "chat")
+  assert.equal(await poll(), "なし")
 })
 
 test("未読があれば起動を試み、cycle:woke を記録する", async () => {
@@ -99,6 +107,7 @@ test("wake: unit があれば systemd の状態を見てから起動する", asy
     [
       "#!/usr/bin/env bash",
       '[ "$2" = show ] && { printf "%s\\n" "$FAKE_STATE"; exit 0; }',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: bash の既定値展開で、JS の埋め込みではない
       '[ "$2" = start ] && exit "${FAKE_START_CODE:-0}"',
       "exit 0",
       "",

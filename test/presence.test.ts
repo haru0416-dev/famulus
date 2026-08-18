@@ -57,6 +57,15 @@ test("未読があれば件数を前に出す", () => {
   })
 })
 
+test("対話REPLで処理済みのowner入力は未読表示に数えない", () => {
+  withDb((path, db) => {
+    db.run(`INSERT INTO events
+      (id,at,kind,source,taint,exposure,provenance,content,origin_kind,origin_id)
+      VALUES ('chat-1','2026-08-14T00:00:00Z','observe','owner',0,'private','[]','1','chat','chat-1')`)
+    assert.equal(stateLine(path), "watch 0")
+  })
+})
+
 test("DB が読めなければ文は作らない", () => {
   assert.equal(stateLine(join(tmpdir(), "fam-presence-無い.db")), undefined)
 })
