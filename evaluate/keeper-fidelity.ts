@@ -23,7 +23,7 @@ import { keep } from "../src/agent/keeper.ts"
 import { configureApp } from "../src/core/config.ts"
 import { loadEnv } from "../src/core/env.ts"
 import { nowIso } from "../src/core/time.ts"
-import { RunnerLive } from "../src/model/Runner.ts"
+import { ROLE_MODEL, RunnerLive } from "../src/model/Runner.ts"
 import { type AppServices, makeAppLayer } from "../src/runtime.ts"
 import { Db, DbLive } from "../src/services/Db.ts"
 import { Memory } from "../src/services/Memory.ts"
@@ -173,10 +173,13 @@ async function runCase(fixture: Fixture): Promise<CaseResult> {
   }
 }
 
-const main = async () => {
-  loadEnv()
-  configureApp()
-  mkdirSync(OUT, { recursive: true })
+/** 1モデルぶんの走行。引数なしは structurer(役割表)のまま。 */
+const runModel = async (model: string | undefined) => {
+  // 比較は役割表の差し替えで行う(評価だけの操作)。production Runner は生の model id を
+  // 拒否する設計(runner.test の固定 role ガード)なので、経路はそのままに役割の中身を替える。
+  if (model !== undefined) ROLE_MODEL.structurer = model
+  const label = model ?? `${ROLE_MODEL.structurer}(ROLE_MODEL.structurer)`
+  console.log(`\n== ${label} ==`)
   const results: CaseResult[] = []
   for (const fixture of FIXTURES) {
     const r = await runCase(fixture)
@@ -193,7 +196,7 @@ const main = async () => {
   const summary = {
     at: new Date().toISOString(),
     // 経路は三つ組で書く(~/dev/test/agent-experiment-pitfalls.md §2.2 — モデル名だけの比較は再現しない)
-    route: { harness: "famulus keeper", backend: "api.x.ai/v1 responses", model: "grok-4.3(ROLE_MODEL.structurer)" },
+    route: { harness: "famulus keeper", backend: "api.x.ai/v1 responses", model: label },
     rev: execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim(),
     cases: FIXTURES.length,
     capture: `${captured}/${expectTotal}`,
@@ -204,8 +207,17 @@ const main = async () => {
   const path = `${OUT}${new Date().toISOString().replace(/[:.]/g, "-")}.json`
   writeFileSync(path, `${JSON.stringify(summary, null, 2)}\n`)
   console.log(
-    `\ncapture ${captured}/${expectTotal} / false+ ${falsePositives} / 照合違反 ${violations}\n保存: ${path}`,
+    `capture ${captured}/${expectTotal} / false+ ${falsePositives} / 照合違反 ${violations}\n保存: ${path}`,
   )
+}
+
+const main = async () => {
+  loadEnv()
+  configureApp()
+  mkdirSync(OUT, { recursive: true })
+  // 引数にモデル id を並べると同じ fixture で順に走る(比較用)。なしは従来どおり役割表のモデル。
+  const models = process.argv.slice(2)
+  for (const m of models.length === 0 ? [undefined] : models) await runModel(m)
 }
 
 await main()
