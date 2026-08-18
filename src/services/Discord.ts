@@ -174,8 +174,11 @@ const MAX_THREADS = 3
 const FETCH_AT_ONCE = 8
 /** Discordの一覧APIが1回に返せる最大件数。 */
 const MESSAGE_PAGE_SIZE = 100
-/** HTTP timeoutを超えて残ったclaimだけを中断扱いにする。並行flush中のactionは閉じない。 */
-const SENDING_STALE_MS = 30_000
+/**
+ * 添付HTTPの最大60秒と送信準備に同じだけ余裕を取り、並行workerが処理中のactionを閉じない。
+ * ceiling: 添付の読込とFormData生成が60秒を超える規模になったらclaimのheartbeatへ替える。
+ */
+const SENDING_STALE_MS = 120_000
 
 /** `GET /channels/{id}/messages` の応答のうち使うフィールド。 */
 interface RawMessage {
@@ -189,6 +192,10 @@ interface RawMessage {
     readonly content_type?: string
     readonly size?: number
   }[]
+}
+
+interface RawUser {
+  readonly id: string
 }
 
 /** 画像として受ける添付の上限。これより大きいものは記述もできないまま容量だけ食う。 */
@@ -274,6 +281,9 @@ const isRawMessages = (value: unknown): value is RawMessage[] =>
   )
 
 const isRawMessage = (value: unknown): value is RawMessage => isRawMessages([value])
+
+const isRawUsers = (value: unknown): value is RawUser[] =>
+  Array.isArray(value) && value.every((user) => isRecord(user) && typeof user.id === "string")
 
 /** snowflake は上位ビットに生成時刻を持つ。文字列比較を避け、同時刻内は数値順で扱う。 */
 const newer = (a: string, b: string): boolean => BigInt(a) > BigInt(b)
@@ -395,6 +405,38 @@ const makeDiscord = () =>
         if (decoded._tag === "Failure" || !isRawMessage(decoded.success))
           return { state: "deferred" } as const
         return { state: "found", message: decoded.success } as const
+      })
+    }
+
+    const ownerReacted = (
+      ch: string,
+      messageId: string,
+      emoji: string,
+      owner: string | undefined,
+    ): Effect.Effect<boolean, ConnectorFailed> => {
+      if (!owner) return Effect.succeed(false)
+      return Effect.gen(function* () {
+        let after: string | undefined
+        // ceiling: 1絵文字へ1万人超が反応する運用になったら、承認用の別入力へ替える。
+        for (let page = 0; page < 100; page++) {
+          const query = new URLSearchParams({ limit: "100", ...(after ? { after } : {}) })
+          const path = `/channels/${ch}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}?${query}`
+          const users = yield* readJson<unknown>(path)
+          if (!isRawUsers(users))
+            return yield* Effect.fail(
+              new ConnectorFailed({
+                connector: "Discord",
+                operation: `GET /channels/${ch}/messages/${messageId}/reactions`,
+                message: "response is not a user array",
+              }),
+            )
+          if (users.some((user) => user.id === owner)) return true
+          if (users.length < 100) return false
+          const next = users.at(-1)?.id
+          if (!next || next === after) return false
+          after = next
+        }
+        return false
       })
     }
 
@@ -859,95 +901,102 @@ const makeDiscord = () =>
         })
       })
 
-    const flushQueued = (): Effect.Effect<readonly Outbound[], DbFailed> =>
+    const flushQueuedMatching = (filter?: {
+      readonly id?: string
+      readonly purpose?: string
+    }): Effect.Effect<readonly Outbound[], DbFailed> =>
       Effect.gen(function* () {
         const at = nowIso()
         const staleAt = new Date(Date.now() - SENDING_STALE_MS).toISOString().replace(/\.\d{3}Z$/, "Z")
         // HTTP timeoutを超えて残った action は結果を判定できない。再送せず unknown で閉じる。
-        yield* db.withImmediateTransaction("close interrupted Discord outbound", (tx) => {
-          // 旧版はHTTP開始前やreceipt保存後の停止まで親だけunknownにしていた。action側に
-          // 曖昧性が無い行だけを再調停へ戻す。現行版のunknownにはunknown actionがあるため対象外。
-          const legacySafe = tx.all(
-            `SELECT id FROM discord_outbound o
+        const reconciledIds = filter
+          ? []
+          : yield* db.withImmediateTransaction("close interrupted Discord outbound", (tx) => {
+              // 旧版はHTTP開始前やreceipt保存後の停止まで親だけunknownにしていた。action側に
+              // 曖昧性が無い行だけを再調停へ戻す。現行版のunknownにはunknown actionがあるため対象外。
+              const legacySafe = tx.all(
+                `SELECT id FROM discord_outbound o
               WHERE state='unknown' AND error='interrupted during HTTP'
                 AND NOT EXISTS (
                   SELECT 1 FROM discord_outbound_actions a
                    WHERE a.outbound_id=o.id AND a.state IN ('sending','failed','unknown')
                 )`,
-          )
-          for (const outbound of legacySafe) {
-            const id = String(outbound.id)
-            tx.run(
-              "UPDATE discord_outbound SET state='sending',error=NULL WHERE id=? AND state='unknown'",
-              id,
-            )
-            tx.run(
-              `UPDATE drafts SET state='delivery_pending',review_feedback=NULL,updated_at=?
+              )
+              for (const outbound of legacySafe) {
+                const id = String(outbound.id)
+                tx.run(
+                  "UPDATE discord_outbound SET state='sending',error=NULL WHERE id=? AND state='unknown'",
+                  id,
+                )
+                tx.run(
+                  `UPDATE drafts SET state='delivery_pending',review_feedback=NULL,updated_at=?
                 WHERE outbound_id=? AND state='delivery_failed'
                   AND review_feedback='interrupted during HTTP'`,
-              at,
-              id,
-            )
-          }
-          const staleOutbounds = tx.all(
-            "SELECT id FROM discord_outbound WHERE state='sending' AND updated_at<?",
-            staleAt,
-          )
-          tx.run(
-            "UPDATE discord_outbound_actions SET state='unknown',error='interrupted during HTTP',updated_at=? WHERE state='sending' AND updated_at<?",
-            at,
-            staleAt,
-          )
-          // 旧版はreaction receiptとtap metadataを別transactionで保存していた。親を再開する前に
-          // 到達可能だった中間状態を補修する。現行版の行に対しても同じ値を書くので冪等。
-          const recovered = tx.all(
-            `SELECT a.outbound_id,a.ordinal,a.kind,a.spec,a.receipt
+                  at,
+                  id,
+                )
+              }
+              const staleOutbounds = tx.all(
+                "SELECT id FROM discord_outbound WHERE state='sending' AND updated_at<?",
+                staleAt,
+              )
+              tx.run(
+                "UPDATE discord_outbound_actions SET state='unknown',error='interrupted during HTTP',updated_at=? WHERE state='sending' AND updated_at<?",
+                at,
+                staleAt,
+              )
+              // 旧版はreaction receiptとtap metadataを別transactionで保存していた。親を再開する前に
+              // 到達可能だった中間状態を補修する。現行版の行に対しても同じ値を書くので冪等。
+              const recovered = tx.all(
+                `SELECT a.outbound_id,a.ordinal,a.kind,a.spec,a.receipt
                FROM discord_outbound_actions a
                JOIN discord_outbound o ON o.id=a.outbound_id
               WHERE o.state='sending' AND o.updated_at<? AND a.state='succeeded'
               ORDER BY a.outbound_id,a.ordinal`,
-            staleAt,
-          )
-          const recoveredReceipts = new Map<string, Map<number, Record<string, unknown>>>()
-          for (const action of recovered) {
-            const receipt = parse(action.receipt)
-            if (!isRecord(receipt)) continue
-            const outboundId = String(action.outbound_id)
-            const receipts = recoveredReceipts.get(outboundId) ?? new Map()
-            receipts.set(Number(action.ordinal), receipt)
-            recoveredReceipts.set(outboundId, receipts)
-          }
-          for (const action of recovered) {
-            if (action.kind !== "reaction") continue
-            const rawSpec = parse(action.spec)
-            if (
-              !isRecord(rawSpec) ||
-              rawSpec.kind !== "reaction" ||
-              typeof rawSpec.messageOrdinal !== "number" ||
-              typeof rawSpec.emoji !== "string" ||
-              typeof rawSpec.reply !== "string"
-            )
-              continue
-            const spec = rawSpec as unknown as Extract<ActionSpec, { kind: "reaction" }>
-            const messageReceipt = recoveredReceipts.get(String(action.outbound_id))?.get(spec.messageOrdinal)
-            const messageId = messageReceipt?.messageId
-            const channelId = messageReceipt?.channelId
-            if (typeof messageId === "string" && typeof channelId === "string")
-              rememberTap(tx, String(action.outbound_id), channelId, messageId, spec)
-          }
-          tx.run(
-            `UPDATE discord_outbound SET state='unknown',error='interrupted during HTTP',updated_at=?
+                staleAt,
+              )
+              const recoveredReceipts = new Map<string, Map<number, Record<string, unknown>>>()
+              for (const action of recovered) {
+                const receipt = parse(action.receipt)
+                if (!isRecord(receipt)) continue
+                const outboundId = String(action.outbound_id)
+                const receipts = recoveredReceipts.get(outboundId) ?? new Map()
+                receipts.set(Number(action.ordinal), receipt)
+                recoveredReceipts.set(outboundId, receipts)
+              }
+              for (const action of recovered) {
+                if (action.kind !== "reaction") continue
+                const rawSpec = parse(action.spec)
+                if (
+                  !isRecord(rawSpec) ||
+                  rawSpec.kind !== "reaction" ||
+                  typeof rawSpec.messageOrdinal !== "number" ||
+                  typeof rawSpec.emoji !== "string" ||
+                  typeof rawSpec.reply !== "string"
+                )
+                  continue
+                const spec = rawSpec as unknown as Extract<ActionSpec, { kind: "reaction" }>
+                const messageReceipt = recoveredReceipts
+                  .get(String(action.outbound_id))
+                  ?.get(spec.messageOrdinal)
+                const messageId = messageReceipt?.messageId
+                const channelId = messageReceipt?.channelId
+                if (typeof messageId === "string" && typeof channelId === "string")
+                  rememberTap(tx, String(action.outbound_id), channelId, messageId, spec)
+              }
+              tx.run(
+                `UPDATE discord_outbound SET state='unknown',error='interrupted during HTTP',updated_at=?
               WHERE state='sending' AND updated_at<?
                 AND EXISTS (
                   SELECT 1 FROM discord_outbound_actions a
                    WHERE a.outbound_id=discord_outbound.id AND a.state='unknown'
                 )`,
-            at,
-            staleAt,
-          )
-          // receipt済みで曖昧なHTTPが無ければ、残りの未着手actionだけを安全に再開できる。
-          tx.run(
-            `UPDATE discord_outbound SET state='queued',updated_at=?
+                at,
+                staleAt,
+              )
+              // receipt済みで曖昧なHTTPが無ければ、残りの未着手actionだけを安全に再開できる。
+              tx.run(
+                `UPDATE discord_outbound SET state='queued',updated_at=?
               WHERE state='sending' AND updated_at<?
                 AND EXISTS (
                   SELECT 1 FROM discord_outbound_actions a
@@ -957,35 +1006,45 @@ const makeDiscord = () =>
                   SELECT 1 FROM discord_outbound_actions a
                    WHERE a.outbound_id=discord_outbound.id AND a.state IN ('sending','failed','unknown')
                 )`,
-            at,
-            staleAt,
-          )
-          // 最後のreceipt直後に停止した場合は、HTTPを繰り返さず親だけを完了させる。
-          tx.run(
-            `UPDATE discord_outbound SET state='sent',updated_at=?
+                at,
+                staleAt,
+              )
+              // 最後のreceipt直後に停止した場合は、HTTPを繰り返さず親だけを完了させる。
+              tx.run(
+                `UPDATE discord_outbound SET state='sent',updated_at=?
               WHERE state='sending' AND updated_at<?
                 AND NOT EXISTS (
                   SELECT 1 FROM discord_outbound_actions a
                    WHERE a.outbound_id=discord_outbound.id AND a.state!='succeeded'
                 )`,
-            at,
-            staleAt,
-          )
-          let completed = false
-          for (const outbound of staleOutbounds) {
-            const id = String(outbound.id)
-            const state = tx.get("SELECT state FROM discord_outbound WHERE id=?", id)?.state
-            if (state === "sent") completed = true
-            else if (state === "failed" || state === "partial" || state === "unknown")
-              forgetOutboundTaps(tx, id)
-          }
-          if (completed) prunePendingTaps(tx)
-        })
+                at,
+                staleAt,
+              )
+              let completed = false
+              for (const outbound of staleOutbounds) {
+                const id = String(outbound.id)
+                const state = tx.get("SELECT state FROM discord_outbound WHERE id=?", id)?.state
+                if (state === "sent") completed = true
+                else if (state === "failed" || state === "partial" || state === "unknown")
+                  forgetOutboundTaps(tx, id)
+              }
+              if (completed) prunePendingTaps(tx)
+              return staleOutbounds.map((outbound) => String(outbound.id))
+            })
 
         const queued = yield* db.all(
-          "SELECT id FROM discord_outbound WHERE state='queued' ORDER BY created_at,id",
+          `SELECT id FROM discord_outbound WHERE state='queued'
+            ${filter?.id ? "AND id=?" : ""} ${filter?.purpose ? "AND purpose=?" : ""}
+            ORDER BY created_at,id`,
+          ...(filter?.id ? [filter.id] : []),
+          ...(filter?.purpose ? [filter.purpose] : []),
         )
         const flushed: Outbound[] = []
+        for (const id of reconciledIds) {
+          const reconciled = yield* getOutbound(id)
+          if (reconciled && ["failed", "partial", "unknown"].includes(reconciled.state))
+            flushed.push(reconciled)
+        }
         for (const row of queued) {
           const id = String(row.id)
           const claimAt = nowIso()
@@ -1234,6 +1293,24 @@ const makeDiscord = () =>
         return flushed
       })
 
+    const flushQueued = (): Effect.Effect<readonly Outbound[], DbFailed> => flushQueuedMatching()
+    const flushOutbound = (id: string): Effect.Effect<readonly Outbound[], DbFailed> =>
+      flushQueuedMatching({ id })
+
+    const needsFlush = (): Effect.Effect<boolean, DbFailed> =>
+      db
+        .get(
+          `SELECT 1 pending FROM discord_outbound o
+            WHERE state IN ('queued','sending')
+               OR (state='unknown' AND error='interrupted during HTTP'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM discord_outbound_actions a
+                      WHERE a.outbound_id=o.id AND a.state IN ('sending','failed','unknown')
+                   ))
+            LIMIT 1`,
+        )
+        .pipe(Effect.map(Boolean))
+
     /** 読みに行くチャンネル。出す先すべてと DM、立てたスレッド。 */
     const listening = (): Effect.Effect<readonly string[], DbFailed> =>
       Effect.gen(function* () {
@@ -1271,7 +1348,7 @@ const makeDiscord = () =>
     const pollInbound = (): Effect.Effect<Batch, DbFailed | ConnectorFailed> =>
       Effect.gen(function* () {
         yield* ensureDmQueued()
-        yield* flushQueued()
+        if (!(yield* dm())) yield* flushQueuedMatching({ purpose: "discord-dm-cache" })
         const owner = ownerId()
         const channels = yield* listening()
         if (token() && owner && channels.length === 0) {
@@ -1384,12 +1461,20 @@ const makeDiscord = () =>
         }
         const direct = yield* Effect.all(
           directTargets.map(({ messageId, channelId }) =>
-            readPendingMessage(channelId, messageId).pipe(Effect.map((result) => ({ messageId, result }))),
+            readPendingMessage(channelId, messageId).pipe(
+              Effect.map((result) => ({ messageId, channelId, result })),
+            ),
           ),
           { concurrency: FETCH_AT_ONCE },
         )
 
-        const collectTap = (message: RawMessage): void => {
+        const tapCandidates: {
+          readonly messageId: string
+          readonly channelId: string
+          readonly name: string
+          readonly tap: PendingTap
+        }[] = []
+        const collectTap = (message: RawMessage, channelId: string): void => {
           const waiting = pending[message.id]
           if (!waiting) return
           for (const reaction of message.reactions ?? []) {
@@ -1398,16 +1483,9 @@ const makeDiscord = () =>
             const tap = waiting[name]
             const outboundId = tap?.outboundId ?? pendingOutbounds.get(message.id)
             const ready = tap && (!outboundId || tapReady.get(outboundId) === true)
-            // 自分で付けたぶんを超えていれば、bot 以外の誰かが押している。
+            // 集計値は候補の絞り込みにしか使わない。誰が押したかは users API で照合する。
             if (ready && reaction.count > (reaction.me ? 1 : 0)) {
-              out.push({
-                id: `${message.id}:${name}`,
-                text: tap.reply,
-                ...(tap.draft ? { draft: tap.draft } : {}),
-              })
-              delete pending[message.id]
-              consumedTapIds.add(message.id)
-              break
+              tapCandidates.push({ messageId: message.id, channelId, name, tap })
             }
           }
         }
@@ -1434,26 +1512,49 @@ const makeDiscord = () =>
                 heardAt = m.id
               }
             }
-            collectTap(m)
+            collectTap(m, ch)
           }
 
           const newest = msgs.reduce((a, m) => (newer(m.id, a) ? m.id : a), msgs[0]?.id ?? "0")
           marks[ch] = cursor && newer(cursor, newest) ? cursor : newest
         }
 
-        const directByMessage = new Map<string, (typeof direct)[number]["result"][]>()
-        for (const { messageId, result } of direct) {
+        const directByMessage = new Map<string, (typeof direct)[number][]>()
+        for (const item of direct) {
+          const { messageId } = item
           const results = directByMessage.get(messageId) ?? []
-          results.push(result)
+          results.push(item)
           directByMessage.set(messageId, results)
         }
         for (const [messageId, results] of directByMessage) {
-          const found = results.find((result) => result.state === "found")
-          if (found?.state === "found") collectTap(found.message)
-          else if (results.every((result) => result.state === "gone")) {
+          const found = results.find(({ result }) => result.state === "found")
+          if (found?.result.state === "found") collectTap(found.result.message, found.channelId)
+          else if (results.every(({ result }) => result.state === "gone")) {
             delete pending[messageId]
             consumedTapIds.add(messageId)
           }
+        }
+
+        const verifiedTaps = yield* Effect.all(
+          tapCandidates.map((candidate) =>
+            Effect.result(ownerReacted(candidate.channelId, candidate.messageId, candidate.name, owner)).pipe(
+              Effect.map((result) => ({
+                candidate,
+                authorized: result._tag === "Success" && result.success,
+              })),
+            ),
+          ),
+          { concurrency: FETCH_AT_ONCE },
+        )
+        for (const { candidate, authorized } of verifiedTaps) {
+          if (!authorized || consumedTapIds.has(candidate.messageId)) continue
+          out.push({
+            id: `${candidate.messageId}:${candidate.name}`,
+            text: candidate.tap.reply,
+            ...(candidate.tap.draft ? { draft: candidate.tap.draft } : {}),
+          })
+          delete pending[candidate.messageId]
+          consumedTapIds.add(candidate.messageId)
         }
 
         return {
@@ -1564,7 +1665,9 @@ const makeDiscord = () =>
     return {
       enqueue,
       getOutbound,
+      needsFlush,
       flushQueued,
+      flushOutbound,
       pollInbound,
       commitInboundBatch,
       configured,

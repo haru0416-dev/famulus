@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect"
 import { configureApp } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { nowIso } from "./core/time.ts"
+import { wakePendingDelivery } from "./deliver.ts"
 import { drainInbox } from "./inbox.ts"
 import { run, runtime } from "./runtime.ts"
 import { Db } from "./services/Db.ts"
@@ -59,50 +60,55 @@ export async function wake(): Promise<{ started: boolean; note: string }> {
 }
 
 export async function poll(): Promise<string> {
-  const state = await run(
-    Effect.gen(function* () {
-      const db = yield* Db
-      const got = yield* drainInbox
-
-      // 届いた件数ではなく DB の未読で決める。cycle 実行中に届いたぶんは追加の起動要求が併合されて
-      // 落ちるので、消えるまで見る。消すのは cycle 側の completeCycle。
-      const cursor = Number((yield* db.meta("cycle:cursor")) ?? 0)
-      const row = yield* db.get(
-        "SELECT COUNT(*)n FROM events WHERE rowid > ?AND source = 'owner' AND COALESCE(origin_kind,'') != 'chat'",
-        cursor,
-      )
-      const unread = Number(row?.n ?? 0)
-      yield* db.setMeta("health:inbound:last_success", nowIso())
-      if (unread === 0) return { count: got, unread, wake: false }
-
-      // 新しく届いたぶんは待たせない。
-      const wokeRaw = yield* db.meta("cycle:woke")
-      const since = Date.now() - (wokeRaw ? Date.parse(wokeRaw) : 0)
-
-      // 起動した cycle が最後まで実行されたのに未読が残っている = その回と入れ違いに届いた。
-      // cycle は見終えた行までしか cursor を進めない。`cycle:last` は completeCycle でしか進まないので、
-      // クォータ枯渇や停止で処理されなかった回はここに入らず、RETRY_MS の側で間隔を空ける。
-      const lastRaw = yield* db.meta("cycle:last")
-      const completed = !!lastRaw && !!wokeRaw && Date.parse(lastRaw) >= Date.parse(wokeRaw)
-      return { count: got, unread, wake: got > 0 || completed || since >= RETRY_MS }
-    }),
-  )
-
-  if (state.unread === 0) return state.count > 0 ? `${state.count} 件(未読なし)` : "なし"
-  const head = `届 ${state.count} / 未読 ${state.unread}`
-  if (!state.wake) return `${head} — 起動しない(前回から間隔が短い)`
-
-  const w = await wake()
-  // 実際に起動できた回だけ記録する。実行中で拒否されたぶんを記録すると、RETRY_MS のあいだ
-  // 未読が残ったまま再起動されない。
-  if (w.started)
-    await run(
+  try {
+    const state = await run(
       Effect.gen(function* () {
         const db = yield* Db
-        yield* db.setMeta("cycle:woke", nowIso())
+        const got = yield* drainInbox
+
+        // 届いた件数ではなく DB の未読で決める。cycle 実行中に届いたぶんは追加の起動要求が併合されて
+        // 落ちるので、消えるまで見る。消すのは cycle 側の completeCycle。
+        const cursor = Number((yield* db.meta("cycle:cursor")) ?? 0)
+        const row = yield* db.get(
+          "SELECT COUNT(*)n FROM events WHERE rowid > ?AND source = 'owner' AND COALESCE(origin_kind,'') != 'chat'",
+          cursor,
+        )
+        const unread = Number(row?.n ?? 0)
+        yield* db.setMeta("health:inbound:last_success", nowIso())
+        if (unread === 0) return { count: got, unread, wake: false }
+
+        // 新しく届いたぶんは待たせない。
+        const wokeRaw = yield* db.meta("cycle:woke")
+        const since = Date.now() - (wokeRaw ? Date.parse(wokeRaw) : 0)
+
+        // 起動した cycle が最後まで実行されたのに未読が残っている = その回と入れ違いに届いた。
+        // cycle は見終えた行までしか cursor を進めない。`cycle:last` は completeCycle でしか進まないので、
+        // クォータ枯渇や停止で処理されなかった回はここに入らず、RETRY_MS の側で間隔を空ける。
+        const lastRaw = yield* db.meta("cycle:last")
+        const completed = !!lastRaw && !!wokeRaw && Date.parse(lastRaw) >= Date.parse(wokeRaw)
+        return { count: got, unread, wake: got > 0 || completed || since >= RETRY_MS }
       }),
     )
-  return `${head} — ${w.note}`
+
+    if (state.unread === 0) return state.count > 0 ? `${state.count} 件(未読なし)` : "なし"
+    const head = `届 ${state.count} / 未読 ${state.unread}`
+    if (!state.wake) return `${head} — 起動しない(前回から間隔が短い)`
+
+    const w = await wake()
+    // 実際に起動できた回だけ記録する。実行中で拒否されたぶんを記録すると、RETRY_MS のあいだ
+    // 未読が残ったまま再起動されない。
+    if (w.started)
+      await run(
+        Effect.gen(function* () {
+          const db = yield* Db
+          yield* db.setMeta("cycle:woke", nowIso())
+        }),
+      )
+    return `${head} — ${w.note}`
+  } finally {
+    // 受信の記録とcycle起動を一般配送より先に終え、配送はpollの60秒cgroupから分離する。
+    await wakePendingDelivery(CONFIG.discord.token !== undefined)
+  }
 }
 
 const main = async (): Promise<void> => {

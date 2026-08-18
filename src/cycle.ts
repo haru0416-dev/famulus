@@ -15,6 +15,7 @@
  * cycle が過剰実行されても対話用の run 数は残る。
  */
 import * as Effect from "effect/Effect"
+import type { AssistantOptions, AssistantTurnResult } from "./agent/assistant.ts"
 import { DRAFTING } from "./agent/drafting.ts"
 import { DREAM_DAILY, dream, dreamDue } from "./agent/dream.ts"
 import { KEEP_MS, keep } from "./agent/keeper.ts"
@@ -27,6 +28,7 @@ import { loadEnv } from "./core/env.ts"
 import { ConnectorFailed, causeReason, describeRefusal } from "./core/errors.ts"
 import { localDayRange, nowIso } from "./core/time.ts"
 import { listWorkspaces, renderWorkspaces, type Workspace } from "./core/workspaces.ts"
+import { wakePendingDelivery } from "./deliver.ts"
 import { drainInbox } from "./inbox.ts"
 import { dailyLogWindow, dailyPost, readJournalRange, tally } from "./journal.ts"
 import { digestOf } from "./model/kernel-spec.ts"
@@ -77,6 +79,22 @@ function renderEvent(e: ObservedEvent): string {
     body = e.content
   }
   return `[${e.at}] ${e.source}: ${body.slice(0, 500)}`
+}
+
+function ownerEvidenceText(e: ObservedEvent): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(e.content)
+    if (typeof parsed === "string") return parsed
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as { said?: unknown }).said === "string"
+    )
+      return (parsed as { said: string }).said
+  } catch {
+    return e.content
+  }
+  return undefined
 }
 
 function renderWatchSection(d: CyclePlan): string | undefined {
@@ -366,8 +384,24 @@ const bumpCount = (key: string) =>
 const assertLease = (token: CycleLeaseToken): Promise<void> =>
   run(Effect.flatMap(CycleLease, (lease) => lease.assertCurrent(token)))
 
-async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController): Promise<string> {
+export interface CycleDependencies {
+  readonly createAssistant?: (opts: AssistantOptions) => {
+    readonly respond: (
+      input: string,
+      opts?: { readonly signal?: AbortSignal | undefined },
+    ) => Promise<AssistantTurnResult>
+  }
+  readonly keep?: (opts: Parameters<typeof keep>[0]) => Promise<string>
+  readonly wakePendingDelivery?: (enabled: boolean) => Promise<boolean>
+}
+
+async function runCycleHeld(
+  token: CycleLeaseToken,
+  leaseAbort: AbortController,
+  dependencies: CycleDependencies,
+): Promise<string> {
   const leaseSignal = leaseAbort.signal
+  const wakeDelivery = dependencies.wakePendingDelivery ?? wakePendingDelivery
   const d = await run(
     Effect.gen(function* () {
       const lease = yield* CycleLease
@@ -383,6 +417,8 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
       return yield* att.planCycle()
     }),
   )
+  // 手動起動やidle/blockedの回でも、受信処理から分離した配送workerへqueueを渡す。
+  await wakeDelivery(CONFIG.discord.token !== undefined)
 
   // ── 実行条件が無い。ここで終わるのが正常。モデルは1回も呼ばない。
   if (d.idle) {
@@ -451,21 +487,23 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
   const acked = spokenTo ? discordAck(d.newEvents) : undefined
   if (acked) {
     await run(
-      Effect.flatMap(Discord, (discord) =>
-        discord.enqueue({
+      Effect.gen(function* () {
+        const discord = yield* Discord
+        const outbound = yield* discord.enqueue({
           purpose: "cycle-ack",
           dedupeKey: acked.messageId,
           text: "",
           ack: { ...acked, emoji: "👀" },
-        }),
-      ),
+        })
+        if (outbound) yield* discord.flushOutbound(outbound.id)
+      }),
     ).catch(() => {})
-    await run(Effect.flatMap(Discord, (d2) => d2.flushQueued())).catch(() => {})
   }
 
   // 道具一式を読み込むのは、モデル実行が必要と決まってから。idle の回(定期実行の大半)は
   // ここを通らないので、その回の起動は DB を1回引くだけで終わる。
-  const { createAssistant } = await import("./agent/assistant.ts")
+  const createAssistant =
+    dependencies.createAssistant ?? (await import("./agent/assistant.ts")).createAssistant
 
   // 話しかけられた回の進行表示。typing は即時、道具の経過は最初の道具から1通を編集で更新する。
   // 台帳は通さない(Discord.ts の注記)。自律実行の回には出さない — 誰も待っていない。
@@ -478,7 +516,10 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
       // 外部書き込みは、この回で実際に読んだ owner event の引用まで照合する。
       ownerEvidence: d.newEvents
         .filter((event) => event.source === "owner" && event.taint === 0)
-        .map((event) => ({ id: event.id, text: renderEvent(event) })),
+        .flatMap((event) => {
+          const text = ownerEvidenceText(event)
+          return text === undefined ? [] : [{ id: event.id, text }]
+        }),
       onLeaseLost: (reason) => leaseAbort.abort(reason),
       ...(display ? { onToolStep: (tools, targets) => display.want(`🛠 ${tally(tools, targets)}`) } : {}),
     })
@@ -538,7 +579,7 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
 
     // ── 返信の先行配送。返信文はこの時点で確定していて、keeper の後ろに置くと確定から
     // 届くまでがその分遅れる。durable queue に置いてから flush する — 送信に失敗しても
-    // queue が残り、末尾の flush と poll が再送する。鍵は締めの前に落ちた回の再実行でも
+    // queue が残り、末尾の flush と独立配送workerが再送する。鍵は締めの前に落ちた回の再実行でも
     // 同じになるので、二重送信にならない。
     const deliveryKey = digestOf({
       reasonKey: d.reasonKey,
@@ -551,8 +592,8 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         await run(
           Effect.gen(function* () {
             const discord = yield* Discord
-            yield* discord.enqueue({ purpose: "cycle-reply", dedupeKey: deliveryKey, text })
-            yield* discord.flushQueued()
+            const outbound = yield* discord.enqueue({ purpose: "cycle-reply", dedupeKey: deliveryKey, text })
+            if (outbound) yield* discord.flushOutbound(outbound.id)
           }),
         )
       } catch (e) {
@@ -569,14 +610,15 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
       const material = evidence.map(renderEvent).join("\n")
       // `since` はこの回の起点。本体が既に確定させた slot を keeper が言い換え直さないための線。
       await assertLease(token)
-      kept = await run(
-        keep({
-          material,
-          evidence: evidence.map((e) => ({ id: e.id, text: renderEvent(e) })),
-          since: d.at,
-          signal: AbortSignal.any([AbortSignal.timeout(KEEP_MS), leaseSignal]),
-        }),
-      ).catch((e: unknown) => `keeper: 落ちた(${causeReason(e)})`)
+      const keepInput = {
+        material,
+        evidence: evidence.map((e) => ({ id: e.id, text: renderEvent(e) })),
+        since: d.at,
+        signal: AbortSignal.any([AbortSignal.timeout(KEEP_MS), leaseSignal]),
+      } satisfies Parameters<typeof keep>[0]
+      kept = await (dependencies.keep ? dependencies.keep(keepInput) : run(keep(keepInput))).catch(
+        (e: unknown) => `keeper: 落ちた(${causeReason(e)})`,
+      )
       log(kept)
     }
 
@@ -659,10 +701,10 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
         }
       }),
     )
-    // 返信は書けた瞬間に出す。flush は poll の中にしか無いので、ここで呼ばないと
+    // 返信は書けた瞬間に出す。独立配送workerだけに任せると、起動までのぶんだけ待つので
     // 次の poll tick(最大30秒後)まで queued のまま待つ(実測: 完成 05:05:22 → 配送 05:05:35)。
     // 失敗しても投げない — queue は永続で、次の poll が再送する。commit は上で済んでいる。
-    await run(Effect.flatMap(Discord, (d) => d.flushQueued())).catch(() => {})
+    await wakeDelivery(CONFIG.discord.token !== undefined)
     if (cutOff) return `止まった(${cutOff})— 走った跡は DB に残っている`
     return text ? `動いた: ${text.slice(0, 400)}` : "動いた(発話なし)"
   } finally {
@@ -670,7 +712,7 @@ async function runCycleHeld(token: CycleLeaseToken, leaseAbort: AbortController)
   }
 }
 
-export async function runCycle(): Promise<string> {
+export async function runCycle(dependencies: CycleDependencies = {}): Promise<string> {
   // dreamを含むcycle内の全モデル実行を、自走枠の検査と会計へ載せる。
   setLane("autonomous")
   let token: CycleLeaseToken
@@ -706,7 +748,7 @@ export async function runCycle(): Promise<string> {
   schedule()
 
   try {
-    const result = await runCycleHeld(token, leaseAbort)
+    const result = await runCycleHeld(token, leaseAbort, dependencies)
     if (heartbeatFailure) throw heartbeatFailure
     return result
   } finally {
@@ -747,4 +789,4 @@ const main = async (): Promise<void> => {
   }
 }
 
-await main()
+if (import.meta.main) await main()

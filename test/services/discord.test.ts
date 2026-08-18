@@ -43,6 +43,7 @@ interface Msg {
   content: string
   author: { id: string }
   reactions?: { emoji: { name: string | null }; count: number; me: boolean }[]
+  reactors?: Record<string, string[]>
   attachments?: { url: string; filename?: string; content_type?: string; size?: number }[]
 }
 
@@ -105,6 +106,18 @@ const fakeDiscord = async (
         return json({ id: from, name: body?.name })
       }
       if (path.includes("/reactions/") && ch) {
+        const [, reactionId, reactionEmoji] =
+          /\/messages\/(\d+)\/reactions\/([^/?]+)(?:\?|$)/.exec(path) ?? []
+        if (req.method === "GET" && reactionId) {
+          const name = decodeURIComponent(reactionEmoji ?? "")
+          const message = at(ch).find((x) => x.id === reactionId)
+          const users =
+            message?.reactors?.[name] ??
+            ((message?.reactions?.find((reaction) => reaction.emoji.name === name)?.count ?? 0) > 1
+              ? [OWNER]
+              : [])
+          return json(users.map((id) => ({ id })))
+        }
         // 自分で付けたリアクション。押す側から見ると数は 1 から始まる。
         const [, id, emoji] = /\/messages\/(\d+)\/reactions\/([^/]+)\/@me/.exec(path) ?? []
         const name = decodeURIComponent(emoji ?? "")
@@ -306,6 +319,49 @@ test("押されるまでは空。押されたら割り当てた文が返る", as
       assert.deepEqual(await h.run(pollInbound), [{ id: `${id}:🛑`, text: "やめて" }])
       // 二度は返らない。返ると同じ指示が cycle のたびに効き続ける。
       assert.deepEqual(await h.run(pollInbound), [])
+    })
+  })
+})
+
+test("owner以外のリアクションは判断として受け取らない", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, undefined, async () => {
+    await withHarness(async (h) => {
+      const id = await h.run(post({ text: "出していいか", taps: [{ emoji: "✅", reply: "出していい" }] }))
+      const message = dc.msgs.find((item) => item.id === id)
+      const reaction = message?.reactions?.[0]
+      assert.ok(message)
+      assert.ok(reaction)
+      reaction.count = 2
+      message.reactors = { "✅": ["999999999999999999"] }
+
+      assert.deepEqual(await h.run(pollInbound), [])
+      assert.ok(
+        dc.hits.some(
+          (hit) => hit.method === "GET" && decodeURIComponent(hit.path).includes(`/reactions/✅?limit=100`),
+        ),
+      )
+
+      message.reactors = { "✅": [OWNER] }
+      assert.deepEqual(await h.run(pollInbound), [{ id: `${id}:✅`, text: "出していい" }])
+    })
+  })
+})
+
+test("リアクション利用者の取得失敗は通常のowner入力を止めない", async () => {
+  const dc = await fakeDiscord([{ id: "500", content: "通常入力", author: { id: OWNER } }], (hit) =>
+    hit.method === "GET" && hit.path.includes("/reactions/") ? { status: 503 } : undefined,
+  )
+  await wired(dc, { talk: CH }, async () => {
+    await withHarness(async (h) => {
+      await h.run(Effect.flatMap(Db, (db) => db.setMeta(`discord:last:${CH}`, "499")))
+      const id = await h.run(post({ text: "出していいか", taps: [{ emoji: "✅", reply: "出していい" }] }))
+      const reaction = dc.msgs.find((item) => item.id === id)?.reactions?.[0]
+      assert.ok(reaction)
+      reaction.count = 2
+
+      assert.deepEqual(await h.run(pollInbound), [{ id: "500", text: "通常入力" }])
+      assert.ok(dc.hits.some((hit) => hit.method === "GET" && hit.path.includes("/reactions/")))
     })
   })
 })
@@ -1096,6 +1152,7 @@ test("enqueue は HTTP を使わず、同じ dedupe は同じ行、内容変更�
       const second = await h.run(Effect.flatMap(Discord, (d) => d.enqueue(input)))
       assert.equal(first?.id, second?.id)
       assert.equal(dc.hits.length, 0)
+      assert.equal(await h.run(Effect.flatMap(Discord, (d) => d.needsFlush())), true)
       const message = first?.actions.find((a) => a.kind === "message")
       assert.equal(message?.nonce?.length, 25)
       assert.deepEqual(message?.spec, {
@@ -1108,6 +1165,8 @@ test("enqueue は HTTP を使わず、同じ dedupe は同じ行、内容変更�
         Effect.flatMap(Discord, (d) => d.enqueue({ ...input, text: "変えた返事" })),
       )
       assert.equal((conflict as { _tag?: unknown })._tag, "Conflict")
+      await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      assert.equal(await h.run(Effect.flatMap(Discord, (d) => d.needsFlush())), false)
     })
   })
 })
@@ -1268,6 +1327,93 @@ test("受信GETの不正な200応答を空受信にせず失敗として返す",
   })
 })
 
+test("一般配送のバックログは受信GETより前に送らない", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, { talk: TALK }, async () => {
+    await withHarness(async (h) => {
+      const outbound = await h.run(
+        Effect.flatMap(Discord, (discord) =>
+          discord.enqueue({ purpose: "reply", dedupeKey: "inbound-before-backlog", text: "待機中" }),
+        ),
+      )
+      assert.ok(outbound)
+      await h.run(peek)
+
+      const inboundAt = dc.hits.findIndex((hit) => hit.method === "GET" && hit.path.includes("/messages?"))
+      const deliveryAt = dc.hits.findIndex((hit) => hit.method === "POST" && hit.path.endsWith("/messages"))
+      assert.ok(inboundAt >= 0)
+      assert.equal(deliveryAt, -1, "pollInbound が一般配送まで待っている")
+      assert.equal(
+        (await h.run(Effect.flatMap(Discord, (discord) => discord.getOutbound(outbound.id))))?.state,
+        "queued",
+      )
+
+      await h.run(Effect.flatMap(Discord, (discord) => discord.flushQueued()))
+      assert.equal(
+        (await h.run(Effect.flatMap(Discord, (discord) => discord.getOutbound(outbound.id))))?.state,
+        "sent",
+      )
+    })
+  })
+})
+
+test("ID指定の即時配送は既存バックログを巻き込まない", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, { talk: TALK }, async () => {
+    await withHarness(async (h) => {
+      const [backlog, immediate] = await h.run(
+        Effect.gen(function* () {
+          const discord = yield* Discord
+          return [
+            yield* discord.enqueue({ purpose: "reply", dedupeKey: "older-backlog", text: "古い待機" }),
+            yield* discord.enqueue({ purpose: "cycle-ack", dedupeKey: "immediate-only", text: "今の応答" }),
+          ] as const
+        }),
+      )
+      assert.ok(backlog)
+      assert.ok(immediate)
+
+      await h.run(Effect.flatMap(Discord, (discord) => discord.flushOutbound(immediate.id)))
+      assert.equal(
+        (await h.run(Effect.flatMap(Discord, (discord) => discord.getOutbound(backlog.id))))?.state,
+        "queued",
+      )
+      assert.equal(
+        (await h.run(Effect.flatMap(Discord, (discord) => discord.getOutbound(immediate.id))))?.state,
+        "sent",
+      )
+      assert.deepEqual(
+        dc.at(TALK).map((message) => message.content),
+        ["今の応答"],
+      )
+    })
+  })
+})
+
+test("DM未初期化時はDM cacheだけを先行し、一般配送は受信後まで残す", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, undefined, async () => {
+    await withHarness(async (h) => {
+      const outbound = await h.run(
+        Effect.flatMap(Discord, (discord) =>
+          discord.enqueue({ purpose: "reply", dedupeKey: "cold-dm-backlog", text: "待機中" }),
+        ),
+      )
+      assert.ok(outbound)
+      await h.run(peek)
+
+      assert.equal(dc.hits.filter((hit) => hit.path === "/users/@me/channels").length, 1)
+      assert.ok(dc.hits.some((hit) => hit.method === "GET" && hit.path.includes(`/channels/${CH}/messages?`)))
+      assert.equal(dc.hits.filter((hit) => hit.method === "POST" && hit.path.endsWith("/messages")).length, 0)
+      assert.equal(await h.run(Effect.flatMap(Db, (db) => db.meta("discord:dm"))), CH)
+      assert.equal(
+        (await h.run(Effect.flatMap(Discord, (discord) => discord.getOutbound(outbound.id))))?.state,
+        "queued",
+      )
+    })
+  })
+})
+
 test("削除済みcustom emojiのname=nullは受信障害にしない", async () => {
   const dc = await fakeDiscord([
     {
@@ -1314,6 +1460,43 @@ test("別workerが送信中のactionをreceiptなしでsentにしない", async 
       assert.equal(stillSending?.state, "sending")
       assert.equal(stillSending?.actions[0]?.state, "sending")
       assert.equal(dc.hits.length, 0)
+    })
+  })
+})
+
+test("添付HTTPの上限内にある送信中actionを中断扱いにしない", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, { talk: TALK }, async () => {
+    await withHarness(async (h) => {
+      const outbound = await h.run(
+        Effect.flatMap(Discord, (discord) =>
+          discord.enqueue({ purpose: "reply", dedupeKey: "active-upload", text: "本文" }),
+        ),
+      )
+      assert.ok(outbound)
+      const activeAt = new Date(Date.now() - 75_000).toISOString()
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.withImmediateTransaction("simulate active upload", (tx) => {
+            tx.run(
+              "UPDATE discord_outbound SET state='sending',updated_at=? WHERE id=?",
+              activeAt,
+              outbound.id,
+            )
+            tx.run(
+              "UPDATE discord_outbound_actions SET state='sending',updated_at=? WHERE outbound_id=?",
+              activeAt,
+              outbound.id,
+            )
+          }),
+        ),
+      )
+
+      await h.run(Effect.flatMap(Discord, (discord) => discord.flushQueued()))
+      const active = await h.run(Effect.flatMap(Discord, (discord) => discord.getOutbound(outbound.id)))
+      assert.equal(active?.state, "sending")
+      assert.equal(active?.actions[0]?.state, "sending")
+      assert.equal(await h.run(Effect.flatMap(Discord, (discord) => discord.needsFlush())), true)
     })
   })
 })
@@ -1612,6 +1795,12 @@ test("HTTP中に停止した古いactionはunknownで閉じて再送しない", 
         ),
       )
       assert.ok(outbound)
+      const fresh = await h.run(
+        Effect.flatMap(Discord, (d) =>
+          d.enqueue({ purpose: "reply", dedupeKey: "fresh-http", text: "別件" }),
+        ),
+      )
+      assert.ok(fresh)
       await h.run(
         Effect.flatMap(Db, (db) =>
           db.withImmediateTransaction("simulate interrupted HTTP", (tx) => {
@@ -1627,11 +1816,25 @@ test("HTTP中に停止した古いactionはunknownで閉じて再送しない", 
         ),
       )
 
-      await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
+      const freshFlushed = await h.run(Effect.flatMap(Discord, (d) => d.flushOutbound(fresh.id)))
+      assert.deepEqual(
+        freshFlushed.map((item) => [item.id, item.state]),
+        [[fresh.id, "sent"]],
+      )
+      assert.equal(
+        (await h.run(Effect.flatMap(Discord, (d) => d.getOutbound(outbound.id))))?.state,
+        "sending",
+      )
+
+      const flushed = await h.run(Effect.flatMap(Discord, (d) => d.flushQueued()))
       const done = await h.run(Effect.flatMap(Discord, (d) => d.getOutbound(outbound.id)))
+      assert.deepEqual(
+        flushed.map((item) => [item.id, item.state]),
+        [[outbound.id, "unknown"]],
+      )
       assert.equal(done?.state, "unknown")
       assert.equal(done?.actions[0]?.state, "unknown")
-      assert.equal(dc.hits.length, 0)
+      assert.equal(dc.hits.length, 1)
     })
   })
 })
