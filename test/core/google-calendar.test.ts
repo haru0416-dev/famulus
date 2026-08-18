@@ -116,7 +116,48 @@ test("描画は終日と時刻ありを言い分け、0件は「予定なし」"
   assert.match(text, /09:30\] \(無題\)$/m)
 })
 
-test("buildEventBody: 終日は排他 end、時刻ありは timeZone 付きで end 省略は1時間後", () => {
+test("list は nextPageToken が無くなるまで全ページを読む", async () => {
+  authed()
+  const urls: string[] = []
+  const events = await withFetch(
+    async (input: unknown) => {
+      const url = String(input)
+      urls.push(url)
+      const token = new URL(url).searchParams.get("pageToken")
+      return token === null
+        ? ok({
+            items: [
+              {
+                id: "e1",
+                summary: "1ページ目",
+                start: { date: "2026-08-19" },
+                end: { date: "2026-08-20" },
+              },
+            ],
+            nextPageToken: "page-2",
+          })
+        : ok({
+            items: [
+              {
+                id: "e2",
+                summary: "2ページ目",
+                start: { date: "2026-08-20" },
+                end: { date: "2026-08-21" },
+              },
+            ],
+          })
+    },
+    () => listCalendarEvents(7, NOW),
+  )
+  assert.deepEqual(
+    events.map((event) => event.id),
+    ["e1", "e2"],
+  )
+  assert.equal(urls.length, 2)
+  assert.equal(new URL(urls[1] as string).searchParams.get("pageToken"), "page-2")
+})
+
+test("buildEventBody: 終日は排他 end、帯なし日時の end 省略は同じ壁時計の1時間後", () => {
   assert.deepEqual(buildEventBody({ title: "終日", start: "2026-08-24" }, "Asia/Tokyo"), {
     summary: "終日",
     start: { date: "2026-08-24" },
@@ -130,6 +171,9 @@ test("buildEventBody: 終日は排他 end、時刻ありは timeZone 付きで e
   const timed = buildEventBody({ title: "病院", start: "2026-08-24T10:00:00+09:00" }, "Asia/Tokyo")
   assert.deepEqual(timed.start, { dateTime: "2026-08-24T10:00:00+09:00", timeZone: "Asia/Tokyo" })
   assert.deepEqual(timed.end, { dateTime: "2026-08-24T02:00:00.000Z", timeZone: "Asia/Tokyo" })
+  const local = buildEventBody({ title: "病院", start: "2026-08-24T10:00:00" }, "Asia/Tokyo")
+  assert.deepEqual(local.start, { dateTime: "2026-08-24T10:00:00", timeZone: "Asia/Tokyo" })
+  assert.deepEqual(local.end, { dateTime: "2026-08-24T11:00:00", timeZone: "Asia/Tokyo" })
 })
 
 test("insert は本文を POST し、応答の予定を link 付きで返す", async () => {

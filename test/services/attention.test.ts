@@ -540,7 +540,9 @@ test("期限が近い承認待ちは実行条件になる", async () => {
     await h.run(
       Effect.gen(function* () {
         const proposals = yield* Proposals
-        yield* proposals.recordPendingConclusion("p1", "承認はユーザーしか出せない。こちらからは進まない。")
+        yield* proposals.recordPendingConclusion("p1", "承認はユーザーしか出せない。こちらからは進まない。", {
+          at: new Date(T0 + hours(4)).toISOString(),
+        })
       }),
     )
     const after = await h.run(planAt(T0 + hours(8)))

@@ -174,3 +174,40 @@ test("期限切れは list の前に expired へ落ちる(承認待ちが実態�
     assert.equal(out.status, "expired")
   })
 })
+
+test("listを通さなくても期限到達後のapproveとdenyは拒否し、expiredを記録する", async () => {
+  await withHarness(async (h) => {
+    const expiresAt = "2026-08-02T00:00:00Z"
+    const ids = await h.run(
+      Effect.gen(function* () {
+        const p = yield* Proposals
+        return [
+          yield* p.create(draft({ at: "2026-08-01T00:00:00Z", pendingDays: 1 })),
+          yield* p.create(draft({ at: "2026-08-01T00:00:00Z", pendingDays: 1 })),
+        ] as const
+      }),
+    )
+
+    const approved = await h.fail(Effect.flatMap(Proposals, (p) => p.approve(ids[0], { at: expiresAt })))
+    const denied = await h.fail(Effect.flatMap(Proposals, (p) => p.deny(ids[1], "不要", { at: expiresAt })))
+    assert.equal((approved as { _tag: string })._tag, "Conflict")
+    assert.equal((denied as { _tag: string })._tag, "Conflict")
+
+    const rows = await h.run(
+      Effect.flatMap(Db, (db) =>
+        db.all(
+          `SELECT p.id,p.status,a.action FROM proposals p
+             LEFT JOIN proposal_actions a ON a.proposal_id=p.id
+            ORDER BY p.id`,
+        ),
+      ),
+    )
+    assert.deepEqual(
+      rows.map((row) => ({ status: row.status, action: row.action })),
+      [
+        { status: "expired", action: "expire" },
+        { status: "expired", action: "expire" },
+      ],
+    )
+  })
+})

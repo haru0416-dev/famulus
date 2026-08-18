@@ -150,21 +150,11 @@ const makeProposals = () =>
         return id
       })
 
-    /**
-     * id 前方一致で1件引く。CLI で 36 文字の UUID を打たせないため。
-     * 複数に当たったら選ばずに失敗させる — 曖昧なまま承認を通すのが一番まずい。
-     */
-    const get = (idOrPrefix: string) =>
-      Effect.gen(function* () {
-        const resolved = resolveProposal(yield* db.all(FIND_PROPOSAL, idOrPrefix, idOrPrefix), idOrPrefix)
-        return resolved.found ? resolved.value : yield* Effect.fail(resolved.error)
-      })
-
-    /** 期限切れを expired に落とす。承認待ちの一覧が実態とずれないよう list の前に呼ぶ。 */
+    /** 期限切れを expired に落とす。読み取り・判断のどの入口から来ても先に呼ぶ。 */
     const expireDue = (at: string = nowIso()) =>
       db.withImmediateTransaction("expire proposals", (tx) => {
         const due = tx.all(
-          "SELECT id, created_at FROM proposals WHERE status='proposed' AND expires_at < ?",
+          "SELECT id, created_at FROM proposals WHERE status='proposed' AND expires_at <= ?",
           at,
         )
         for (const p of due) {
@@ -178,7 +168,18 @@ const makeProposals = () =>
             Math.max(0, Date.parse(at) - Date.parse(String(p.created_at))),
           )
         }
-        tx.run("UPDATE proposals SET status='expired' WHERE status='proposed' AND expires_at < ?", at)
+        tx.run("UPDATE proposals SET status='expired' WHERE status='proposed' AND expires_at <= ?", at)
+      })
+
+    /**
+     * id 前方一致で1件引く。CLI で 36 文字の UUID を打たせないため。
+     * 複数に当たったら選ばずに失敗させる — 曖昧なまま承認を通すのが一番まずい。
+     */
+    const get = (idOrPrefix: string, at: string = nowIso()) =>
+      Effect.gen(function* () {
+        yield* expireDue(at)
+        const resolved = resolveProposal(yield* db.all(FIND_PROPOSAL, idOrPrefix, idOrPrefix), idOrPrefix)
+        return resolved.found ? resolved.value : yield* Effect.fail(resolved.error)
       })
 
     const list = (status: ProposalStatus | "all" = "proposed", limit = 20) =>
@@ -202,6 +203,7 @@ const makeProposals = () =>
     const approve = (idOrPrefix: string, opts?: { approverRef?: string; at?: string }) =>
       Effect.gen(function* () {
         const at = opts?.at ?? nowIso()
+        yield* expireDue(at)
         return yield* db.withImmediateTransaction<
           { readonly id: string; readonly payloadHash: string; readonly at: string },
           NotFound | Conflict
@@ -232,6 +234,7 @@ const makeProposals = () =>
     const deny = (idOrPrefix: string, reason: string, opts?: { at?: string }) =>
       Effect.gen(function* () {
         const at = opts?.at ?? nowIso()
+        yield* expireDue(at)
         return yield* db.withImmediateTransaction<
           { readonly id: string; readonly at: string },
           NotFound | Conflict
@@ -269,8 +272,8 @@ const makeProposals = () =>
      */
     const recordPendingConclusion = (idOrPrefix: string, note: string, opts?: { at?: string }) =>
       Effect.gen(function* () {
-        const p = yield* get(idOrPrefix)
         const at = opts?.at ?? nowIso()
+        const p = yield* get(idOrPrefix, at)
         yield* db.run("UPDATE proposals SET settled_at = ?, settled_note = ?WHERE id = ?", at, note, p.id)
         return { ...p, settled_at: at, settled_note: note } satisfies ProposalRow
       })
