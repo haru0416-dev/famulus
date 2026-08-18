@@ -102,7 +102,7 @@ interface RunClaimState {
 
 const RUN_CLAIMS_KEY = "governance:run-claims"
 
-const parseRunClaims = (raw: string | undefined, currentDay: string): RunClaimState | undefined => {
+const parseRunClaims = (raw: string | undefined, currentDay?: string): RunClaimState | undefined => {
   if (raw === undefined) return undefined
   const value = JSON.parse(raw) as Partial<RunClaimState>
   if (
@@ -116,7 +116,9 @@ const parseRunClaims = (raw: string | undefined, currentDay: string): RunClaimSt
   ) {
     throw new Error("run claim state is invalid")
   }
-  if (value.day > currentDay) throw new Error(`run claim state is from the future: ${value.day}`)
+  if (currentDay !== undefined && value.day > currentDay) {
+    throw new Error(`run claim state is from the future: ${value.day}`)
+  }
   return value as RunClaimState
 }
 
@@ -287,6 +289,39 @@ const makeGovernance = () =>
         return at
       })
 
+    /** providerへ到達する前のローカル拒否だけ、直前に確保した日次枠を返す。 */
+    const releaseRunClaim = (opts: { readonly at: string; readonly lane?: Lane }) =>
+      db.withImmediateTransaction("release daily model run", (tx) => {
+        const day = localDayRange(opts.at)
+        const raw = tx.get("SELECT value FROM schema_meta WHERE key=?", RUN_CLAIMS_KEY)?.value
+        const stored = parseRunClaims(typeof raw === "string" ? raw : undefined)
+        if (!stored || stored.day !== day.key) return
+        const rows = tx.get(
+          `SELECT COUNT(*) total,
+                  SUM(CASE WHEN role=? THEN 1 ELSE 0 END) autonomous
+             FROM ledger WHERE role IS NOT NULL AND at>=? AND at<?`,
+          AUTONOMOUS_ROLE,
+          day.startIso,
+          day.endIso,
+        )
+        const ledgerTotal = Number(rows?.total ?? 0)
+        const ledgerAutonomous = Number(rows?.autonomous ?? 0)
+        const autonomous = Math.max(
+          ledgerAutonomous,
+          stored.autonomous - (opts.lane === "autonomous" ? 1 : 0),
+        )
+        const total = Math.max(ledgerTotal, autonomous, stored.total - 1)
+        if (total === 0) {
+          tx.run("DELETE FROM schema_meta WHERE key=?", RUN_CLAIMS_KEY)
+          return
+        }
+        tx.run(
+          "INSERT OR REPLACE INTO schema_meta(key,value) VALUES (?,?)",
+          RUN_CLAIMS_KEY,
+          JSON.stringify({ version: 1, day: day.key, total, autonomous } satisfies RunClaimState),
+        )
+      })
+
     return {
       readHalt,
       writeHalt,
@@ -295,6 +330,7 @@ const makeGovernance = () =>
       noteQuota,
       precheck,
       claimRun,
+      releaseRunClaim,
     } as const
   })
 

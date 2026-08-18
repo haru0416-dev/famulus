@@ -159,22 +159,33 @@ const makeRunner = (
           : undefined
         let out: Omit<RunnerResult, "model">
         let attempt: ModelAttemptToken | undefined
+        let replayed: Omit<RunnerResult, "model"> | undefined
         if (replay) {
           const stored = replay as Partial<RunnerResult>
-          if (stored.model !== p.model || typeof stored.text !== "string" || !stored.usage)
-            return yield* Effect.fail(new RunnerFailed({ pool: p.pool, message: "保存済みmodel応答が不正" }))
-          out = {
-            text: stored.text,
-            ...(stored.structured !== undefined ? { structured: stored.structured } : {}),
-            usage: stored.usage,
-            ...(stored.quota ? { quota: stored.quota } : {}),
+          if (stored.model === p.model && typeof stored.text === "string" && stored.usage) {
+            const candidate = {
+              text: stored.text,
+              ...(stored.structured !== undefined ? { structured: stored.structured } : {}),
+              usage: stored.usage,
+              ...(stored.quota ? { quota: stored.quota } : {}),
+            }
+            const replayChecked = req.schema?.validate(candidate.structured)
+            if (!replayChecked || replayChecked.success) replayed = candidate
           }
+          if (!replayed && req.execution) yield* kernel.invalidateModelResult(req.execution, requestDigest)
+        }
+        if (replayed) {
+          out = replayed
         } else {
           // ゲート。失敗チャネルに拒否が載るので、ここを通らずに下へは行けない。
           yield* gov.precheck({ pool: p.pool, at, nowMs: Date.now(), lane })
           at = yield* gov.claimRun({ lane })
 
-          attempt = req.execution ? yield* kernel.startModelAttempt(req.execution, requestDigest) : undefined
+          attempt = req.execution
+            ? yield* kernel
+                .startModelAttempt(req.execution, requestDigest)
+                .pipe(Effect.tapError(() => gov.releaseRunClaim({ at, lane })))
+            : undefined
           out = yield* exec(req, p).pipe(
             // 失敗でもクォータシグナルが取れていれば必ず再実行を抑止する。
             // 抑止しないとリセット前のクォータへ毎 run 再試行する。

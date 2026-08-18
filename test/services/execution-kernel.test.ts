@@ -260,6 +260,108 @@ test("schema不適合の応答はfailedにして、同じrequestの再試行をp
   )
 })
 
+test("旧DBでsucceeded保存されたschema不適合応答を無効化してproviderへ再送する", () => {
+  const schema = rs(v.object({ ok: v.boolean() }))
+  return withHarness(
+    async (h) => {
+      const context = await h.run(
+        Effect.flatMap(ExecutionKernel, (kernel) =>
+          kernel.openSingleLoop({
+            owner: { kind: "test", id: "legacy-schema-replay" },
+            stableSlot: "worker",
+            role: "structurer",
+            profile: profileRefForModel("grok-4.3"),
+            resultContract: resultContractRef("legacy-schema-replay-v1", schema),
+            taskInput: {},
+            deadlineAtMs: Date.now() + 45_000,
+            budget: { modelCalls: 2, toolCalls: 0, tokens: 2000, costMicrousd: 200_000 },
+            modelTokenAllowance: 1000,
+            modelCostAllowanceMicrousd: 100_000,
+          }),
+        ),
+      )
+      const run = Effect.flatMap(Runner, (runner) =>
+        runner.run({
+          role: "structurer",
+          kind: "legacy-schema-replay",
+          prompt: "x",
+          schema,
+          execution: context,
+        }),
+      )
+      await h.run(run)
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          Effect.gen(function* () {
+            const row = yield* db.get("SELECT id,response_json FROM model_attempts WHERE state='succeeded'")
+            const response = JSON.parse(String(row?.response_json)) as Record<string, unknown>
+            yield* db.run(
+              "UPDATE model_attempts SET response_json=? WHERE id=?",
+              JSON.stringify({ ...response, structured: { ok: "yes" } }),
+              row?.id,
+            )
+          }),
+        ),
+      )
+
+      const retried = await h.run(run)
+      assert.deepEqual(retried.structured, { ok: true })
+      assert.equal(h.calls.length, 2)
+      assert.deepEqual(
+        await h.run(
+          Effect.flatMap(Db, (db) =>
+            db.all("SELECT attempt_ordinal,state FROM model_attempts ORDER BY attempt_ordinal"),
+          ),
+        ),
+        [
+          { attempt_ordinal: 1, state: "failed" },
+          { attempt_ordinal: 2, state: "succeeded" },
+        ],
+      )
+    },
+    [
+      { text: "", structured: { ok: true } },
+      { text: "", structured: { ok: true } },
+    ],
+  )
+})
+
+test("provider前にkernelが拒否した呼び出しは日次run claimを残さない", () =>
+  withHarness(
+    async (h) => {
+      const context = await h.run(
+        Effect.flatMap(ExecutionKernel, (kernel) =>
+          kernel.openSingleLoop({
+            owner: { kind: "test", id: "expired-before-provider" },
+            stableSlot: "worker",
+            role: "structurer",
+            profile: profileRefForModel("grok-4.3"),
+            resultContract: resultContractRef("expired-before-provider-v1", KEEPER_SCHEMA),
+            taskInput: {},
+            deadlineAtMs: Date.now() - 1,
+            budget: { modelCalls: 1, toolCalls: 0, tokens: 1000, costMicrousd: 100_000 },
+            modelTokenAllowance: 1000,
+            modelCostAllowanceMicrousd: 100_000,
+          }),
+        ),
+      )
+      await h.fail(
+        Effect.flatMap(Runner, (runner) =>
+          runner.run({
+            role: "structurer",
+            kind: "expired-before-provider",
+            prompt: "x",
+            execution: context,
+          }),
+        ),
+      )
+      assert.equal(h.calls.length, 0)
+      const claim = await h.run(Effect.flatMap(Db, (db) => db.meta("governance:run-claims")))
+      assert.ok(claim === undefined || Number((JSON.parse(claim) as { total?: number }).total ?? 0) === 0)
+    },
+    [{ text: "never" }],
+  ))
+
 test("予約超過でも実使用量を保存してattemptを終端化する", () =>
   withHarness(
     async (h) => {

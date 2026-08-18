@@ -565,6 +565,25 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
         )
       })
 
+    /** 旧版が succeeded 保存した契約不適合responseをreplay対象から外す。利用量とledgerは消さない。 */
+    const invalidateModelResult = (context: KernelLoopContext, requestDigest: string) =>
+      db.withImmediateTransaction("invalidate model result", (tx) => {
+        assertCurrent(tx, context, false)
+        const row = tx.get(
+          `SELECT m.id FROM model_attempts m JOIN loop_attempts a ON a.id=m.loop_attempt_id
+            WHERE a.loop_id=? AND m.state='succeeded' AND m.profile_digest=? AND m.request_digest=?
+            ORDER BY a.ordinal DESC,m.step_ordinal DESC,m.attempt_ordinal DESC LIMIT 1`,
+          context.loopId,
+          context.profile.digest,
+          requestDigest,
+        )
+        if (!row) return
+        tx.run(
+          "UPDATE model_attempts SET state='failed',response_json=NULL WHERE id=? AND state='succeeded'",
+          row.id,
+        )
+      })
+
     const replayModelResult = (context: KernelLoopContext, requestDigest: string) =>
       db.withImmediateTransaction("replay model result", (tx) => {
         assertCurrent(tx, context, false)
@@ -580,7 +599,14 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
         return row?.response_json ? JSON.parse(row.response_json as string) : undefined
       })
 
-    return { openSingleLoop, startModelAttempt, finishModelAttempt, finishLoop, replayModelResult } as const
+    return {
+      openSingleLoop,
+      startModelAttempt,
+      finishModelAttempt,
+      finishLoop,
+      invalidateModelResult,
+      replayModelResult,
+    } as const
   })
 
 export class ExecutionKernel extends Context.Service<
