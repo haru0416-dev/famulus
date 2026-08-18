@@ -6,9 +6,8 @@
  * 表は「これは道具ではない」と人が言い切った語だけを置く場所で、
  * 増えるときは1件ずつ判断が要る。拾いすぎるより、通す条件を人手で書かせるほうを取っている。
  *
- * 道具の出所は1つになった。前は枠(フレームワーク)が最初から載せるものがあり、
- * それを数え落として実在する道具を幻だと判定したことがある。
- * いまは `buildTools()` が返す表と、子に渡す表がすべてなので、両方を同じ正規表現で拾う。
+ * 道具名は `PARENT_AUTHORITY` を正本にし、親・委譲先の登録との一致は型検査で強制する。
+ * このテストはプロンプト上の名前がその閉じた集合に収まることだけを見る。
  */
 
 import assert from "node:assert/strict"
@@ -17,15 +16,20 @@ import { join } from "node:path"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import {
+  BELIEF_TOOL_DESCRIPTION,
   beliefMissMessage,
   calendarWriteAuthorized,
   gateTools,
+  REMEMBER_TOOL_DESCRIPTION,
+  readBelief,
+  rememberObservation,
   replyStepText,
   untrustedToolOutput,
 } from "../../src/agent/assistant.ts"
 import { readSoul } from "../../src/agent/soul.ts"
 import { PROJECT_ROOT } from "../../src/core/config.ts"
-import { registeredTools, withHarness } from "../helpers.ts"
+import { PARENT_AUTHORITY } from "../../src/model/profiles.ts"
+import { withHarness } from "../helpers.ts"
 
 const read = (rel: string): string => readFileSync(join(PROJECT_ROOT, rel), "utf8")
 
@@ -65,7 +69,7 @@ const NOT_TOOLS = new Set([
 ])
 
 test("プロンプトが名指す道具は全部登録されている", () => {
-  const tools = registeredTools()
+  const tools = new Set<string>(PARENT_AUTHORITY)
   const missing: string[] = []
   for (const file of PROMPTS) {
     for (const m of read(file).matchAll(/`([a-z][a-z0-9_]*)`/g)) {
@@ -90,39 +94,43 @@ test("SOUL は確定日や改訂日をモデルへ渡さない", () => {
 })
 
 test("免除表に道具の名前を入れて検査を素通しさせていない", () => {
-  const tools = registeredTools()
+  const tools = new Set<string>(PARENT_AUTHORITY)
   for (const word of NOT_TOOLS) {
     assert.ok(!tools.has(word), `${word} は実在する道具なので免除表に要らない`)
   }
 })
 
-test("親 Agent の remember は確定値を直接書かない", () => {
-  const src = read("src/agent/assistant.ts")
-  const start = src.indexOf("remember: tool({")
-  const end = src.indexOf("recall: recallTool(state)", start)
-  assert.ok(start >= 0 && end > start, "remember/recall の登録が見つからない — 切り出しの目印が変わった")
-  const remember = src.slice(start, end)
-  assert.ok(remember.length > 0, "remember の本文が切り出せていない")
-  assert.doesNotMatch(remember, /mem\.recordBelief|\bslot\b/, "確定値は引用照合を通す keeper だけが書く")
+test("親 Agent の remember は観測だけを追記し、確定値を直接書かない", async () => {
+  assert.match(REMEMBER_TOOL_DESCRIPTION, /確定値を作る道具ではない/)
+  await withHarness(async (h) => {
+    const result = await h.run(rememberObservation("調査中の仮説"))
+    const { Db } = await import("../../src/services/Db.ts")
+    const counts = await h.run(
+      Effect.flatMap(Db, (db) => db.get("SELECT count(*) AS n FROM events WHERE kind = 'belief'")),
+    )
+    assert.match(result, /^記録した\(event /)
+    assert.equal(counts?.n, 0)
+  })
 })
 
-test("belief は読み専用を明言し、外れたら既存の slot を見せる", () => {
-  const src = read("src/agent/assistant.ts")
-  const start = src.indexOf("belief: tool({")
-  const end = src.indexOf("propose: tool({", start)
-  assert.ok(start >= 0 && end > start, "belief の登録が見つからない — 切り出しの目印が変わった")
-  const belief = src.slice(start, end)
+test("belief は読み専用で、外れたら既存の slot を見せる", async () => {
   // 読み手が keeper を知らないと「書けない」が戸惑いとして記録される
-  assert.match(belief, /keeper/, "確定の経路(keeper)を説明していない")
-  assert.match(belief, /読み専用/)
-  // slot 名は推測で引かれる。外れを「無い」で終えると別名の slot が生まれる
-  assert.match(belief, /currentBeliefs/, "外れたときに実在の slot を見せていない")
-  assert.doesNotMatch(belief, /recordBelief/, "確定値は引用照合を通す keeper だけが書く")
+  assert.match(BELIEF_TOOL_DESCRIPTION, /keeper/, "確定の経路(keeper)を説明していない")
+  assert.match(BELIEF_TOOL_DESCRIPTION, /読み専用/)
 
+  // slot 名は推測で引かれる。外れを「無い」で終えると別名の slot が生まれる
   const listed = beliefMissMessage("dentist.next_appt", [{ slot: "hospital.appointment" }])
   assert.match(listed, /'dentist\.next_appt' は確定していない/)
   assert.match(listed, /hospital\.appointment/)
   assert.match(beliefMissMessage("a.b", []), /まだ1件も無い/)
+
+  await withHarness(async (h) => {
+    const { Db } = await import("../../src/services/Db.ts")
+    const before = await h.run(Effect.flatMap(Db, (db) => db.get("SELECT count(*) AS n FROM events")))
+    assert.match(await h.run(readBelief("missing.slot")), /確定していない/)
+    const after = await h.run(Effect.flatMap(Db, (db) => db.get("SELECT count(*) AS n FROM events")))
+    assert.equal(after?.n, before?.n)
+  })
 })
 
 test("ユーザーが話す入口はどちらも keeper を通す", () => {

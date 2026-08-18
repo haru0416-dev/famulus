@@ -5,8 +5,8 @@
  * `AGENT_PROFILES` の Record が型で落ちる — 登録漏れのまま経路だけ増える形を塞ぐ。
  *
  * ここに置くのは「その主体が何のループで、どのモデル系で、どの道具を見るか」の宣言だけ。
- * 授権はここからは出ない — 道具の実体と統治は今までどおり実装側にある(宣言と実体の一致は
- * test/profiles.test.ts が assistant のソースと突き合わせて確かめる)。
+ * 授権はここからは出ない — 道具の実体と統治は今までどおり実装側にある。
+ * 親道具の宣言と実体の一致は `buildTools()` の型検査で強制する。
  */
 import { appConfig } from "../core/config.ts"
 import { digestOf, type GenerationRef } from "./kernel-spec.ts"
@@ -39,8 +39,8 @@ export interface AgentProfile {
   readonly tools: readonly string[]
 }
 
-/** 親(道具ループ)の道具全数。assistant の登録と一致することをテストが強制する。 */
-export const PARENT_TOOLS: readonly string[] = [
+/** 親(道具ループ)の道具全数。assistant の登録キーはこの型に一致しなければならない。 */
+export const PARENT_TOOLS = [
   "recall",
   "researcher",
   "digger",
@@ -70,13 +70,18 @@ export const PARENT_TOOLS: readonly string[] = [
   "gmail_read",
   "budget",
   "confusion",
-]
+] as const
+
+export type ParentToolName = (typeof PARENT_TOOLS)[number]
+
+export const DELEGATED_TOOLS = ["search", "fetch"] as const
+export type DelegatedToolName = (typeof DELEGATED_TOOLS)[number]
 
 /**
  * 親の authority の上限。親のモデルに見える道具(PARENT_TOOLS)に加え、委譲先の中でだけ
  * 見える道具(search / fetch)を含む — 委譲の scope 交差はこの集合を親側の tools として使う。
  */
-export const PARENT_AUTHORITY: readonly string[] = [...PARENT_TOOLS, "search", "fetch"]
+export const PARENT_AUTHORITY: readonly string[] = [...PARENT_TOOLS, ...DELEGATED_TOOLS]
 
 export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   "interactive-parent": {
@@ -95,7 +100,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     id: "researcher",
     loopRole: "worker",
     model: () => appConfig().models.research,
-    tools: ["search", "fetch"],
+    tools: DELEGATED_TOOLS,
   },
   digger: {
     id: "digger",
@@ -107,7 +112,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     id: "explore-branch",
     loopRole: "worker",
     model: () => appConfig().models.research,
-    tools: ["search", "fetch"],
+    tools: DELEGATED_TOOLS,
   },
   // x_search はモデル呼び出しにローカル道具を渡さない(サーバ側 x_search はモデル注入ではなく
   // 独立呼び出しの隔離 — src/model/x-search.ts の逸脱記録)。

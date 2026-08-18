@@ -91,13 +91,13 @@ function tokenize(input: string): string[] {
     sawContent = false
   }
   while (i < input.length) {
-    const ch = input[i]!
+    const ch = input.charAt(i)
     if (ch === "'" || ch === '"') {
       const quote = ch
       i++
       sawContent = true // 空引用でも語の一部として扱う(r''m 対策)
       while (i < input.length && input[i] !== quote) {
-        cur += input[i]
+        cur += input.charAt(i)
         i++
       }
       i++ // 閉じ引用をスキップ
@@ -106,7 +106,7 @@ function tokenize(input: string): string[] {
     if (ch === "\\") {
       // エスケープ: 次の1文字をリテラル結合
       if (i + 1 < input.length) {
-        cur += input[i + 1]
+        cur += input.charAt(i + 1)
         sawContent = true
         i += 2
         continue
@@ -292,8 +292,7 @@ function commandHeads(tokens: string[]): string[] {
   const WRAPPERS = new Set(["env", "nohup", "nice", "time", "xargs", "timeout", "stdbuf"])
   const heads: string[] = []
   let expectHead = true
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i]!
+  for (const tok of tokens) {
     if (tok === "|" || tok === "&" || tok === ";") {
       expectHead = true
       continue

@@ -30,7 +30,13 @@ import { listWorkspaces, noteWorkspace, purposeOf, renderWorkspaces } from "../c
 import { governedModel } from "../model/governed.ts"
 import { digestOf, profileRefForModel, resultContractRef } from "../model/kernel-spec.ts"
 import { XAI_POOL } from "../model/models.ts"
-import { AGENT_PROFILES, type AgentProfileId, PARENT_AUTHORITY } from "../model/profiles.ts"
+import {
+  AGENT_PROFILES,
+  type AgentProfileId,
+  type DelegatedToolName,
+  PARENT_AUTHORITY,
+  type ParentToolName,
+} from "../model/profiles.ts"
 import { Runner } from "../model/Runner.ts"
 import { rs, vs } from "../model/schema.ts"
 import { intersectScope } from "../model/scope.ts"
@@ -511,6 +517,43 @@ export const beliefMissMessage = (slot: string, slots: readonly { readonly slot:
     ? `'${slot}' は確定していない(確定値はまだ1件も無い)`
     : [`'${slot}' は確定していない。既存の slot:`, ...slots.map((s) => `  ${s.slot}`)].join("\n")
 
+export const REMEMBER_TOOL_DESCRIPTION =
+  "調査結果や判断過程をシステム記録として DB に1件追記する。追記のみで、後から書き換えも削除もできない" +
+  "(訂正は新しい追記で行う)。ユーザーについての確定値を作る道具ではない。"
+
+export const BELIEF_TOOL_DESCRIPTION =
+  "確定事実(belief)の**現在値と履歴**を見る。住まい・仕事・進行中の案件のように変わる事柄は、" +
+  "検索ではなくここで確かめる(検索は古い値も同じ強さで当てるので、今かどうかが分からない)。" +
+  "**読み専用。**ユーザーが明言した事実は、この回が終わるときに keeper(締めの後処理)が発言から" +
+  "引用照合つきで確定値に上げる — その場で保存する道具は無いが、放っておいて失われはしない。"
+
+export const rememberObservation = (content: string) =>
+  Effect.gen(function* () {
+    const mem = yield* Memory
+    // この道具の書き手はモデル自身なので source は system。
+    // owner は Discord / Intake から取り込んだユーザー発言に限る。
+    const id = yield* mem.remember({ kind: "observe", source: "system", taint: true, content })
+    return `記録した(event ${id})`
+  })
+
+export const readBelief = (slot: string, asOf?: string) =>
+  Effect.gen(function* () {
+    const mem = yield* Memory
+    const now = asOf ? yield* mem.beliefAsOf(slot, asOf) : yield* mem.currentBelief(slot)
+    if (!now) return beliefMissMessage(slot, yield* mem.currentBeliefs(40))
+    const hist = yield* mem.beliefHistory(slot)
+    // 期間もユーザーの時計で見せる。recall と同じ帯にしないと、同じ出来事が別の日に見える。
+    const span = (from: string, until: string | null) =>
+      `${localStamp(from)} 〜 ${until === null ? "いまも" : localStamp(until)}`
+    const head = `${slot} = ${JSON.stringify(now.value)}(${span(now.validFrom, now.validUntil)})`
+    if (hist.length <= 1) return head
+    return [
+      head,
+      "変遷:",
+      ...hist.map((h) => `  ${span(h.validFrom, h.validUntil)}  ${JSON.stringify(h.value)}`),
+    ].join("\n")
+  })
+
 /** stats 道具の集計。コード固定の SQL だけ — 道具の入力が SQL に混ざる経路を作らない。 */
 export const STATS_QUERIES: Record<
   "runs" | "watch_runs" | "dossiers" | "drafts" | "events",
@@ -670,7 +713,13 @@ function buildTools(state: TurnState, gate: ToolGate) {
                   reasoningEffort: researchEffort(),
                 }),
                 makeTools: (collector) =>
-                  gateTools({ search: searchTool(), fetch: fetchTool(collector) }, gate),
+                  gateTools(
+                    {
+                      search: searchTool(),
+                      fetch: fetchTool(collector),
+                    } satisfies Record<DelegatedToolName, unknown>,
+                    gate,
+                  ),
                 maxSteps: 6,
                 ...(abortSignal ? { signal: abortSignal } : {}),
               },
@@ -740,7 +789,13 @@ function buildTools(state: TurnState, gate: ToolGate) {
               // 調査が浅くなるうえ遅い(実測は config の researchEffort の注記)。
               model: governedModel(researchModel(), { reasoningEffort: researchEffort() }),
               instructions: `${RESEARCHER}${overlay}`,
-              tools: gateTools({ search: searchTool(), fetch: fetchTool(fetched) }, gate),
+              tools: gateTools(
+                {
+                  search: searchTool(),
+                  fetch: fetchTool(fetched),
+                } satisfies Record<DelegatedToolName, unknown>,
+                gate,
+              ),
               output: Output.object({
                 schema: vs(RESEARCH_OBJECT),
                 name: "research_dossier",
@@ -859,24 +914,13 @@ function buildTools(state: TurnState, gate: ToolGate) {
 
     // ── 記録。エージェントが DB へ保存し、後のターンで検索する。
     remember: tool({
-      description:
-        "調査結果や判断過程をシステム記録として DB に1件追記する。追記のみで、後から書き換えも削除もできない" +
-        "(訂正は新しい追記で行う)。ユーザーについての確定値を作る道具ではない。",
+      description: REMEMBER_TOOL_DESCRIPTION,
       inputSchema: vs(
         v.object({
           content: v.pipe(v.string(), v.description("覚える内容。一文で。")),
         }),
       ),
-      execute: async ({ content }) =>
-        run(
-          Effect.gen(function* () {
-            const mem = yield* Memory
-            // この道具の書き手はモデル自身なので source は system。
-            // owner は Discord / Intake から取り込んだユーザー発言に限る。
-            const id = yield* mem.remember({ kind: "observe", source: "system", taint: true, content })
-            return `記録した(event ${id})`
-          }),
-        ),
+      execute: async ({ content }) => run(rememberObservation(content)),
     }),
 
     recall: recallTool(state),
@@ -997,11 +1041,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
 
     belief: tool({
       // 状態を表す事実は、検索ではなくここから引かせる。検索は古い値も同じ強さで当ててしまう。
-      description:
-        "確定事実(belief)の**現在値と履歴**を見る。住まい・仕事・進行中の案件のように変わる事柄は、" +
-        "検索ではなくここで確かめる(検索は古い値も同じ強さで当てるので、今かどうかが分からない)。" +
-        "**読み専用。**ユーザーが明言した事実は、この回が終わるときに keeper(締めの後処理)が発言から" +
-        "引用照合つきで確定値に上げる — その場で保存する道具は無いが、放っておいて失われはしない。",
+      description: BELIEF_TOOL_DESCRIPTION,
       inputSchema: vs(
         v.object({
           slot: v.pipe(
@@ -1013,25 +1053,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
           ),
         }),
       ),
-      execute: async ({ slot, asOf }) =>
-        run(
-          Effect.gen(function* () {
-            const mem = yield* Memory
-            const now = asOf ? yield* mem.beliefAsOf(slot, asOf) : yield* mem.currentBelief(slot)
-            if (!now) return beliefMissMessage(slot, yield* mem.currentBeliefs(40))
-            const hist = yield* mem.beliefHistory(slot)
-            // 期間もユーザーの時計で見せる。recall と同じ帯にしないと、同じ出来事が別の日に見える。
-            const span = (from: string, until: string | null) =>
-              `${localStamp(from)} 〜 ${until === null ? "いまも" : localStamp(until)}`
-            const head = `${slot} = ${JSON.stringify(now.value)}(${span(now.validFrom, now.validUntil)})`
-            if (hist.length <= 1) return head
-            return [
-              head,
-              "変遷:",
-              ...hist.map((h) => `  ${span(h.validFrom, h.validUntil)}  ${JSON.stringify(h.value)}`),
-            ].join("\n")
-          }),
-        ),
+      execute: async ({ slot, asOf }) => run(readBelief(slot, asOf)),
     }),
 
     // ── 実行を伴うものは提案止まり。エージェント自身は実行しない。
@@ -1810,7 +1832,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
           }),
         ),
     }),
-  }
+  } satisfies Record<ParentToolName, unknown>
   return gateTools(tools, gate)
 }
 

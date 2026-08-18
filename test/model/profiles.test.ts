@@ -1,8 +1,7 @@
 /**
  * 実行主体の全数登録と scope 交差の検査。
  *
- * - 登録(宣言)と assistant の実体が食い違ったら落ちる — 宣言だけ増える形も、
- *   経路だけ増える形も、ここで見える。
+ * - 登録(宣言)と assistant の実体の一致は型検査、ここでは profile 全体の閉包を検査する。
  * - provider-native の外部 I/O 道具が profile に紛れ込んだら落ちる。
  * - 委譲は交差で減るだけ — どの次元も親を超えられない。
  */
@@ -12,30 +11,13 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { test } from "vitest"
 import { configureApp, PROJECT_ROOT } from "../../src/core/config.ts"
-import { AGENT_PROFILES, agentProfileRef, PARENT_TOOLS } from "../../src/model/profiles.ts"
+import { AGENT_PROFILES, agentProfileRef, PARENT_AUTHORITY } from "../../src/model/profiles.ts"
 import { DelegationDenied, type EffectiveScope, intersectScope, withinScope } from "../../src/model/scope.ts"
-import { registeredTools } from "../helpers.ts"
 
 const read = (path: string) => readFileSync(join(PROJECT_ROOT, path), "utf8")
 
-test("親 profile の道具全数は assistant の登録と一致する", () => {
-  const actual = registeredTools()
-  // 子にだけ渡る道具(search / fetch は researcher・explore の中、recall は digger の中)を除くと親の全数。
-  for (const name of PARENT_TOOLS) {
-    assert.ok(actual.has(name), `profile が宣言する ${name} が assistant に無い`)
-  }
-  const children = new Set(["search", "fetch"])
-  for (const name of actual) {
-    if (children.has(name)) continue
-    assert.ok(
-      PARENT_TOOLS.includes(name),
-      `assistant の ${name} が profile に未分類(未分類の道具は増やせない)`,
-    )
-  }
-})
-
 test("全 profile の道具はローカル実装の閉じた集合に収まり、provider-native が紛れない", () => {
-  const local = new Set([...PARENT_TOOLS, "search", "fetch"])
+  const local = new Set<string>(PARENT_AUTHORITY)
   for (const profile of Object.values(AGENT_PROFILES)) {
     for (const tool of profile.tools) {
       assert.ok(local.has(tool), `${profile.id} の ${tool} はローカル道具ではない`)

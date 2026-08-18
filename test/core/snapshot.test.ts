@@ -1,3 +1,4 @@
+import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -31,12 +32,13 @@ describe("snapshotストア(①スナップショット式undo)", () => {
       expect(ensureSnapshotStore(cwd)).toBe(true)
       const snap = takeSnapshot(cwd, { label: "pre", kind: "pre-step", flowId: "f-1", stepIndex: 0 })
       expect(snap).not.toBeNull()
+      assert.ok(snap)
 
       writeFileSync(join(cwd, "keep.txt"), "MODIFIED\n")
       rmSync(join(cwd, "gone.txt"))
       writeFileSync(join(cwd, "added.txt"), "new\n")
 
-      const r = restoreSnapshot(cwd, snap!.sha)
+      const r = restoreSnapshot(cwd, snap.sha)
       expect(r.ok).toBe(true)
       expect(read(cwd, "keep.txt")).toBe("original\n") // 修正が戻る
       expect(read(cwd, "gone.txt")).toBe("will be deleted\n") // 削除が復活
@@ -55,11 +57,12 @@ describe("snapshotストア(①スナップショット式undo)", () => {
       mkdirSync(join(cwd, ".agent"), { recursive: true })
       writeFileSync(join(cwd, ".agent", "internal.txt"), "internal\n")
       const snap = takeSnapshot(cwd, { label: "pre", kind: "pre-step" })
+      assert.ok(snap)
 
       // .agent と ignored を変異させてから復元
       writeFileSync(join(cwd, ".agent", "internal.txt"), "MUTATED internal\n")
       writeFileSync(join(cwd, "node_modules", "dep.js"), "MUTATED dep\n")
-      const r = restoreSnapshot(cwd, snap!.sha)
+      const r = restoreSnapshot(cwd, snap.sha)
       expect(r.ok).toBe(true)
       // どちらも復元されず変異のまま残る(= restoreの管理外 = 保護されている)
       expect(read(cwd, ".agent/internal.txt")).toContain("MUTATED")
@@ -90,13 +93,15 @@ describe("snapshotストア(①スナップショット式undo)", () => {
     try {
       writeFileSync(join(cwd, "a.txt"), "v1\n")
       const s1 = takeSnapshot(cwd, { label: "v1", kind: "manual" })
+      assert.ok(s1)
       writeFileSync(join(cwd, "a.txt"), "v2\n")
-      const r = restoreSnapshot(cwd, s1!.sha)
+      const r = restoreSnapshot(cwd, s1.sha)
       expect(r.ok).toBe(true)
       expect(r.safety).toBeDefined()
+      assert.ok(r.safety)
       expect(read(cwd, "a.txt")).toBe("v1\n")
       // 安全スナップショットへ戻せば v2 が復活(復元の取り消し)
-      const back = restoreSnapshot(cwd, r.safety!.sha)
+      const back = restoreSnapshot(cwd, r.safety.sha)
       expect(back.ok).toBe(true)
       expect(read(cwd, "a.txt")).toBe("v2\n")
     } finally {
@@ -110,8 +115,9 @@ describe("snapshotストア(①スナップショット式undo)", () => {
       writeFileSync(join(cwd, "x.txt"), "a\n")
       const s = takeSnapshot(cwd, { label: "s", kind: "manual" })
       expect(s).not.toBeNull()
+      assert.ok(s)
       writeFileSync(join(cwd, "x.txt"), "b\n")
-      expect(restoreSnapshot(cwd, s!.sha).ok).toBe(true)
+      expect(restoreSnapshot(cwd, s.sha).ok).toBe(true)
       expect(read(cwd, "x.txt")).toBe("a\n")
     } finally {
       rmSync(cwd, { recursive: true, force: true })
@@ -125,12 +131,14 @@ describe("snapshotストア(①スナップショット式undo)", () => {
       const s0 = takeSnapshot(cwd, { label: "step0", kind: "pre-step", flowId: "f-9", stepIndex: 0 })
       writeFileSync(join(cwd, "a.txt"), "2\n")
       const s1 = takeSnapshot(cwd, { label: "step1", kind: "pre-step", flowId: "f-9", stepIndex: 1 })
+      assert.ok(s0)
+      assert.ok(s1)
 
       const list = listSnapshots(cwd)
-      expect(list[0]!.sha).toBe(s1!.sha) // 新しい順
-      expect(resolveSnapshot(cwd, s0!.sha.slice(0, 8))!.sha).toBe(s0!.sha) // 短縮SHA
+      expect(list[0]?.sha).toBe(s1.sha) // 新しい順
+      expect(resolveSnapshot(cwd, s0.sha.slice(0, 8))?.sha).toBe(s0.sha) // 短縮SHA
       expect(resolveSnapshot(cwd, "deadbeef")).toBeUndefined()
-      expect(latestFlowSnapshot(cwd, "f-9")!.stepIndex).toBe(1) // 最新pre-step
+      expect(latestFlowSnapshot(cwd, "f-9")?.stepIndex).toBe(1) // 最新pre-step
       expect(latestFlowSnapshot(cwd, "nope")).toBeUndefined()
     } finally {
       rmSync(cwd, { recursive: true, force: true })

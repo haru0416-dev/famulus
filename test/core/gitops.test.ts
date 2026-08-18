@@ -1,3 +1,4 @@
+import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -36,9 +37,10 @@ describe("beginTaskBranch / finishTaskBranch", () => {
     const dir = gitRepo()
     const bb = beginTaskBranch(dir, "task-x")
     expect(bb.skipped).toBeUndefined()
+    assert.ok(bb.branch)
     expect(git(dir, "branch", "--show-current")).toBe("famulus/task-x")
     writeFileSync(join(dir, "b.txt"), "agent output\n") // エージェントの成果を模擬
-    const fin = finishTaskBranch(dir, bb.branch!, "add b.txt")
+    const fin = finishTaskBranch(dir, bb.branch, "add b.txt")
     expect(fin.committed).toBe(true)
     expect(git(dir, "branch", "--show-current")).toBe("main")
     expect(git(dir, "status", "--porcelain")).toBe("") // mainはクリーン
@@ -48,7 +50,8 @@ describe("beginTaskBranch / finishTaskBranch", () => {
   test("無変更タスク: 空ブランチは削除してbaseへ復帰", () => {
     const dir = gitRepo()
     const bb = beginTaskBranch(dir, "noop")
-    const fin = finishTaskBranch(dir, bb.branch!, "no changes")
+    assert.ok(bb.branch)
+    const fin = finishTaskBranch(dir, bb.branch, "no changes")
     expect(fin.committed).toBe(false)
     expect(git(dir, "branch", "--list", "famulus/noop")).toBe("")
     expect(git(dir, "branch", "--show-current")).toBe("main")
@@ -75,8 +78,9 @@ describe("beginTaskBranch / finishTaskBranch", () => {
 /** begin→成果物書き込み→finish で成果ブランチを作るフィクスチャ。 */
 function taskBranchWith(dir: string, label: string, file: string, content: string): string {
   const bb = beginTaskBranch(dir, label)
+  assert.ok(bb.branch)
   writeFileSync(join(dir, file), content)
-  finishTaskBranch(dir, bb.branch!, `write ${file}`)
+  finishTaskBranch(dir, bb.branch, `write ${file}`)
   return `famulus/${label}`
 }
 
@@ -143,9 +147,10 @@ describe("mergeTaskBranch / discardTaskBranch(成果消費)", () => {
     // begin: .agentのみのdirtyではブランチを切る
     const bb = beginTaskBranch(dir, "task-agent-noise")
     expect(bb.skipped).toBeUndefined()
+    assert.ok(bb.branch)
     writeFileSync(join(dir, "b.txt"), "work\n")
     writeFileSync(join(dir, ".agent", "log", "lineage.jsonl"), '{"more":1}\n')
-    const fin = finishTaskBranch(dir, bb.branch!, "work")
+    const fin = finishTaskBranch(dir, bb.branch, "work")
     expect(fin.committed).toBe(true)
     // .agentはtask branchにコミットされない(内部状態の混入防止)
     const committed = git(dir, "ls-tree", "-r", "--name-only", "famulus/task-agent-noise")
@@ -168,8 +173,9 @@ describe("mergeTaskBranch / discardTaskBranch(成果消費)", () => {
     writeFileSync(join(dir, ".agent", "log", "lineage.jsonl"), "{}\n")
     const bb = beginTaskBranch(dir, "task-ignored-agent")
     expect(bb.skipped).toBeUndefined()
+    assert.ok(bb.branch)
     writeFileSync(join(dir, "b.txt"), "work\n")
-    const fin = finishTaskBranch(dir, bb.branch!, "work")
+    const fin = finishTaskBranch(dir, bb.branch, "work")
     expect(fin.committed).toBe(true) // 退行時はここがfalse(ブランチに取り残し)
     expect(git(dir, "branch", "--show-current")).toBe("main") // baseへ復帰している
     const committed = git(dir, "ls-tree", "-r", "--name-only", "famulus/task-ignored-agent")
