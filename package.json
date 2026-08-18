@@ -21,6 +21,7 @@
     "evaluate:explore": "bun evaluate/explore.ts",
     "eval:keeper": "bun evaluate/keeper-fidelity.ts",
     "eval:recall": "bun evaluate/recall-miss.ts",
+    "eval:research": "bun evaluate/research-fidelity.ts",
     "eval:exploration": "bun evaluate/exploration-metrics.ts"
   },
   "dependencies": {
