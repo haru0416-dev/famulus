@@ -41,6 +41,7 @@ test("model既定値はGrokだけで構成する(埋め込みはローカル ONN
     work: "grok-4.3",
     research: "grok-4.3",
     embedding: "ruri-v3-30m",
+    researchEffort: "medium",
   })
 })
 
@@ -70,6 +71,12 @@ test("Google client は両方置くか両方外す — 片方だけは起動前�
   )
   assert.equal(both.google.clientId, "cid")
   assert.deepEqual(parseConfig({}, "/tmp/famulus").google, {})
+})
+
+test("FAMULUS_RESEARCH_EFFORT は既定 medium で、範囲外を起動前に拒否する", () => {
+  assert.equal(parseConfig({}, "/tmp/famulus").models.researchEffort, "medium")
+  assert.equal(parseConfig({ FAMULUS_RESEARCH_EFFORT: "low" }, "/tmp/famulus").models.researchEffort, "low")
+  assert.throws(() => parseConfig({ FAMULUS_RESEARCH_EFFORT: "max" }, "/tmp/famulus"), ConfigError)
 })
 
 test("FAMULUS_TURN_EFFORT は low/medium/high 以外を起動前に拒否する", () => {

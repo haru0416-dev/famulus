@@ -73,6 +73,9 @@ const workModel = () => AGENT_PROFILES.digger.model()
 /** researcher の委譲エージェントに使うモデル。検索はローカルの `search` と `fetch` だけを使う。 */
 const researchModel = () => AGENT_PROFILES.researcher.model()
 
+/** 調査委譲の reasoning。既定 medium — 厚い推論は fetch を減らして調査を浅くする(config の注記)。 */
+const researchEffort = () => appConfig().models.researchEffort
+
 /**
  * `shell` が締切のために空けておく時間。この回で分かったことを書くための取り分。
  * 走行そのものは1回ごとに DB へ落ちるが、それは生の出力で、何が分かったかは書かれていない。
@@ -639,7 +642,9 @@ function buildTools(state: TurnState, gate: ToolGate, ownerAsked: boolean) {
             )
             const { branches, duplicates } = await runExplore(
               {
-                model: governedModel(AGENT_PROFILES["explore-branch"].model()),
+                model: governedModel(AGENT_PROFILES["explore-branch"].model(), {
+                  reasoningEffort: researchEffort(),
+                }),
                 makeTools: (collector) =>
                   gateTools({ search: searchTool(), fetch: fetchTool(collector) }, gate),
                 maxSteps: 6,
@@ -707,7 +712,9 @@ function buildTools(state: TurnState, gate: ToolGate, ownerAsked: boolean) {
           async () => {
             const fetched: FetchedEvidence[] = []
             const generated = await new ToolLoopAgent({
-              model: governedModel(researchModel()),
+              // effort を明示する。既定(厚い推論)は手数を考え込みに使い、fetch が減って
+              // 調査が浅くなるうえ遅い(実測は config の researchEffort の注記)。
+              model: governedModel(researchModel(), { reasoningEffort: researchEffort() }),
               instructions: `${RESEARCHER}${overlay}`,
               tools: gateTools({ search: searchTool(), fetch: fetchTool(fetched) }, gate),
               output: Output.object({

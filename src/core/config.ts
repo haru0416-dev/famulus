@@ -56,6 +56,14 @@ export interface AppConfig {
      * 精査の同一入力2回で low が 直す/出す に割れた)。
      */
     readonly turnEffort?: "low" | "medium" | "high"
+    /**
+     * 調査委譲(researcher / explore)の reasoning.effort。既定 medium。
+     * 実測(2026-08-18、grok-4.6・同一 fixture): 既定(厚い推論)は 132〜148秒で claim 6〜7、
+     * 別の問いでは4走とも出力に至らず失敗。medium は 55〜92秒で claim 5〜8・引用一致 34/34、
+     * 失敗していた問いも通る。**推論を厚くすると手数を考え込みに使い果たし、調査が浅くなる。**
+     * low(21〜32秒)はさらに速いが fetch 数が半分。
+     */
+    readonly researchEffort: "low" | "medium" | "high"
   }
   readonly cycle: {
     readonly timeoutMs: number
@@ -212,12 +220,17 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
   if (turnEffort !== undefined && !["low", "medium", "high"].includes(turnEffort)) {
     issues.push(`FAMULUS_TURN_EFFORT: low / medium / high のどれかが必要です: ${turnEffort}`)
   }
+  const researchEffort = text(env, "FAMULUS_RESEARCH_EFFORT", "medium")
+  if (!["low", "medium", "high"].includes(researchEffort)) {
+    issues.push(`FAMULUS_RESEARCH_EFFORT: low / medium / high のどれかが必要です: ${researchEffort}`)
+  }
   const models = {
     default: model,
     cycle: text(env, "FAMULUS_CYCLE_MODEL", model),
     work: text(env, "FAMULUS_WORK_MODEL", "grok-4.3"),
     research: text(env, "FAMULUS_RESEARCH_MODEL", "grok-4.3"),
     embedding,
+    researchEffort: researchEffort as "low" | "medium" | "high",
     ...(turnEffort !== undefined ? { turnEffort: turnEffort as "low" | "medium" | "high" } : {}),
   }
   if (!["ruri-v3-30m", "stub", "off"].includes(embedding)) {

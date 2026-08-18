@@ -46,6 +46,9 @@ const FIXTURES = [
 
 const bare = (s: string) => s.replace(/\s+/g, "")
 
+/** 走行中の reasoning effort(引数 "id@low" で指定)。 */
+let EFFORT: "low" | "medium" | "high" | undefined
+
 interface Score {
   readonly fixture: string
   readonly claims: number
@@ -64,7 +67,7 @@ async function runOne(fixture: (typeof FIXTURES)[number]): Promise<Score> {
   const fetched: FetchedEvidence[] = []
   const began = Date.now()
   const generated = await new ToolLoopAgent({
-    model: governedModel(appConfig().models.research),
+    model: governedModel(appConfig().models.research, EFFORT ? { reasoningEffort: EFFORT } : undefined),
     instructions: RESEARCHER,
     tools: gateTools({ search: searchTool(), fetch: fetchTool(fetched) }, undefined),
     // RESEARCH_OBJECT(assistant.ts)と同形。検証の正本は下の RESEARCH_SCHEMA.validate。
@@ -138,11 +141,13 @@ const main = async () => {
   mkdirSync(OUT, { recursive: true })
   const models = process.argv.slice(2)
   if (models.length === 0) models.push("grok-4.3")
-  for (const model of models) {
-    // researcher のモデルは config(FAMULUS_RESEARCH_MODEL)で決まるので、比較はそこを差し替える。
+  for (const spec of models) {
+    // "grok-4.6@low" の形で reasoning effort を指定できる(既定は API 任せ)。
+    const [model, effort] = spec.split("@") as [string, "low" | "medium" | "high" | undefined]
     process.env.FAMULUS_RESEARCH_MODEL = model
     configureApp()
-    console.log(`\n== ${model} ==`)
+    EFFORT = effort
+    console.log(`\n== ${spec} ==`)
     const scores: Score[] = []
     for (const fixture of FIXTURES) {
       // 途中失敗(出力なし・手数切れ)は0点の1走として数える。捨てると失敗しやすい側が有利になる。
@@ -170,11 +175,11 @@ const main = async () => {
     }
     const summary = {
       at: new Date().toISOString(),
-      route: { harness: "famulus researcher", backend: "api.x.ai/v1 responses", model },
+      route: { harness: "famulus researcher", backend: "api.x.ai/v1 responses", model: spec },
       rev: execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim(),
       scores,
     }
-    const path = `${OUT}${new Date().toISOString().replace(/[:.]/g, "-")}-${model}.json`
+    const path = `${OUT}${new Date().toISOString().replace(/[:.]/g, "-")}-${spec.replace("@", "-")}.json`
     writeFileSync(path, `${JSON.stringify(summary, null, 2)}\n`)
     console.log(`保存: ${path}`)
   }
