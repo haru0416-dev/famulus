@@ -81,7 +81,9 @@ test("providerMetadata の無い応答は notionalUsd 0 で記帳される", asy
   assert.equal(prov.notionalUsd, 0)
 })
 
-test("governedModel は知らない id を組み立ての時点で拒否する", () => {
-  assert.throws(() => governedModel("gpt-5.6-sol"), /知らないモデル id/)
+test("governedModel は知らない id と、xai 以外の pool を組み立ての時点で拒否する", () => {
+  assert.throws(() => governedModel("gpt-5.9"), /知らないモデル id/)
+  // GPT は既知だが chatgpt-oauth 枠(精査役専用)。対話経路へ流すと xai 実装で呼ぶ誤配線になる。
+  assert.throws(() => governedModel("gpt-5.6-sol"), /xai 系のみ/)
   assert.equal(governedModel("grok-4.3").modelId, "grok-4.3")
 })

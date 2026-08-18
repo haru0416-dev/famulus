@@ -24,7 +24,8 @@ const authed = (): void => {
   const dir = mkdtempSync(join(tmpdir(), "google-cal-test-"))
   roots.push(dir)
   const path = join(dir, "google-auth.json")
-  writeFileSync(path, JSON.stringify({ access: "a-live", refresh: "r", expires: NOW + 3_600_000 }))
+  // 期限は実時計基準で先に置く。loadGoogleAccess は Date.now() で判定する — 固定時刻だと日付を跨いだ瞬間に refresh へ落ちる。
+  writeFileSync(path, JSON.stringify({ access: "a-live", refresh: "r", expires: Date.now() + 3_600_000 }))
   process.env.FAMULUS_GOOGLE_AUTH = path
   process.env.FAMULUS_GOOGLE_CLIENT_ID = "cid-1"
   process.env.FAMULUS_GOOGLE_CLIENT_SECRET = "cs-1"

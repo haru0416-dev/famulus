@@ -57,7 +57,7 @@ test.each(["FAMULUS_MODEL", "FAMULUS_CYCLE_MODEL", "FAMULUS_WORK_MODEL", "FAMULU
   },
 )
 
-test("解約済みのGPT modelを起動前に拒否する", () => {
+test("対話・委譲へのGPT指定を起動前に拒否する(GPT枠は精査役専用)", () => {
   assert.throws(() => parseConfig({ FAMULUS_MODEL: "gpt-5.6-sol" }, "/tmp/famulus"), ConfigError)
 })
 

@@ -19,13 +19,14 @@ import {
 } from "../../src/model/xai-auth.ts"
 import { classifyXaiFailure } from "../../src/model/xai-responses.ts"
 
-test("grok model は SuperGrok の pool に載る", () => {
+test("grok は SuperGrok の pool、GPT は chatgpt-oauth の pool に載る", () => {
   assert.equal(isKnownModel("grok-4.6"), true)
   assert.equal(isKnownModel("grok-4.3"), true)
-  // 解約済みの GPT は id ごと受け付けない。
-  assert.equal(isKnownModel("gpt-5.6-sol"), false)
+  assert.equal(isKnownModel("gpt-5.6-sol"), true)
   assert.equal(poolForModel("grok-4.6"), XAI_POOL)
   assert.equal(poolForModel("grok-4.3"), "supergrok-oauth")
+  // 経路の分岐は pool の1点で決まる(Runner が読む)。
+  assert.equal(poolForModel("gpt-5.6-sol"), "chatgpt-oauth")
 })
 
 /**

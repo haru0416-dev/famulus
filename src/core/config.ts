@@ -1,7 +1,7 @@
 import { homedir } from "node:os"
 import { isAbsolute, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { isKnownModel } from "../model/models.ts"
+import { isKnownModel, poolForModel, XAI_POOL } from "../model/models.ts"
 
 export const PROJECT_ROOT = fileURLToPath(new URL("../../", import.meta.url)).replace(/\/$/, "")
 
@@ -29,6 +29,8 @@ export interface AppConfig {
     readonly transcriptRoot: string
     readonly xaiAuth: string
     readonly googleAuth: string
+    /** Codex CLI の資格情報。famulus は読むだけで、ログインは `codex login`(CLI 本体)が持つ。 */
+    readonly codexAuth: string
     /**
      * 共有 skill(SKILL.md)の正本。`~/.famulus`(famulus 専用のディレクトリ — vendor の `~/.openclaw` と同型で、
      * 属するのは Haru 自身のエージェント)を直接読む。Claude 側は symlink で同じ正本を読む。
@@ -228,6 +230,8 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     ["FAMULUS_RESEARCH_MODEL", models.research],
   ] as const) {
     if (!isKnownModel(id)) issues.push(`${key}: 既知のmodel idが必要です: ${id}`)
+    // 対話・委譲は xai 枠のみ。GPT(chatgpt-oauth)は精査役専用 — 高頻度の役を小さい契約枠に載せない。
+    else if (poolForModel(id) !== XAI_POOL) issues.push(`${key}: 対話・委譲に使えるのは xai 系のみ: ${id}`)
   }
   const googleClientId = optional(env, "FAMULUS_GOOGLE_CLIENT_ID")
   const googleClientSecret = optional(env, "FAMULUS_GOOGLE_CLIENT_SECRET")
@@ -263,6 +267,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
         text(env, "FAMULUS_TRANSCRIPT_ROOT", resolve(homedir(), ".claude/projects")),
       ),
       xaiAuth: absolutePath(root, text(env, "FAMULUS_XAI_AUTH", resolve(dataDir, "xai-auth.json"))),
+      codexAuth: absolutePath(root, text(env, "FAMULUS_CODEX_AUTH", resolve(homedir(), ".codex/auth.json"))),
       googleAuth: absolutePath(root, text(env, "FAMULUS_GOOGLE_AUTH", resolve(dataDir, "google-auth.json"))),
       skills: absolutePath(root, text(env, "FAMULUS_SKILLS", resolve(homedir(), ".famulus/skills"))),
     },

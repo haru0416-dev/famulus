@@ -11,9 +11,16 @@
  * SuperGrok 契約の週次共有プール。Chat / API / x_search が同じプールを消費する。
  * 値が経路名と一致しないのは、DB(`quota:<pool>` と ledger の provenance)に記録済みの履歴と
  * 同じ鍵でないと、改名した時点でクールダウンと集計が過去分と繋がらなくなる。
- * (旧 GPT 経路の履歴は `chatgpt-oauth` の鍵のまま DB に残っている。)
  */
 export const XAI_POOL = "supergrok-oauth"
+
+/**
+ * ChatGPT(Pro)契約のプール。Codex の Responses を subscription OAuth で呼ぶ。
+ * 鍵は解約前の履歴と同じ `chatgpt-oauth` — 変えると過去の ledger・クールダウンと繋がらない。
+ * 現契約は Pro x5(解約前の x20 より小さい)。載せるのは reviewer だけ(1日1〜数回)で、
+ * 高頻度の役(structurer / scout / 対話)はこの枠に載せない。
+ */
+export const CODEX_POOL = "chatgpt-oauth"
 
 /**
  * 呼べるモデル id の全体。ここに無い id は受け付けない。実測で疎通済みの id だけ載せる。
@@ -23,7 +30,7 @@ export const XAI_POOL = "supergrok-oauth"
  * どちらも実行を開始した後なので、cycle なら1回ぶんの実行が失敗として残る。
  * 入口で失敗させれば、起動した時点で理由が読める。
  */
-export const MODEL_IDS = ["grok-4.6", "grok-4.3"] as const
+export const MODEL_IDS = ["grok-4.6", "grok-4.3", "gpt-5.6-sol"] as const
 
 export const isKnownModel = (model: string): boolean => (MODEL_IDS as readonly string[]).includes(model)
 
@@ -35,8 +42,8 @@ export const assertKnownModel = (model: string): string => {
   return model
 }
 
-/** modelが消費する永続クォータ集計単位。production model は全て SuperGrok の契約枠に載る。 */
-export const poolForModel = (_model: string): string => XAI_POOL
+/** modelが消費する永続クォータ集計単位。経路の分岐もこの1点で決まる(Runner が読む)。 */
+export const poolForModel = (model: string): string => (model.startsWith("gpt-") ? CODEX_POOL : XAI_POOL)
 
 /**
  * 既定のシステムプロンプト(コーディング・エージェントの前置き)を置き換える文。

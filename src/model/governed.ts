@@ -23,7 +23,7 @@ import { nowIso } from "../core/time.ts"
 import { isRefusal, run } from "../runtime.ts"
 import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
-import { assertKnownModel, ModelCallError, poolForModel } from "./models.ts"
+import { assertKnownModel, ModelCallError, poolForModel, XAI_POOL } from "./models.ts"
 import { traceOf } from "./trace.ts"
 import { XAI_PROVIDER_META, type XaiModelOptions, xaiResponsesModel } from "./xai-responses.ts"
 
@@ -145,5 +145,10 @@ export function governance(): LanguageModelV4Middleware {
  */
 export function governedModel(modelId: string, xaiOpts?: XaiModelOptions): LanguageModelV4 {
   assertKnownModel(modelId)
+  // 道具ループ(対話・委譲)は xai 経路のみ。GPT(chatgpt-oauth)は Runner の精査役専用 —
+  // ここを通すと xai の実装で GPT を呼ぶ誤配線になるので、組み立ての時点で止める。
+  if (poolForModel(modelId) !== XAI_POOL) {
+    throw new ModelCallError(`対話経路で使えるのは xai 系のみ: ${modelId}`)
+  }
   return wrapLanguageModel({ model: xaiResponsesModel(modelId, xaiOpts), middleware: governance() })
 }

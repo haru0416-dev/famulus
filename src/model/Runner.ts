@@ -14,8 +14,16 @@ import { nowIso } from "../core/time.ts"
 import { ExecutionKernel, type KernelLoopContext } from "../services/ExecutionKernel.ts"
 import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
+import { callCodex } from "./codex-responses.ts"
 import { digestOf, profileRefForModel } from "./kernel-spec.ts"
-import { assertKnownModel, ModelCallError, poolForModel, type QuotaSignal, RUNTIME_PROMPT } from "./models.ts"
+import {
+  assertKnownModel,
+  CODEX_POOL,
+  ModelCallError,
+  poolForModel,
+  type QuotaSignal,
+  RUNTIME_PROMPT,
+} from "./models.ts"
 import type { RuntimeSchema } from "./schema.ts"
 import { traceOf } from "./trace.ts"
 import { callXai } from "./xai-responses.ts"
@@ -23,7 +31,7 @@ import { callXai } from "./xai-responses.ts"
 export type Role = "structurer" | "scout" | "reviewer" | "looker"
 
 /**
- * 役割→モデル。全て SuperGrok OAuth の Grok で、品質と処理量に応じてmodelを分ける。
+ * 役割→モデル。基本は SuperGrok OAuth の Grok、精査役だけ ChatGPT(codex)枠の GPT。
  *
  * 対話と cycle 本体のモデルは createAssistant() に渡す model id で決まる。
  *
@@ -35,9 +43,10 @@ export const ROLE_MODEL: Record<Role, string> = {
   // 締めの keeper。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
   // (keepGrounded)。scout と同じ性質で対話ごとに通るため、処理量を抑えたmodelに置く。
   structurer: "grok-4.3",
-  // 下書きの精査(assistant の draft)。外に出る前の最後の検査。「書いた側と別の系列」の原則は
-  // GPT 解約で崩れて同系列 — 別系列に戻す候補は Claude 経路。それまでは既定の対話modelと同じ id。
-  reviewer: "grok-4.6",
+  // 下書きの精査(assistant の draft)。外に出る前の最後の検査。「書いた側と別の系列」(ADR 0031)
+  // — 書き手は grok なので、精査は GPT(ChatGPT Pro 再契約の chatgpt-oauth 枠)。
+  // Pro x5 の小さい枠だが、精査は1日1〜数回なので載る。`codex login`(CLI)が資格情報の入口。
+  reviewer: "gpt-5.6-sol",
   scout: "grok-4.3", // 取り込みの構造化。引用を写す役(Intake.ingest)
   // 受け取った画像の記述(src/agent/vision.ts)。記述は言い換えなので確定値には昇格させない。
   looker: "grok-4.3",
@@ -280,8 +289,9 @@ export const RunnerLive = Layer.effect(
   makeRunner(
     (req, p) =>
       Effect.tryPromise({
+        // 経路は pool で分岐する。モデル名の前方一致(poolForModel)が唯一の分岐点。
         try: (abort) =>
-          callXai({
+          (poolForModel(p.model) === CODEX_POOL ? callCodex : callXai)({
             prompt: req.prompt,
             model: p.model,
             systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,
