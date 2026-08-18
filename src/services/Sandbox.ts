@@ -6,7 +6,7 @@
  * ネットワークも必要な実行だけ開く。
  */
 import { spawn } from "node:child_process"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, readFileSync, statSync } from "node:fs"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { appConfig } from "../core/config.ts"
@@ -40,6 +40,10 @@ const MAX_OUTPUT_CHARS = 12_000
 const MEMORY = "2g"
 const CPUS = "2"
 const PIDS = "512"
+export const PUBLIC_NETWORK = "famulus-public"
+export const PUBLIC_NETWORK_POLICY = "public-only-v1"
+const PUBLIC_NETWORK_BRIDGE = "br-famulus"
+const PUBLIC_NETWORK_READY = `/run/famulus-egress/${PUBLIC_NETWORK_POLICY}.ready`
 
 export interface RunOptions {
   /** ホストへ書き出す workspace。`runDir()` が返す絶対パスを渡す。 */
@@ -102,7 +106,11 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
     opts.name,
     // 外向きは既定で閉じる。docker には宛先の allowlist が無いので、開くか閉じるかの二択になる。
     "--network",
-    opts.net ? "bridge" : "none",
+    opts.net ? PUBLIC_NETWORK : "none",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges:true",
     "--memory",
     MEMORY,
     "--cpus",
@@ -147,9 +155,13 @@ export function dockerArgs(command: string, opts: RunOptions & { name: string })
 }
 
 /** docker を1回呼んで終了コードと出力を取る。走行そのものではなく、周りの世話(組む・数える・消す)用。 */
-function docker(args: readonly string[], timeoutMs = 5 * 60_000): Promise<{ code: number; out: string }> {
+function execute(
+  file: string,
+  args: readonly string[],
+  timeoutMs = 5 * 60_000,
+): Promise<{ code: number; out: string }> {
   return new Promise((done) => {
-    const child = spawn("docker", args as string[], { stdio: ["ignore", "pipe", "pipe"] })
+    const child = spawn(file, args as string[], { stdio: ["ignore", "pipe", "pipe"] })
     let out = ""
     const take = (c: Buffer): void => {
       if (out.length < 8_000) out += c.toString("utf8")
@@ -166,6 +178,50 @@ function docker(args: readonly string[], timeoutMs = 5 * 60_000): Promise<{ code
       done({ code: code ?? -1, out })
     })
   })
+}
+
+const docker = (args: readonly string[], timeoutMs?: number) => execute("docker", args, timeoutMs)
+
+/** root側のpacket filterと専用networkが揃っている場合だけ外向き走行を許す。 */
+export async function verifyPublicNetworkPolicy(readyPath: string = PUBLIC_NETWORK_READY): Promise<void> {
+  let ready: string
+  try {
+    const stat = statSync(readyPath)
+    if (stat.uid !== 0 || (stat.mode & 0o022) !== 0)
+      throw new Error("ready file is not root-owned and read-only")
+    ready = readFileSync(readyPath, "utf8").trim()
+  } catch (error) {
+    throw new Error(`public network policy unavailable: ${String(error)}`)
+  }
+  if (ready !== PUBLIC_NETWORK_POLICY)
+    throw new Error(`public network policy version mismatch: ${ready || "empty"}`)
+
+  const policy = await execute("sudo", ["-n", "/usr/local/libexec/famulus-egress-check"], 30_000)
+  if (policy.code !== 0) throw new Error(`public network packet filter unavailable: ${policy.out.trim()}`)
+
+  const inspected = await docker(["network", "inspect", PUBLIC_NETWORK], 30_000)
+  if (inspected.code !== 0) throw new Error(`public network unavailable: ${inspected.out.trim()}`)
+  let network: Record<string, unknown>
+  try {
+    const decoded = JSON.parse(inspected.out) as unknown
+    if (!Array.isArray(decoded) || typeof decoded[0] !== "object" || decoded[0] === null)
+      throw new Error("shape")
+    network = decoded[0] as Record<string, unknown>
+  } catch {
+    throw new Error("public network inspect returned invalid JSON")
+  }
+  const options = network.Options as Record<string, unknown> | undefined
+  const labels = network.Labels as Record<string, unknown> | undefined
+  if (
+    network.Name !== PUBLIC_NETWORK ||
+    network.Driver !== "bridge" ||
+    network.Internal !== false ||
+    network.EnableIPv6 !== false ||
+    options?.["com.docker.network.bridge.name"] !== PUBLIC_NETWORK_BRIDGE ||
+    options?.["com.docker.network.bridge.enable_icc"] !== "false" ||
+    labels?.["io.famulus.egress"] !== PUBLIC_NETWORK_POLICY
+  )
+    throw new Error("public network attributes do not match policy")
 }
 
 /** 一度組んだら二度と確認しない(`docker image inspect` でも 30ms 掛かるので、走行ごとには払わない)。 */
@@ -244,9 +300,14 @@ export async function sweepOrphans(dry = false): Promise<{ removed: string[]; ke
  * 出力は stdout と stderr を混ぜる。分けて返すと、ビルド系のように進捗を stderr へ流す道具で
  * 「どのコマンドがどこで失敗したか」の前後関係が消える。読む側が要るのはその順序のほう。
  */
-export async function runInSandbox(command: string, opts: RunOptions): Promise<RunResult> {
+export async function runInSandbox(
+  command: string,
+  opts: RunOptions,
+  verifyNetwork: () => Promise<void> = verifyPublicNetworkPolicy,
+): Promise<RunResult> {
   opts.signal?.throwIfAborted()
   if (!isAbsolute(opts.workDir)) throw new Error(`workspace は絶対パスで渡す: ${opts.workDir}`)
+  if (opts.net) await verifyNetwork()
   mkdirSync(cacheRoot(), { recursive: true })
   // image が明示されている場合は、自動ビルドせず指定されたイメージを使う。
   const configuredImage = appConfig().runImage

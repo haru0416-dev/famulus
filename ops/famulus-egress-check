@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+input_rules=$(/usr/sbin/nft list chain inet famulus_egress input)
+forward_rules=$(/usr/sbin/nft list chain inet famulus_egress forward)
+set_rules=$(/usr/sbin/nft list set inet famulus_egress blocked4)
+for required in \
+  '0.0.0.0/8' \
+  '10.0.0.0/8' \
+  '100.64.0.0/10' \
+  '127.0.0.0/8' \
+  '169.254.0.0/16' \
+  '172.16.0.0/12' \
+  '192.0.0.0/24' \
+  '192.0.2.0/24' \
+  '192.88.99.0/24' \
+  '192.168.0.0/16' \
+  '198.18.0.0/15' \
+  '198.51.100.0/24' \
+  '203.0.113.0/24' \
+  '220.158.29.0/24' \
+  '224.0.0.0/4' \
+  '240.0.0.0/4'
+do
+  [[ $set_rules == *"$required"* ]] || {
+    printf 'famulus egress rule missing: %s\n' "$required" >&2
+    exit 1
+  }
+done
+
+[[ $input_rules == *'type filter hook input priority filter - 10; policy accept;'* ]]
+printf '%s\n' "$input_rules" | grep -F 'iifname "br-famulus" counter' | grep -Fq 'reject'
+[[ $forward_rules == *'type filter hook forward priority filter - 10; policy accept;'* ]]
+printf '%s\n' "$forward_rules" | grep -F 'iifname "br-famulus" meta nfproto ipv6' | grep -Fq 'reject'
+printf '%s\n' "$forward_rules" | grep -F 'iifname "br-famulus" oifname "tailscale0"' | grep -Fq 'reject'
+printf '%s\n' "$forward_rules" | grep -F 'iifname "br-famulus" ip daddr @blocked4' | grep -Fq 'reject'
+if printf '%s\n' "$forward_rules" | grep -F 'iifname "br-famulus"' | grep -Fq ' accept'; then
+  printf 'famulus egress contains an allow rule for br-famulus\n' >&2
+  exit 1
+fi
+
+actual=$(/usr/bin/docker network inspect --format \
+  '{{.Name}}|{{.Driver}}|{{.Internal}}|{{.EnableIPv6}}|{{index .Options "com.docker.network.bridge.name"}}|{{index .Options "com.docker.network.bridge.enable_icc"}}|{{index .Labels "io.famulus.egress"}}' \
+  famulus-public)
+[[ $actual == 'famulus-public|bridge|false|false|br-famulus|false|public-only-v1' ]] || {
+  printf 'famulus egress network mismatch: %s\n' "$actual" >&2
+  exit 1
+}

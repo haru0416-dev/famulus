@@ -1,0 +1,1 @@
+haru ALL=(root) NOPASSWD: /usr/local/libexec/famulus-egress-check

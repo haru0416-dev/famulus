@@ -1,0 +1,13 @@
+[Unit]
+Description=famulus sandbox public-only egress
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/famulus-egress-setup start
+ExecStop=/usr/local/libexec/famulus-egress-setup stop
+
+[Install]
+WantedBy=multi-user.target

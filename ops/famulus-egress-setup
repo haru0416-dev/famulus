@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+network=famulus-public
+policy=public-only-v1
+ready_dir=/run/famulus-egress
+ready="$ready_dir/$policy.ready"
+expected='famulus-public|bridge|false|false|br-famulus|false|public-only-v1'
+
+if [[ ${1:-start} == stop ]]; then
+  rm -f "$ready"
+  exit 0
+fi
+
+rm -f "$ready"
+rules=/etc/famulus-egress.nft
+if /usr/sbin/nft list table inet famulus_egress >/dev/null 2>&1; then
+  transaction=$(mktemp)
+  trap 'rm -f "$transaction"' EXIT
+  {
+    printf 'delete table inet famulus_egress\n'
+    cat "$rules"
+  } >"$transaction"
+  /usr/sbin/nft -f "$transaction"
+else
+  /usr/sbin/nft -f "$rules"
+fi
+
+if ! /usr/bin/docker network inspect "$network" >/dev/null 2>&1; then
+  /usr/bin/docker network create \
+    --driver bridge \
+    --subnet 172.30.0.0/24 \
+    --gateway 172.30.0.1 \
+    --ipv6=false \
+    --opt com.docker.network.bridge.name=br-famulus \
+    --opt com.docker.network.bridge.enable_icc=false \
+    --opt com.docker.network.bridge.enable_ip_masquerade=true \
+    --label io.famulus.egress="$policy" \
+    "$network" >/dev/null
+fi
+
+actual=$(/usr/bin/docker network inspect --format \
+  '{{.Name}}|{{.Driver}}|{{.Internal}}|{{.EnableIPv6}}|{{index .Options "com.docker.network.bridge.name"}}|{{index .Options "com.docker.network.bridge.enable_icc"}}|{{index .Labels "io.famulus.egress"}}' \
+  "$network")
+if [[ $actual != "$expected" ]]; then
+  printf 'famulus egress network mismatch: %s\n' "$actual" >&2
+  exit 1
+fi
+
+/usr/local/libexec/famulus-egress-check
+
+install -d -o root -g root -m 0755 "$ready_dir"
+printf '%s\n' "$policy" | install -o root -g root -m 0444 /dev/stdin "$ready"

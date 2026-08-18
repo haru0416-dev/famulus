@@ -18,6 +18,7 @@ import {
   cacheRoot,
   dockerArgs,
   orphanNames,
+  PUBLIC_NETWORK,
   runDir,
   runInSandbox,
   runsRoot,
@@ -60,7 +61,7 @@ test("名前が全部落ちるものは弾く(空の workspace を作らない)"
   })
 })
 
-test("既定では外に出られない。net を渡したときだけ開く", () => {
+test("既定では外に出られず、net は内部宛先を拒否する専用networkだけを使う", () => {
   const base = { workDir: "/tmp/w", name: "fam-run-test" }
   const closed = dockerArgs("echo hi", base)
   assert.deepEqual(
@@ -69,7 +70,12 @@ test("既定では外に出られない。net を渡したときだけ開く", (
     "net を渡していないのに外へ出られる",
   )
   const open = dockerArgs("echo hi", { ...base, net: true })
-  assert.equal(open[open.indexOf("--network") + 1], "bridge")
+  assert.equal(open[open.indexOf("--network") + 1], PUBLIC_NETWORK)
+  assert.deepEqual(open.slice(open.indexOf("--cap-drop"), open.indexOf("--cap-drop") + 2), [
+    "--cap-drop",
+    "ALL",
+  ])
+  assert.ok(open.includes("no-new-privileges:true"))
 })
 
 test("ホストへマウントするのは workspace と共有キャッシュだけ。コンテナは毎回捨てる", () => {
@@ -136,6 +142,30 @@ test("開始前にabortされていればdockerを起動しない", async () => 
 
 test("相対の workDir は走らせる前に弾く", async () => {
   await assert.rejects(() => runInSandbox("echo x", { workDir: "rel/path" }), /絶対パス/)
+})
+
+test("public network policyを確認できなければdockerを起動しない", async () => {
+  await withFakeDocker(async ({ log, workDir }) => {
+    await assert.rejects(
+      () =>
+        runInSandbox("echo x", { workDir, image: FAKE_IMAGE, net: true }, async () => {
+          throw new Error("policy missing")
+        }),
+      /policy missing/,
+    )
+    assert.equal(readFileSync(log, "utf8"), "")
+  })
+})
+
+test("policy確認後のnet走行だけ専用networkで起動する", async () => {
+  await withFakeDocker(async ({ workDir }) => {
+    let verified = 0
+    const result = await runInSandbox("echo x", { workDir, image: FAKE_IMAGE, net: true }, async () => {
+      verified++
+    })
+    assert.equal(verified, 1)
+    assert.equal(result.exitCode, 0)
+  })
 })
 
 test("コンテナ内の home は workspace(uid 指定で home が無くなるため)", () => {
