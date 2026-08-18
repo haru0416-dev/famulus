@@ -18,14 +18,13 @@ import { configureApp } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { causeReason } from "./core/errors.ts"
 import { run, runtime } from "./runtime.ts"
-import { Attention } from "./services/Attention.ts"
 import { Memory } from "./services/Memory.ts"
 
 loadEnv()
 configureApp()
 
 const rt = runtime()
-const assistant = createAssistant()
+const assistant = createAssistant({ inputOriginKind: "chat" })
 const rl = createInterface({ input: process.stdin, output: process.stdout })
 
 /**
@@ -93,15 +92,6 @@ try {
         }),
       ).catch(() => {})
     }
-
-    // 既読位置はターンごとに進める。進めないと、いま自分で答えた入力が
-    // 次の cycle で「まだ見ていない入力」として上がり、同じ話にもう一度起きる。
-    await run(
-      Effect.gen(function* () {
-        const att = yield* Attention
-        yield* att.completeCycle()
-      }),
-    ).catch(() => {})
   }
 } finally {
   rl.close()

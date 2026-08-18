@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import {
   beliefMissMessage,
+  calendarWriteAuthorized,
   gateTools,
   replyStepText,
   untrustedToolOutput,
@@ -125,8 +126,18 @@ test("belief は読み専用を明言し、外れたら既存の slot を見せ�
 })
 
 test("ユーザーが話す入口はどちらも keeper を通す", () => {
-  assert.match(read("src/chat.ts"), /run\(\s*keep\(\{/)
+  const chat = read("src/chat.ts")
+  assert.match(chat, /run\(\s*keep\(\{/)
+  assert.match(chat, /inputOriginKind:\s*"chat"/)
+  assert.doesNotMatch(chat, /completeCycle/)
   assert.match(read("src/cycle.ts"), /run\(\s*keep\(\{/)
+})
+
+test("calendar書込は今のowner eventの原文と書込意図が揃ったときだけ許可する", () => {
+  const evidence = [{ id: "owner-1", text: "8月24日の病院をカレンダーに入れて" }]
+  assert.equal(calendarWriteAuthorized(evidence, "病院をカレンダーに入れて"), true)
+  assert.equal(calendarWriteAuthorized(evidence, "歯医者をカレンダーに入れて"), false)
+  assert.equal(calendarWriteAuthorized(evidence, "カレンダーの予定を教えて"), false)
 })
 
 test("自由文のツール結果は親モデルへの指示と分離する", () => {

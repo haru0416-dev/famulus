@@ -412,10 +412,11 @@ const makeAttention = () =>
         const cursorRaw = yield* db.meta("cycle:cursor")
         const cursor = Number(cursorRaw ?? 0)
 
-        // 自分が書いたもの(source='system')は実行条件にしない。外部入力だけを対象にする。
+        // 自分が書いたものと、対話REPLがその場で処理した owner 入力は実行条件にしない。
         const newEvents = (yield* db.all(
           `SELECT seq AS rowid, id, at, source, taint, content, origin_id, provenance FROM events
-            WHERE seq > ?AND source != 'system' AND content IS NOT NULL
+            WHERE seq > ?AND source != 'system' AND COALESCE(origin_kind,'') != 'chat'
+              AND content IS NOT NULL
             ORDER BY seq ASC LIMIT 50`,
           cursor,
         )) as unknown as ObservedEvent[]

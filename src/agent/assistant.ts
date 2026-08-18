@@ -12,6 +12,7 @@
  * 道具は `createAssistant()` が1ターンぶんの状態をクロージャで保持して作る。
  */
 
+import { randomUUID } from "node:crypto"
 import { basename } from "node:path"
 import { type ModelMessage, Output, stepCountIs, ToolLoopAgent, tool } from "ai"
 import * as Effect from "effect/Effect"
@@ -116,12 +117,30 @@ interface TurnState {
    * 検索役(子)も同じ除外が要る — 子は親の会話を持たないが DB は同じものを見る。
    */
   lastInputEventId: string | undefined
+  /** 今の回に実在する owner 発言。外部書き込みの根拠を event と原文の両方で照合する。 */
+  ownerEvidence: readonly OwnerEvidence[]
   /** このターンで開いた委譲の通し番号。kernel の owner id に入る。 */
   delegations: number
   /** 指示や仕組みへの戸惑い(1行)。読むのは人間だけ — プロンプトにも recall にも還流させない。 */
   confusion: string | undefined
   /** このターンの recall 台帳。respond ごとに作り直す — 対話は assistant を使い回すので、閉包に置くと前のターンの既読が残る。 */
   recallTurn: RecallTurn
+}
+
+export interface OwnerEvidence {
+  readonly id: string
+  readonly text: string
+}
+
+const CALENDAR_SUBJECT = /(?:カレンダー|予定(?:表)?|スケジュール|calendar)/i
+const CALENDAR_WRITE = /(?:入れ|追加|登録|作成|作って|書き込|載せ|反映|承認|進めて|お願い|頼む|やって)/
+
+/** 今の owner 発言から写した、Calendar への書き込み依頼だけを通す。 */
+export function calendarWriteAuthorized(evidence: readonly OwnerEvidence[], quote: string): boolean {
+  const compact = (value: string) => value.replace(/\s/g, "")
+  const cited = compact(quote)
+  if (cited.length < 4 || !CALENDAR_SUBJECT.test(cited) || !CALENDAR_WRITE.test(cited)) return false
+  return evidence.some((item) => compact(item.text).includes(cited))
 }
 
 /**
@@ -582,7 +601,7 @@ export const gateTools = <T extends Record<string, unknown>>(tools: T, gate: Too
   ) as T
 }
 
-function buildTools(state: TurnState, gate: ToolGate, ownerAsked: boolean) {
+function buildTools(state: TurnState, gate: ToolGate) {
   const tools = {
     // ── 指示への戸惑いを残す。読み手は人間だけ — プロンプト・recall へ還流させない(自家中毒の防止)。
     confusion: tool({
@@ -936,9 +955,9 @@ function buildTools(state: TurnState, gate: ToolGate, ownerAsked: boolean) {
 
     calendar_add: tool({
       description:
-        "Google カレンダーに予定を1件入れる。**ユーザーに話しかけられた回でだけ**使える(日時が曖昧なら先に確かめる)。" +
-        "誰も話しかけていない自走の回では書けない — その場合は `propose` か `tell` で伝え、" +
-        "ユーザーが次に話しかけた回(承認の返事を含む)に入れる。",
+        "Google カレンダーに予定を1件入れる。**今の回のユーザー発言が、カレンダーへの追加・登録・承認を明言した場合だけ**使える。" +
+        "その発言から、書き込み意図を含む箇所の原文引用を渡す。日時が曖昧なら先に確かめる。" +
+        "明示的な依頼が無い回は `propose` か `tell` で伝え、依頼を待つ。",
       inputSchema: vs(
         v.object({
           title: v.pipe(v.string(), v.description("予定の題。")),
@@ -947,14 +966,16 @@ function buildTools(state: TurnState, gate: ToolGate, ownerAsked: boolean) {
             v.description("開始。時刻ありは ISO 日時(例 2026-08-24T10:00:00+09:00)、終日は YYYY-MM-DD。"),
           ),
           end: v.pipe(v.optional(v.string()), v.description("終了。省くと時刻ありは1時間後、終日は同日。")),
+          ownerQuote: v.pipe(
+            v.string(),
+            v.description("その発言からそのまま写した、カレンダーへの追加・登録・承認を明言する箇所。"),
+          ),
         }),
       ),
-      execute: async ({ title, start, end }) => {
-        // 書き込みの承認は「ユーザーがこの回に話しかけて頼んだ」こと。自走の書き込みは機械で止める —
-        // 規律に書くだけでは通る(下書きの検査と同じ理由)。lane は使わない: cycle は会計のため
-        // Discord の依頼でも autonomous lane で走るので、lane で判定すると頼まれた回まで止まる。
-        if (!ownerAsked) {
-          return "誰も話しかけていない回ではカレンダーに書かない。`propose` か `tell` で伝えて、次にユーザーが話しかけた回に頼まれてから入れる。"
+      execute: async ({ title, start, end, ownerQuote }) => {
+        // 外部書き込みは、今の owner 発言に実在する引用と、その引用内の書き込み意図を機械で照合する。
+        if (!calendarWriteAuthorized(state.ownerEvidence, ownerQuote)) {
+          return "今の owner 発言から、カレンダーへの明示的な書き込み依頼を確認できない。追加せず、必要なら依頼を確認する。"
         }
         if (!googleConfigured()) {
           return "Google 連携が未設定。`.env` に FAMULUS_GOOGLE_CLIENT_ID / FAMULUS_GOOGLE_CLIENT_SECRET を置いてから `fam google-login` を通すとつながる(手順はユーザーの作業)。"
@@ -1819,12 +1840,10 @@ export interface AssistantOptions {
   readonly onToolStep?:
     | ((tools: readonly string[], targets: Readonly<Record<string, string>>) => void)
     | undefined
-  /**
-   * この回の入力にユーザーの発話が含まれるか。cycle は spokenTo を渡す。
-   * lane では代用できない — cycle は会計のため Discord の依頼でも autonomous lane で走る。
-   * calendar_add のような「頼まれた回でだけ動く」道具の許可はこちらを見る。
-   */
-  readonly ownerAsked?: boolean | undefined
+  /** cycle が今の回で実際に読んだ owner event。外部書き込みの引用照合に使う。 */
+  readonly ownerEvidence?: readonly OwnerEvidence[] | undefined
+  /** 対話入口が自分で処理する入力の origin。cycle の未読集合と分離するために使う。 */
+  readonly inputOriginKind?: string | undefined
 }
 
 /** ツールを呼ぶ step の文は経過なので、利用者向けの最終本文には入れない。 */
@@ -1839,6 +1858,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
   const modelId = opts.model ?? appConfig().models.default
   const state: TurnState = {
     lastInputEventId: undefined,
+    ownerEvidence: opts.ownerEvidence ?? [],
     delegations: 0,
     confusion: undefined,
     recallTurn: newRecallTurn(),
@@ -1861,7 +1881,7 @@ export function createAssistant(opts: AssistantOptions = {}) {
   const agent = new ToolLoopAgent({
     model: governedModel(modelId, turnEffort !== undefined ? { reasoningEffort: turnEffort } : undefined),
     instructions: soulInstruction(),
-    tools: buildTools(state, gate, opts.ownerAsked ?? currentLane() !== "autonomous"),
+    tools: buildTools(state, gate),
     stopWhen: stepCountIs(MAX_STEPS),
     // CLI 1回が分単位なので、SDK 側の自動再試行は入れない。
     maxRetries: 0,
@@ -1883,6 +1903,9 @@ export function createAssistant(opts: AssistantOptions = {}) {
           source: own ? "system" : "owner",
           content: own ? { cyclePrompt: text } : { said: text },
           ...(own ? { text: "" } : {}),
+          ...(!own && opts.inputOriginKind
+            ? { origin: { kind: opts.inputOriginKind, id: randomUUID() } }
+            : {}),
           at: nowIso(),
         })
       }),
@@ -1907,6 +1930,12 @@ export function createAssistant(opts: AssistantOptions = {}) {
       if (gate) await gate()
       const inputEventId = await observe(input)
       state.lastInputEventId = inputEventId
+      state.ownerEvidence =
+        currentLane() === "autonomous"
+          ? (opts.ownerEvidence ?? [])
+          : inputEventId
+            ? [{ id: inputEventId, text: input }]
+            : []
       // chat は同じ assistant を使い回すので、前のターンの戸惑いと recall 台帳をここで消す。
       state.confusion = undefined
       state.recallTurn = newRecallTurn()

@@ -748,3 +748,36 @@ test("idle でも位置は進めない — 判定と入れ違いに届いたぶ�
     assert.equal(after.newEvents[0]?.content, '"入れ違い"')
   })
 })
+
+test("対話REPLが処理したowner入力はcycleの未読にせず、後続のDiscord入力は残す", async () => {
+  await withHarness(async (h) => {
+    const first = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const att = yield* Attention
+        yield* mem.remember({
+          source: "owner",
+          content: { said: "対話で処理済み" },
+          origin: { kind: "chat", id: "chat-1" },
+        })
+        return yield* att.planCycle(T0)
+      }),
+    )
+    assert.equal(first.newEvents.length, 0)
+
+    const after = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const att = yield* Attention
+        yield* mem.remember({
+          source: "owner",
+          content: "Discordから届いた",
+          origin: { kind: "discord", id: "discord-1" },
+        })
+        return yield* att.planCycle(T0)
+      }),
+    )
+    assert.equal(after.newEvents.length, 1)
+    assert.equal(after.newEvents[0]?.content, '"Discordから届いた"')
+  })
+})
