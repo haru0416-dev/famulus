@@ -999,3 +999,59 @@ test("repoPath は owner/repo を語からも URL からも取り出す", () => 
   assert.equal(repoPath(" NousResearch/hermes-agent "), "NousResearch/hermes-agent")
   assert.equal(repoPath("bun とは"), encodeURIComponent("bun とは"))
 })
+
+const PH_FEED = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title><![CDATA[Agently]]></title>
+    <link href="https://www.producthunt.com/posts/agently"/>
+    <published>2026-08-18T00:10:00Z</published>
+    <author><name>maker_a</name></author>
+    <content type="html">&lt;p&gt;AI teammates for your &amp;quot;ops&amp;quot; work&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <title>Sleepy</title>
+    <link href="https://www.producthunt.com/posts/sleepy"/>
+    <updated>2026-08-18T01:00:00Z</updated>
+    <author><name>maker_b</name></author>
+    <content type="html">&lt;p&gt;Track your naps&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <title>壊れた項目</title>
+  </entry>
+</feed>`
+
+test("ph — feed を取ってから語で絞る。検索式は URL に載らない", async () => {
+  const called: string[] = []
+  const r = await withFetch(
+    async (input: unknown) => {
+      called.push(String(input))
+      return new Response(PH_FEED, { status: 200, headers: { "content-type": "application/atom+xml" } })
+    },
+    async () => await searchSources("AI ops", { where: ["ph"] }),
+  )
+  assert.equal(called[0], "https://www.producthunt.com/feed")
+  const ph = r.find((x) => x.source === "ph")
+  assert.equal(ph?.failed, undefined)
+  // "AI ops" の両語が題+説明に当たるのは Agently だけ。link 無しの壊れた項目は落ちる。
+  assert.deepEqual(
+    ph?.hits.map((h) => h.title),
+    ["Agently"],
+  )
+  const hit = ph?.hits[0]
+  assert.equal(hit?.url, "https://www.producthunt.com/posts/agently")
+  assert.equal(hit?.by, "maker_a")
+  assert.equal(hit?.at, "2026-08-18T00:10:00Z")
+  // 二重に包まれた HTML は実体参照を解いてからタグを落とす。CDATA も題で解けている。
+  assert.equal(hit?.note, 'AI teammates for your "ops" work')
+})
+
+test("ph — 絞って0件は成功の0件として返る(失敗にしない)", async () => {
+  const r = await withFetch(
+    async () => new Response(PH_FEED, { status: 200, headers: { "content-type": "application/atom+xml" } }),
+    async () => await searchSources("存在しない語", { where: ["ph"] }),
+  )
+  const ph = r.find((x) => x.source === "ph")
+  assert.equal(ph?.failed, undefined)
+  assert.deepEqual(ph?.hits, [])
+})

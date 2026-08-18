@@ -61,6 +61,11 @@ interface Source {
    */
   readonly broaden?: (q: string, n: number) => string | readonly string[] | undefined
   readonly parse: (body: string) => readonly Hit[]
+  /**
+   * 取ってから語で絞る。検索式を受けない先(feed)用 — url は語を無視して全量を返し、
+   * こちらが perSource へ切る前に当てる。検索できる先には書かない(絞りはサーバ側が持つ)。
+   */
+  readonly sift?: (q: string, hits: readonly Hit[]) => readonly Hit[]
   /** 既定の同時検索に入れるか。 */
   readonly wide: boolean
   readonly accept?: string
@@ -327,6 +332,39 @@ const hnHits = (b: string): readonly Hit[] =>
     ]
   })
 
+/** `<![CDATA[...]]>` の中身を取り出す。タグ落とし(plain)が opener を齧るので先に解く。 */
+const unCdata = (s: string): string => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+
+/**
+ * Atom の1欄をテキストへ。feed の中身は XML 実体で二重に包まれている
+ * (`&amp;quot;` = HTML の `&quot;` の XML 表記)ので、解く → タグを落とす → もう一段解く。
+ */
+const atomText = (s: string): string => plain(plain(unCdata(s)).replace(/<[^>]+>/g, " "))
+
+/** Product Hunt の Atom を読む。XML パーサは持たないので、要る欄だけを正規表現で抜く。 */
+const phHits = (b: string): readonly Hit[] =>
+  [...b.matchAll(/<entry(?:\s[^>]*)?>([\s\S]*?)<\/entry>/g)].flatMap((m) => {
+    const e = m[1] ?? ""
+    const title = atomText(/<title[^>]*>([\s\S]*?)<\/title>/.exec(e)?.[1] ?? "")
+    const url = /<link[^>]*href="([^"]+)"/.exec(e)?.[1]
+    if (!title || !url) return []
+    const at = /<published>([^<]+)<\/published>/.exec(e)?.[1] ?? /<updated>([^<]+)<\/updated>/.exec(e)?.[1]
+    const by = atomText(/<name>([\s\S]*?)<\/name>/.exec(e)?.[1] ?? "")
+    // 末尾の「Discussion | Link」は feed が全項に付ける遷移リンクの文字列で、中身ではない。
+    const note = atomText(/<content[^>]*>([\s\S]*?)<\/content>/.exec(e)?.[1] ?? "")
+      .replace(/\s*Discussion\s*\|\s*Link\s*$/i, "")
+      .slice(0, 160)
+    return [
+      {
+        title,
+        url,
+        ...(by ? { by } : {}),
+        ...(at ? { at } : {}),
+        ...(note ? { note } : {}),
+      },
+    ]
+  })
+
 const SOURCES: readonly Source[] = [
   {
     name: "web",
@@ -547,6 +585,26 @@ const SOURCES: readonly Source[] = [
     wide: false,
     url: (q, n) => `https://hn.algolia.com/api/v1/search?query=${enc(q)}&tags=show_hn&hitsPerPage=${n}`,
     parse: hnHits,
+  },
+  {
+    name: "ph",
+    what:
+      "Product Hunt の新着(フロントページの feed)。**商業プロダクトのローンチ**を探すとき名指しで。" +
+      "検索式は無く、**直近の掲載ぶんを語で絞るだけ** — 0件は「無い」ではなく feed の窓の外かもしれない",
+    // feed に検索は無い。全量を取ってから語で絞る(sift)。公式 API(GraphQL)は
+    // トークンが要るので、votes・日次順位が要るようになったらそちらへ上げる
+    // (docs/integration-survey-2026-08-18.md の段取りと同じ: まず認証不要の形で通す)。
+    wide: false,
+    accept: "application/atom+xml,application/xml,*/*;q=0.5",
+    url: () => "https://www.producthunt.com/feed",
+    parse: phHits,
+    sift: (q, hits) => {
+      const terms = q.toLowerCase().split(/\s+/).filter(Boolean)
+      return hits.filter((h) => {
+        const hay = `${h.title} ${h.note ?? ""}`.toLowerCase()
+        return terms.every((t) => hay.includes(t))
+      })
+    },
   },
   {
     name: "job",
@@ -986,7 +1044,8 @@ export async function searchSources(
         }
         if (!res.body) throw new Error(`空の応答(HTTP ${res.status})`)
         try {
-          return s.parse(res.body).slice(0, perSource)
+          const parsed = s.parse(res.body)
+          return (s.sift ? s.sift(term, parsed) : parsed).slice(0, perSource)
         } catch (e) {
           // 形が変わった先を「0件」で流さない。読めなかったことを見えるようにする。
           throw new Error(`応答を読めなかった: ${e instanceof Error ? e.message : String(e)}`)
