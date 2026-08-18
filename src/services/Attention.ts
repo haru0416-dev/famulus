@@ -438,7 +438,8 @@ const makeAttention = () =>
         const questions = yield* openQuestions()
         const pendingRows = yield* db.all(
           `SELECT id, summary, created_at, expires_at, settled_note FROM proposals
-            WHERE status = 'proposed' ORDER BY expires_at ASC`,
+            WHERE status = 'proposed' AND expires_at > ?ORDER BY expires_at ASC`,
+          at,
         )
         const pending: PendingProposal[] = pendingRows.map((r) => ({
           id: String(r.id),

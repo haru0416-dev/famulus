@@ -553,6 +553,24 @@ test("期限が近い承認待ちは実行条件になる", async () => {
   })
 })
 
+test("期限切れのproposed行をcycleの一覧と実行条件に含めない", async () => {
+  await withHarness(async (h) => {
+    await h.run(
+      Effect.flatMap(Db, (db) =>
+        db.run(
+          `INSERT INTO proposals (id, created_at, summary, assessment, ask,
+             c_what, c_when, c_who, c_how, c_how_verified, payload, provenance, status, expires_at)
+           VALUES ('expired-p','2026-08-01T00:00:00Z','期限切れ','根拠','判断',
+                   'w','t','famulus','h','v','{}','[]','proposed','2026-08-08T00:00:00Z')`,
+        ),
+      ),
+    )
+    const plan = await h.run(planAt(T0))
+    assert.equal(plan.pending.length, 0)
+    assert.doesNotMatch(plan.reasons.join(), /承認待ち/)
+  })
+})
+
 const denied = (n: number, at: string, reason: string | null) =>
   Effect.gen(function* () {
     const db = yield* Db
