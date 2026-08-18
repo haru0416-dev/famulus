@@ -95,7 +95,11 @@ for (const d of dossiers) {
 
 const missNotes = db
   .query(
-    `SELECT COUNT(*) n FROM research_claims WHERE statement LIKE '[explore:空振り]%' OR statement LIKE '[explore:圏外]%'`,
+    `SELECT COUNT(*) n FROM research_claims
+      WHERE statement LIKE '[explore:%] 空振り:%'
+         OR statement LIKE '[explore:%] 圏外:%'
+         OR statement LIKE '[explore:空振り]%'
+         OR statement LIKE '[explore:圏外]%'`,
   )
   .get() as { n: number }
 
