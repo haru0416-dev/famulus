@@ -69,6 +69,10 @@ test("クォータは使用率の高い窓を選び、0m 窓は読まない", ()
   )
   assert.equal(only?.window, "300m")
   assert.equal(quotaFromHeaders({}, 0), undefined)
+  assert.equal(
+    quotaFromHeaders({ "x-codex-primary-used-percent": "10" }, 0, "codex-team")?.pool,
+    "codex-team",
+  )
 })
 
 /** Responses の SSE(@ai-sdk/openai 4.x の chunk schema 準拠)。 */
@@ -133,6 +137,7 @@ test("送信契約 — Bearer / account-id / originator / store:false / json_sch
   assert.equal(result.usage.inTok, 150)
   assert.equal(result.usage.cacheRead, 50)
   assert.equal(result.usage.outTok, 20)
+  assert.equal(result.model, "gpt-5.6-sol")
   assert.deepEqual(result.quota, {
     pool: CODEX_POOL,
     window: "10080m",

@@ -2,7 +2,7 @@
  * モデル id と、id から決まること。xai の Responses 実装と、その上位層が共通で参照する。
  *
  * ここに置くのは経路の実装に依存しないものだけ:
- *  - 呼べる id の一覧とpool
+ *  - 呼べる id の一覧と provider / pool
  *  - 1回の呼び出しの入出力の型
  *  - クォータシグナルと失敗の型(統治がこれを読んで再実行を抑止する)
  */
@@ -33,20 +33,35 @@ export const CODEX_POOL = "chatgpt-oauth"
 // GPT 2種は 2026-08-18 実測(精査タスク同一入力)で同判定・引用全一致・同速度(25〜46秒)。
 // reviewer は強い側の sol(最後の関門は精度優先 — Haru の判断)。luna(公表単価 output $1.2/1M)は
 // 枠が逼迫したときの交代先。
-export const MODEL_IDS = ["grok-4.6", "grok-4.3", "gpt-5.6-sol", "gpt-5.6-luna"] as const
+export const MODEL_CATALOG = {
+  "grok-4.6": { provider: "xai", pool: XAI_POOL },
+  "grok-4.3": { provider: "xai", pool: XAI_POOL },
+  "gpt-5.6-sol": { provider: "codex", pool: CODEX_POOL },
+  "gpt-5.6-luna": { provider: "codex", pool: CODEX_POOL },
+} as const
 
-export const isKnownModel = (model: string): boolean => (MODEL_IDS as readonly string[]).includes(model)
+export type ModelId = keyof typeof MODEL_CATALOG
+export type ModelProvider = (typeof MODEL_CATALOG)[ModelId]["provider"]
+
+export const MODEL_IDS = Object.keys(MODEL_CATALOG) as ModelId[]
+
+export const isKnownModel = (model: string): model is ModelId => Object.hasOwn(MODEL_CATALOG, model)
 
 /** 実行前に検査する。governedModel / Runnerのplanで1回だけ呼ぶ。 */
-export const assertKnownModel = (model: string): string => {
+export const assertKnownModel = (model: string): ModelId => {
   if (!isKnownModel(model)) {
     throw new ModelCallError(`知らないモデル id: ${model}(使えるのは ${MODEL_IDS.join(", ")})`)
   }
   return model
 }
 
-/** modelが消費する永続クォータ集計単位。経路の分岐もこの1点で決まる(Runner が読む)。 */
-export const poolForModel = (model: string): string => (model.startsWith("gpt-") ? CODEX_POOL : XAI_POOL)
+const catalogEntry = (model: string) => MODEL_CATALOG[assertKnownModel(model)]
+
+/** model の通信先。モデル名の命名規則ではなく、疎通済みの明示表だけから決める。 */
+export const providerForModel = (model: string): ModelProvider => catalogEntry(model).provider
+
+/** modelが消費する永続クォータ集計単位。通信先とは別の概念として保持する。 */
+export const poolForModel = (model: string): string => catalogEntry(model).pool
 
 /**
  * 既定のシステムプロンプト(コーディング・エージェントの前置き)を置き換える文。

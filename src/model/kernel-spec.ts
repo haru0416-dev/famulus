@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { MODEL_IDS, poolForModel } from "./models.ts"
+import { MODEL_IDS, poolForModel, providerForModel } from "./models.ts"
 import type { RuntimeSchema } from "./schema.ts"
 
 export interface GenerationRef {
@@ -34,9 +34,10 @@ const generationRef = (id: string, generation: number, value: unknown): Generati
 export const PROFILE_REFS: Readonly<Record<(typeof MODEL_IDS)[number], GenerationRef>> = Object.fromEntries(
   MODEL_IDS.map((model) => [
     model,
-    generationRef(`model:${model}`, 1, {
+    generationRef(`model:${model}`, 2, {
       formatVersion: 1,
       model,
+      provider: providerForModel(model),
       pool: poolForModel(model),
       providerExternalIo: false,
       transportRetryVisibility: "explicit",

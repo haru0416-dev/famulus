@@ -1,7 +1,7 @@
 import { homedir } from "node:os"
 import { isAbsolute, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { isKnownModel, poolForModel, XAI_POOL } from "../model/models.ts"
+import { isKnownModel, providerForModel } from "../model/models.ts"
 
 export const PROJECT_ROOT = fileURLToPath(new URL("../../", import.meta.url)).replace(/\/$/, "")
 
@@ -243,8 +243,8 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     ["FAMULUS_RESEARCH_MODEL", models.research],
   ] as const) {
     if (!isKnownModel(id)) issues.push(`${key}: 既知のmodel idが必要です: ${id}`)
-    // 対話・委譲は xai 枠のみ。GPT(chatgpt-oauth)は精査役専用 — 高頻度の役を小さい契約枠に載せない。
-    else if (poolForModel(id) !== XAI_POOL) issues.push(`${key}: 対話・委譲に使えるのは xai 系のみ: ${id}`)
+    // 対話・委譲は xai 経路のみ。GPT の Codex 経路は精査役専用 — 高頻度の役を小さい契約枠に載せない。
+    else if (providerForModel(id) !== "xai") issues.push(`${key}: 対話・委譲に使えるのは xai 系のみ: ${id}`)
   }
   const googleClientId = optional(env, "FAMULUS_GOOGLE_CLIENT_ID")
   const googleClientSecret = optional(env, "FAMULUS_GOOGLE_CLIENT_SECRET")

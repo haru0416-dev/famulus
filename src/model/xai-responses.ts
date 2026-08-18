@@ -14,18 +14,11 @@ import { createOpenAI } from "@ai-sdk/openai"
 import type {
   LanguageModelV4,
   LanguageModelV4CallOptions,
-  LanguageModelV4Content,
   LanguageModelV4GenerateResult,
   LanguageModelV4StreamPart,
 } from "@ai-sdk/provider"
-import {
-  ModelCallError,
-  type ModelCallOptions,
-  type ModelCallResult,
-  type QuotaSignal,
-  RUNTIME_PROMPT,
-  XAI_POOL,
-} from "./models.ts"
+import { ModelCallError, type ModelCallOptions, poolForModel, type QuotaSignal, XAI_POOL } from "./models.ts"
+import { callResponses, collectResponses } from "./responses-call.ts"
 import { loadXaiAccess } from "./xai-auth.ts"
 
 export const XAI_BASE_URL = "https://api.x.ai/v1"
@@ -53,13 +46,14 @@ export function classifyXaiFailure(
   status: number | undefined,
   message: string,
   nowMs: number,
+  pool: string = XAI_POOL,
 ): QuotaSignal | undefined {
   if (status === 429 || CREDIT_EXHAUSTED.test(message)) {
-    return { pool: XAI_POOL, window: "week", exhausted: true }
+    return { pool, window: "week", exhausted: true }
   }
   if (status === 403 && ENTITLEMENT_BLOCKED.test(message)) {
     return {
-      pool: XAI_POOL,
+      pool,
       window: "entitlement",
       exhausted: true,
       resetsAtMs: nowMs + ENTITLEMENT_COOLDOWN_MS,
@@ -72,74 +66,14 @@ export function classifyXaiFailure(
  * doStream の出力を1回ぶんの応答にまとめる。doGenerate と構造化呼び出しはこれで作る。
  * ストリーム中の失敗は素のまま投げ、呼び出し側の catch が toXaiError で変換する。
  */
-export async function collect(
-  stream: ReadableStream<LanguageModelV4StreamPart>,
-): Promise<Omit<LanguageModelV4GenerateResult, "warnings">> {
-  const content: LanguageModelV4Content[] = []
-  const open = new Map<string, string>()
-  let finishReason: LanguageModelV4GenerateResult["finishReason"] = { unified: "stop", raw: undefined }
-  let usage: LanguageModelV4GenerateResult["usage"] | undefined
-  let providerMetadata: LanguageModelV4GenerateResult["providerMetadata"]
-  let failure: unknown
-
-  const reader = stream.getReader()
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    switch (value.type) {
-      case "text-start":
-      case "reasoning-start":
-        open.set(value.id, "")
-        break
-      case "text-delta":
-      case "reasoning-delta":
-        open.set(value.id, (open.get(value.id) ?? "") + value.delta)
-        break
-      case "text-end":
-        content.push({ type: "text", text: open.get(value.id) ?? "" })
-        open.delete(value.id)
-        break
-      case "reasoning-end":
-        content.push({ type: "reasoning", text: open.get(value.id) ?? "" })
-        open.delete(value.id)
-        break
-      case "tool-call":
-      case "tool-result":
-      case "source":
-      case "file":
-        content.push(value)
-        break
-      case "finish":
-        finishReason = value.finishReason
-        usage = value.usage
-        providerMetadata = value.providerMetadata
-        break
-      case "error":
-        failure = value.error
-        break
-      default:
-        break
-    }
-  }
-  if (failure !== undefined) throw failure
-
-  return {
-    content,
-    finishReason,
-    usage: usage ?? {
-      inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
-      outputTokens: { total: 0, text: 0, reasoning: undefined },
-    },
-    ...(providerMetadata ? { providerMetadata } : {}),
-  }
-}
+export { collectResponses as collect }
 
 /** 上流の失敗を、統治が読める型に変換する。枯渇・誤ブロックだけクォータシグナルを付ける。 */
-function toXaiError(e: unknown): ModelCallError {
+function toXaiError(e: unknown, pool: string): ModelCallError {
   if (e instanceof ModelCallError) return e
   const status = (e as { statusCode?: number })?.statusCode
   const message = e instanceof Error ? e.message : String(e)
-  const quota = classifyXaiFailure(status, message, Date.now())
+  const quota = classifyXaiFailure(status, message, Date.now(), pool)
   return new ModelCallError(`xai: ${message}`, quota)
 }
 
@@ -159,6 +93,7 @@ export interface XaiModelOptions {
  * ゲートと会計は src/model/governed.ts の middleware が外側で適用する。これを直接使わない。
  */
 export function xaiResponsesModel(modelId: string, xaiOpts: XaiModelOptions = {}): LanguageModelV4 {
+  const pool = poolForModel(modelId)
   const provider = createOpenAI({
     baseURL: XAI_BASE_URL,
     // 認証は fetch 側で付ける。静的な文字列では refresh 後のトークンを反映できない。
@@ -210,10 +145,10 @@ export function xaiResponsesModel(modelId: string, xaiOpts: XaiModelOptions = {}
     async doGenerate(options) {
       try {
         const { stream } = await inner.doStream(prepare(options))
-        const gen = await collect(stream)
+        const gen = await collectResponses(stream)
         return { ...gen, warnings: [], providerMetadata: withMeta(gen.providerMetadata) }
       } catch (e) {
-        throw toXaiError(e)
+        throw toXaiError(e, pool)
       }
     },
 
@@ -222,7 +157,7 @@ export function xaiResponsesModel(modelId: string, xaiOpts: XaiModelOptions = {}
       try {
         result = await inner.doStream(prepare(options))
       } catch (e) {
-        throw toXaiError(e)
+        throw toXaiError(e, pool)
       }
       return {
         ...result,
@@ -246,83 +181,11 @@ export function xaiResponsesModel(modelId: string, xaiOpts: XaiModelOptions = {}
  * xAIを1回呼ぶ構造化処理の入口。src/model/Runner.tsが使う。
  * そちらは道具ループを持たないので、prompt 1つと任意の JSON Schema だけを渡す。
  */
-export async function callXai(opts: ModelCallOptions): Promise<ModelCallResult> {
-  const model = xaiResponsesModel(opts.model)
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 180_000)
-  const abort = () => controller.abort(opts.signal?.reason)
-  if (opts.signal?.aborted) abort()
-  else opts.signal?.addEventListener("abort", abort, { once: true })
-
+export async function callXai(opts: ModelCallOptions) {
+  const pool = poolForModel(opts.model)
   try {
-    const { stream } = await model.doStream({
-      prompt: [
-        { role: "system", content: opts.systemPrompt ?? RUNTIME_PROMPT },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: opts.prompt },
-            ...(opts.images ?? []).map((i) => ({
-              type: "file" as const,
-              data: { type: "data" as const, data: i.data },
-              mediaType: i.mediaType,
-            })),
-          ],
-        },
-      ],
-      abortSignal: controller.signal,
-      ...(opts.jsonSchema !== undefined
-        ? {
-            responseFormat: {
-              type: "json" as const,
-              name: "reply",
-              schema: opts.jsonSchema as Record<string, unknown>,
-            },
-          }
-        : {}),
-    })
-
-    const [a, b] = stream.tee()
-    const relay = (async () => {
-      if (!opts.onText) return
-      const reader = a.getReader()
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (value.type === "text-delta") opts.onText(value.delta)
-      }
-    })()
-    if (!opts.onText) void a.cancel()
-    const gen = await collect(b)
-    await relay
-
-    const text = gen.content.map((c) => (c.type === "text" ? c.text : "")).join("")
-    const u = gen.usage
-
-    return {
-      text,
-      ...(opts.jsonSchema !== undefined ? { structured: parseStructured(text) } : {}),
-      usage: {
-        inTok: u.inputTokens.noCache ?? 0,
-        outTok: u.outputTokens.total ?? 0,
-        cacheRead: u.inputTokens.cacheRead ?? 0,
-        cacheWrite: u.inputTokens.cacheWrite ?? 0,
-        notionalUsd: 0,
-      },
-      model: opts.model,
-    }
+    return await callResponses(xaiResponsesModel(opts.model), opts, { images: true })
   } catch (e) {
-    throw toXaiError(e)
-  } finally {
-    clearTimeout(timer)
-    opts.signal?.removeEventListener("abort", abort)
-  }
-}
-
-const parseStructured = (text: string): unknown => {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return undefined
+    throw toXaiError(e, pool)
   }
 }

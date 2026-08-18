@@ -13,7 +13,7 @@ import type { LanguageModelV4, LanguageModelV4StreamPart } from "@ai-sdk/provide
 import { afterEach, test } from "vitest"
 import { configureApp } from "../../src/core/config.ts"
 import { ModelCallError, XAI_POOL } from "../../src/model/models.ts"
-import { callXai, collect, xaiResponsesModel } from "../../src/model/xai-responses.ts"
+import { callXai, classifyXaiFailure, collect, xaiResponsesModel } from "../../src/model/xai-responses.ts"
 import { withFetch } from "../helpers.ts"
 
 const roots: string[] = []
@@ -186,6 +186,14 @@ test("429 は枯渇シグナル付きの ModelCallError になる", async () => 
   )
 })
 
+test("失敗シグナルは呼び出し元が選んだ pool を保持する", () => {
+  assert.deepEqual(classifyXaiFailure(429, "Too many requests", 0, "xai-metered"), {
+    pool: "xai-metered",
+    window: "week",
+    exhausted: true,
+  })
+})
+
 test("403 の entitlement 誤ブロックは30分の短い回避シグナルになる", async () => {
   authFile()
   const before = Date.now()
@@ -327,4 +335,54 @@ test("collect は error part を素のまま投げ直す", async () => {
   const sentinel = new Error("上流の失敗")
   const parts = [{ type: "error", error: sentinel }] as unknown as readonly LanguageModelV4StreamPart[]
   await assert.rejects(collect(streamOf(parts)), (e: unknown) => e === sentinel)
+})
+
+test("onText が失敗しても終端まで読み、後続の上流失敗を優先する", async () => {
+  const callbackError = new Error("通知失敗")
+  const upstreamError = new Error("上流の失敗")
+  const parts = [
+    { type: "text-start", id: "t1" },
+    { type: "text-delta", id: "t1", delta: "途中" },
+    { type: "error", error: upstreamError },
+  ] as unknown as readonly LanguageModelV4StreamPart[]
+  await assert.rejects(
+    collect(streamOf(parts), () => {
+      throw callbackError
+    }),
+    (error: unknown) => error === upstreamError,
+  )
+})
+
+test("上流が成功した場合は onText の失敗を返す", async () => {
+  const callbackError = new Error("通知失敗")
+  const parts = [
+    { type: "text-start", id: "t1" },
+    { type: "text-delta", id: "t1", delta: "本文" },
+    { type: "text-end", id: "t1" },
+  ] as unknown as readonly LanguageModelV4StreamPart[]
+  await assert.rejects(
+    collect(streamOf(parts), () => {
+      throw callbackError
+    }),
+    (error: unknown) => error === callbackError,
+  )
+})
+
+test("onText が undefined を投げても成功扱いにしない", async () => {
+  const parts = [
+    { type: "text-start", id: "t1" },
+    { type: "text-delta", id: "t1", delta: "本文" },
+    { type: "text-end", id: "t1" },
+  ] as unknown as readonly LanguageModelV4StreamPart[]
+  let rejected = false
+  await collect(streamOf(parts), () => {
+    throw undefined
+  }).then(
+    () => undefined,
+    (error: unknown) => {
+      rejected = true
+      assert.equal(error, undefined)
+    },
+  )
+  assert.equal(rejected, true)
 })

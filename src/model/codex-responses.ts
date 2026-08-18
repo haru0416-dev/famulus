@@ -26,11 +26,10 @@ import {
   CODEX_POOL,
   ModelCallError,
   type ModelCallOptions,
-  type ModelCallResult,
+  poolForModel,
   type QuotaSignal,
-  RUNTIME_PROMPT,
 } from "./models.ts"
-import { collect } from "./xai-responses.ts"
+import { callResponses, collectResponses } from "./responses-call.ts"
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
@@ -87,6 +86,7 @@ function readAuth(): CodexAuth {
 export function quotaFromHeaders(
   headers: Record<string, string | undefined>,
   nowMs: number,
+  pool: string = CODEX_POOL,
 ): QuotaSignal | undefined {
   const num = (k: string): number | undefined => {
     const v = headers[k]
@@ -105,7 +105,7 @@ export function quotaFromHeaders(
   if (windows.length === 0) return undefined
   const worst = windows.reduce((a, b) => ((b.usedPercent ?? 0) > (a.usedPercent ?? 0) ? b : a))
   return {
-    pool: CODEX_POOL,
+    pool,
     window: worst.window,
     ...(worst.usedPercent !== undefined ? { usedPercent: worst.usedPercent } : {}),
     ...(worst.resetsAfterSec !== undefined ? { resetsAtMs: nowMs + worst.resetsAfterSec * 1000 } : {}),
@@ -123,13 +123,13 @@ const quotaJson = (q: QuotaSignal): JSONObject => ({
 })
 
 /** 上流の失敗を、統治が読める型に変換する。429 だけはクォータシグナルを付けて返す。 */
-function toCodexError(e: unknown): ModelCallError {
+function toCodexError(e: unknown, pool: string): ModelCallError {
   if (e instanceof ModelCallError) return e
   const status = (e as { statusCode?: number })?.statusCode
   const message = e instanceof Error ? e.message : String(e)
   if (status === 429) {
     return new ModelCallError(`codex: 429(クォータ枯渇) ${message}`, {
-      pool: CODEX_POOL,
+      pool,
       window: "unknown",
       exhausted: true,
     })
@@ -142,6 +142,7 @@ function toCodexError(e: unknown): ModelCallError {
  * ゲートと会計は呼ぶ側(Runner の makeRunner)が持つ。これを直接使わない。
  */
 export function codexResponsesModel(modelId: string): LanguageModelV4 {
+  const pool = poolForModel(modelId)
   /** 呼び出しごとに生成する。トークンを毎回読み直し、応答ヘッダをこの呼び出し専用の変数へ記録するため。 */
   const build = (): { model: LanguageModelV4; quota: () => QuotaSignal | undefined } => {
     const headers: Record<string, string | undefined> = {}
@@ -170,7 +171,7 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
       }) as unknown as typeof fetch,
     })
 
-    return { model: provider.responses(modelId), quota: () => quotaFromHeaders(headers, Date.now()) }
+    return { model: provider.responses(modelId), quota: () => quotaFromHeaders(headers, Date.now(), pool) }
   }
 
   /**
@@ -204,10 +205,10 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
       const { model, quota } = build()
       try {
         const { stream } = await model.doStream(prepare(options))
-        const gen = await collect(stream)
+        const gen = await collectResponses(stream)
         return { ...gen, warnings: [], providerMetadata: withQuota(gen.providerMetadata, quota()) }
       } catch (e) {
-        throw toCodexError(e)
+        throw toCodexError(e, pool)
       }
     },
 
@@ -217,7 +218,7 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
       try {
         result = await model.doStream(prepare(options))
       } catch (e) {
-        throw toCodexError(e)
+        throw toCodexError(e, pool)
       }
       // finish にだけクォータを付ける。ヘッダは応答の先頭で届くので、この時点で取得済み。
       return {
@@ -242,77 +243,14 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
  * Codexを1回呼ぶ構造化処理の入口。src/model/Runner.tsが使う。
  * そちらは道具ループを持たないので、prompt 1つと任意の JSON Schema だけを渡す。
  */
-export async function callCodex(opts: ModelCallOptions): Promise<ModelCallResult> {
-  const model = codexResponsesModel(opts.model)
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 180_000)
-  const abort = () => controller.abort(opts.signal?.reason)
-  if (opts.signal?.aborted) abort()
-  else opts.signal?.addEventListener("abort", abort, { once: true })
-
+export async function callCodex(opts: ModelCallOptions) {
+  const pool = poolForModel(opts.model)
   try {
-    const { stream } = await model.doStream({
-      prompt: [
-        { role: "system", content: opts.systemPrompt ?? RUNTIME_PROMPT },
-        { role: "user", content: [{ type: "text", text: opts.prompt }] },
-      ],
-      abortSignal: controller.signal,
-      ...(opts.jsonSchema !== undefined
-        ? {
-            responseFormat: {
-              type: "json" as const,
-              name: "reply",
-              schema: opts.jsonSchema as Record<string, unknown>,
-            },
-          }
-        : {}),
+    return await callResponses(codexResponsesModel(opts.model), opts, {
+      images: false,
+      quota: (metadata) => (metadata?.[CODEX_PROVIDER_META] as { quota?: QuotaSignal } | undefined)?.quota,
     })
-
-    const [a, b] = stream.tee()
-    const relay = (async () => {
-      if (!opts.onText) return
-      const reader = a.getReader()
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (value.type === "text-delta") opts.onText(value.delta)
-      }
-    })()
-    if (!opts.onText) void a.cancel()
-    const gen = await collect(b)
-    await relay
-
-    const text = gen.content.map((c) => (c.type === "text" ? c.text : "")).join("")
-    const meta = gen.providerMetadata?.[CODEX_PROVIDER_META] as { quota?: QuotaSignal } | undefined
-    const u = gen.usage
-
-    return {
-      text,
-      ...(opts.jsonSchema !== undefined ? { structured: parseStructured(text) } : {}),
-      usage: {
-        inTok: u.inputTokens.noCache ?? 0,
-        outTok: u.outputTokens.total ?? 0,
-        cacheRead: u.inputTokens.cacheRead ?? 0,
-        cacheWrite: u.inputTokens.cacheWrite ?? 0,
-        // 定額クォータで、上流は金額を返さない。
-        notionalUsd: 0,
-      },
-      ...(meta?.quota ? { quota: meta.quota } : {}),
-      model: opts.model,
-    }
   } catch (e) {
-    throw toCodexError(e)
-  } finally {
-    clearTimeout(timer)
-    opts.signal?.removeEventListener("abort", abort)
-  }
-}
-
-/** 構造化応答の本文。スキーマを渡した回は JSON が本文として返る。解析できなければ undefined を返す。 */
-function parseStructured(text: string): unknown {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return undefined
+    throw toCodexError(e, pool)
   }
 }

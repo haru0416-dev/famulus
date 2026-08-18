@@ -9,7 +9,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime"
 import * as v from "valibot"
 import { test } from "vitest"
 import { PROFILE_REFS, profileRefForModel } from "../../src/model/kernel-spec.ts"
-import { assertKnownModel, poolForModel } from "../../src/model/models.ts"
+import { assertKnownModel, poolForModel, providerForModel } from "../../src/model/models.ts"
 import { ROLE_MODEL, Runner, RunnerLive } from "../../src/model/Runner.ts"
 import { rs } from "../../src/model/schema.ts"
 import { makeAppLayer } from "../../src/runtime.ts"
@@ -174,7 +174,10 @@ test("production Runnerは任意model IDをprovider I/O前に拒否する", asyn
 
 test("production roleの全modelに固定Profileがある", () => {
   for (const model of Object.values(ROLE_MODEL)) {
-    assert.equal(profileRefForModel(model), PROFILE_REFS[model as keyof typeof PROFILE_REFS])
+    const profile = profileRefForModel(model)
+    assert.equal(profile, PROFILE_REFS[model as keyof typeof PROFILE_REFS])
+    assert.equal(profile.generation, 2)
+    assert.equal(JSON.parse(profile.snapshot).provider, providerForModel(model))
   }
 })
 
@@ -182,9 +185,13 @@ test("production roleの全modelに固定Profileがある", () => {
  * 混在 routing の要点。経路とクォータはモデルで決まる。
  * 環境変数1つで決めていた頃は、GPT に切り替えると対話まで別経路になった。
  */
-test("全modelが同じSuperGrokクォータに載る", () => {
+test("全modelの provider と pool は明示表から決まる", () => {
+  assert.equal(providerForModel("grok-4.3"), "xai")
+  assert.equal(providerForModel("gpt-5.6-sol"), "codex")
   assert.equal(poolForModel("grok-4.3"), "supergrok-oauth")
   assert.equal(poolForModel("grok-4.6"), "supergrok-oauth")
+  assert.equal(poolForModel("gpt-5.6-sol"), "chatgpt-oauth")
+  assert.throws(() => providerForModel("claude-opus-4"), /知らないモデル id/)
 })
 
 /**

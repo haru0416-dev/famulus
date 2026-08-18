@@ -22,15 +22,18 @@ import { callCodex } from "./codex-responses.ts"
 import { digestOf, profileRefForModel } from "./kernel-spec.ts"
 import {
   assertKnownModel,
-  CODEX_POOL,
   ModelCallError,
+  type ModelProvider,
   poolForModel,
+  providerForModel,
   type QuotaSignal,
   RUNTIME_PROMPT,
 } from "./models.ts"
 import type { RuntimeSchema } from "./schema.ts"
 import { traceOf } from "./trace.ts"
 import { callXai } from "./xai-responses.ts"
+
+const PROVIDER_CALL = { xai: callXai, codex: callCodex } satisfies Record<ModelProvider, typeof callXai>
 
 export type Role = "structurer" | "scout" | "reviewer" | "looker"
 
@@ -319,9 +322,8 @@ export const RunnerLive = Layer.effect(
   makeRunner(
     (req, p) =>
       Effect.tryPromise({
-        // 経路は pool で分岐する。モデル名の前方一致(poolForModel)が唯一の分岐点。
         try: (abort) =>
-          (poolForModel(p.model) === CODEX_POOL ? callCodex : callXai)({
+          PROVIDER_CALL[providerForModel(p.model)]({
             prompt: req.prompt,
             model: p.model,
             systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,
