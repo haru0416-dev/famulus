@@ -141,6 +141,24 @@ test("送信契約 — Bearer / account-id / originator / store:false / json_sch
   })
 })
 
+test("呼び出し前に中断済みの signal を provider へそのまま伝える", async () => {
+  authFile({ access_token: "at-1", account_id: "acc-1" })
+  let forwardedAborted = false
+  await withFetch(
+    async (_input: unknown, init?: RequestInit) => {
+      forwardedAborted = init?.signal?.aborted === true
+      throw new DOMException("中断された", "AbortError")
+    },
+    async () => {
+      await assert.rejects(
+        callCodex({ prompt: "p", model: "gpt-5.6-sol", signal: AbortSignal.abort("止める") }),
+        (e: unknown) => e instanceof ModelCallError,
+      )
+    },
+  )
+  assert.equal(forwardedAborted, true)
+})
+
 test("429 は枯渇シグナル付きの失敗になる", async () => {
   authFile({ access_token: "at-1" })
   await withFetch(

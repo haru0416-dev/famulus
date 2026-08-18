@@ -87,3 +87,35 @@ test("governedModel は知らない id と、xai 以外の pool を組み立て�
   assert.throws(() => governedModel("gpt-5.6-sol"), /xai 系のみ/)
   assert.equal(governedModel("grok-4.3").modelId, "grok-4.3")
 })
+
+test("日次上限1で並行したprovider呼び出しは1件だけ実行する", async () => {
+  await run(
+    Effect.flatMap(Db, (db) =>
+      Effect.all([
+        db.run("DELETE FROM ledger"),
+        db.run("DELETE FROM schema_meta WHERE key='governance:run-claims'"),
+      ]),
+    ),
+  )
+  process.env.FAMULUS_DAILY_RUNS = "1"
+  process.env.FAMULUS_AUTONOMOUS_RUNS = "1"
+  configureApp()
+  let entered = 0
+  const model: LanguageModelV4 = {
+    ...okModel(false),
+    async doGenerate() {
+      entered++
+      return okModel(false).doGenerate(OPTS)
+    },
+  }
+  try {
+    const wrapped = wrapLanguageModel({ model, middleware: governance() })
+    const results = await Promise.allSettled([wrapped.doGenerate(OPTS), wrapped.doGenerate(OPTS)])
+    assert.equal(results.filter((r) => r.status === "fulfilled").length, 1)
+    assert.equal(entered, 1)
+  } finally {
+    delete process.env.FAMULUS_DAILY_RUNS
+    delete process.env.FAMULUS_AUTONOMOUS_RUNS
+    configureApp()
+  }
+})

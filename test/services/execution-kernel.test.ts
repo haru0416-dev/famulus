@@ -5,10 +5,12 @@ import { join } from "node:path"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as ManagedRuntime from "effect/ManagedRuntime"
+import * as v from "valibot"
 import { test } from "vitest"
 import { KEEPER_SCHEMA, keep } from "../../src/agent/keeper.ts"
 import { profileRefForModel, resultContractRef, ZERO_SKILL_PLAN_JSON } from "../../src/model/kernel-spec.ts"
 import { Runner } from "../../src/model/Runner.ts"
+import { rs } from "../../src/model/schema.ts"
 import { Db, DbLive } from "../../src/services/Db.ts"
 import { ExecutionKernel } from "../../src/services/ExecutionKernel.ts"
 import { withHarness } from "../helpers.ts"
@@ -210,6 +212,53 @@ test("同じrequestだけ成功済みresponseを再利用し別requestはprovide
     },
     [{ text: "first" }, { text: "second" }],
   ))
+
+test("schema不適合の応答はfailedにして、同じrequestの再試行をproviderへ送る", () => {
+  const schema = rs(v.object({ ok: v.boolean() }))
+  return withHarness(
+    async (h) => {
+      const context = await h.run(
+        Effect.flatMap(ExecutionKernel, (kernel) =>
+          kernel.openSingleLoop({
+            owner: { kind: "test", id: "schema-retry" },
+            stableSlot: "worker",
+            role: "structurer",
+            profile: profileRefForModel("grok-4.3"),
+            resultContract: resultContractRef("schema-retry-v1", schema),
+            taskInput: {},
+            deadlineAtMs: Date.now() + 45_000,
+            budget: { modelCalls: 2, toolCalls: 0, tokens: 2000, costMicrousd: 200_000 },
+            modelTokenAllowance: 1000,
+            modelCostAllowanceMicrousd: 100_000,
+          }),
+        ),
+      )
+      const run = Effect.flatMap(Runner, (runner) =>
+        runner.run({ role: "structurer", kind: "schema-retry", prompt: "x", schema, execution: context }),
+      )
+      const first = await h.fail(run)
+      assert.match(String((first as { message?: string }).message), /schema に合わない/)
+      const second = await h.run(run)
+      assert.deepEqual(second.structured, { ok: true })
+      assert.equal(h.calls.length, 2)
+      assert.deepEqual(
+        await h.run(
+          Effect.flatMap(Db, (db) =>
+            db.all("SELECT attempt_ordinal,state FROM model_attempts ORDER BY attempt_ordinal"),
+          ),
+        ),
+        [
+          { attempt_ordinal: 1, state: "failed" },
+          { attempt_ordinal: 2, state: "succeeded" },
+        ],
+      )
+    },
+    [
+      { text: "", structured: { ok: "yes" } },
+      { text: "", structured: { ok: true } },
+    ],
+  )
+})
 
 test("予約超過でも実使用量を保存してattemptを終端化する", () =>
   withHarness(

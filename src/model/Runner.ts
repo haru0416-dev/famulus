@@ -11,7 +11,11 @@ import * as Layer from "effect/Layer"
 import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown } from "../core/errors.ts"
 import { RunnerFailed } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
-import { ExecutionKernel, type KernelLoopContext } from "../services/ExecutionKernel.ts"
+import {
+  ExecutionKernel,
+  type KernelLoopContext,
+  type ModelAttemptToken,
+} from "../services/ExecutionKernel.ts"
 import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { callCodex } from "./codex-responses.ts"
@@ -118,6 +122,7 @@ const makeRunner = (
 
     const run = (req: RunnerRequest) =>
       Effect.gen(function* () {
+        const lane = currentLane()
         const p = yield* Effect.try({
           try: () => plan(req.role),
           catch: (error) =>
@@ -140,7 +145,7 @@ const makeRunner = (
               new RunnerFailed({ pool: p.pool, message: "実行modelと固定済みProfileが一致しない" }),
             )
         }
-        const at = nowIso()
+        let at = nowIso()
         const requestDigest = digestOf({
           model: p.model,
           prompt: req.prompt,
@@ -153,6 +158,7 @@ const makeRunner = (
           ? yield* kernel.replayModelResult(req.execution, requestDigest)
           : undefined
         let out: Omit<RunnerResult, "model">
+        let attempt: ModelAttemptToken | undefined
         if (replay) {
           const stored = replay as Partial<RunnerResult>
           if (stored.model !== p.model || typeof stored.text !== "string" || !stored.usage)
@@ -165,11 +171,10 @@ const makeRunner = (
           }
         } else {
           // ゲート。失敗チャネルに拒否が載るので、ここを通らずに下へは行けない。
-          yield* gov.precheck({ pool: p.pool, at, nowMs: Date.now(), lane: currentLane() })
+          yield* gov.precheck({ pool: p.pool, at, nowMs: Date.now(), lane })
+          at = yield* gov.claimRun({ lane })
 
-          const attempt = req.execution
-            ? yield* kernel.startModelAttempt(req.execution, requestDigest)
-            : undefined
+          attempt = req.execution ? yield* kernel.startModelAttempt(req.execution, requestDigest) : undefined
           out = yield* exec(req, p).pipe(
             // 失敗でもクォータシグナルが取れていれば必ず再実行を抑止する。
             // 抑止しないとリセット前のクォータへ毎 run 再試行する。
@@ -184,7 +189,7 @@ const makeRunner = (
                     outcome: "unknown",
                     ledger: {
                       kind: req.kind,
-                      role: accountingRole(req.role),
+                      role: accountingRole(req.role, lane),
                       model: p.model,
                       inTok: 0,
                       outTok: 0,
@@ -196,7 +201,7 @@ const makeRunner = (
                   })
                 : ledger.record({
                     kind: "model-failed",
-                    role: accountingRole(req.role),
+                    role: accountingRole(req.role, lane),
                     model: p.model,
                     usage: { inTok: 0, outTok: 0, cacheRead: 0, cacheWrite: 0 },
                     summary: traceOf(error.message),
@@ -206,46 +211,58 @@ const makeRunner = (
             ),
           )
 
-          if (attempt) {
-            yield* kernel.finishModelAttempt(attempt, {
-              outcome: "succeeded",
-              tokens: out.usage.inTok + out.usage.outTok + out.usage.cacheRead + out.usage.cacheWrite,
-              costMicrousd: Math.ceil(out.usage.notionalUsd * 1_000_000),
-              response: { ...out, model: p.model },
-              ledger: {
-                kind: req.kind,
-                role: accountingRole(req.role),
-                model: p.model,
-                inTok: out.usage.inTok,
-                outTok: out.usage.outTok,
-                cacheRead: out.usage.cacheRead,
-                cacheWrite: out.usage.cacheWrite,
-                summary: traceOf(out.text),
-                provenance: { pool: p.pool, notionalUsd: out.usage.notionalUsd },
-                at,
-              },
-            })
-          }
-
           if (out.quota) yield* gov.noteQuota(out.quota, at, Date.now())
         }
 
         const checked = req.schema?.validate(out.structured)
+        const ledgerInput = {
+          kind: req.kind,
+          role: accountingRole(req.role, lane),
+          model: p.model,
+          inTok: out.usage.inTok,
+          outTok: out.usage.outTok,
+          cacheRead: out.usage.cacheRead,
+          cacheWrite: out.usage.cacheWrite,
+          summary: traceOf(out.text),
+          provenance: {
+            pool: p.pool,
+            notionalUsd: out.usage.notionalUsd,
+            ...(checked && !checked.success ? { outcome: "schema-invalid" } : {}),
+          },
+          at,
+        }
+        const tokens = out.usage.inTok + out.usage.outTok + out.usage.cacheRead + out.usage.cacheWrite
+        const costMicrousd = Math.ceil(out.usage.notionalUsd * 1_000_000)
+
+        if (attempt) {
+          yield* kernel.finishModelAttempt(
+            attempt,
+            checked && !checked.success
+              ? { outcome: "failed", tokens, costMicrousd, ledger: ledgerInput }
+              : {
+                  outcome: "succeeded",
+                  tokens,
+                  costMicrousd,
+                  response: { ...out, model: p.model },
+                  ledger: ledgerInput,
+                },
+          )
+        }
 
         if (!req.execution)
           yield* ledger.record({
-            kind: req.kind,
-            role: accountingRole(req.role), // role を入れないと日次 run 数の上限を適用できない
-            model: p.model,
+            kind: ledgerInput.kind,
+            role: ledgerInput.role, // role を入れないと日次 run 数の上限を適用できない
+            model: ledgerInput.model,
             usage: {
-              inTok: out.usage.inTok,
-              outTok: out.usage.outTok,
-              cacheRead: out.usage.cacheRead,
-              cacheWrite: out.usage.cacheWrite,
+              inTok: ledgerInput.inTok,
+              outTok: ledgerInput.outTok,
+              cacheRead: ledgerInput.cacheRead,
+              cacheWrite: ledgerInput.cacheWrite,
             },
-            summary: traceOf(out.text),
-            provenance: { pool: p.pool, notionalUsd: out.usage.notionalUsd },
-            at,
+            summary: ledgerInput.summary,
+            provenance: ledgerInput.provenance,
+            at: ledgerInput.at,
           })
 
         if (checked && !checked.success) {

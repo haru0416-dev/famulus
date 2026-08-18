@@ -276,6 +276,24 @@ test("timeoutMs で中断され ModelCallError になる", async () => {
   )
 })
 
+test("呼び出し前に中断済みの signal を provider へそのまま伝える", async () => {
+  authFile()
+  let forwardedAborted = false
+  await withFetch(
+    async (_input: unknown, init?: RequestInit) => {
+      forwardedAborted = init?.signal?.aborted === true
+      throw new DOMException("中断された", "AbortError")
+    },
+    async () => {
+      await assert.rejects(
+        callXai({ prompt: "p", model: "grok-4.3", signal: AbortSignal.abort("止める") }),
+        (e: unknown) => e instanceof ModelCallError,
+      )
+    },
+  )
+  assert.equal(forwardedAborted, true)
+})
+
 const streamOf = (parts: readonly LanguageModelV4StreamPart[]): ReadableStream<LanguageModelV4StreamPart> =>
   new ReadableStream({
     start(controller) {

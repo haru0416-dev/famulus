@@ -21,29 +21,35 @@ import * as Effect from "effect/Effect"
 import { describeRefusal } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { isRefusal, run } from "../runtime.ts"
-import { accountingRole, currentLane, Governance } from "../services/Governance.ts"
+import { accountingRole, currentLane, Governance, type Lane } from "../services/Governance.ts"
 import { Ledger } from "../services/Ledger.ts"
 import { assertKnownModel, ModelCallError, poolForModel, XAI_POOL } from "./models.ts"
 import { traceOf } from "./trace.ts"
 import { XAI_PROVIDER_META, type XaiModelOptions, xaiResponsesModel } from "./xai-responses.ts"
 
 /** 呼ぶ前の検査。拒否は Error にして投げる — 道具ループの外まで理由付きで出る。 */
-async function gate(model: string): Promise<void> {
-  const refusal = await run(
-    Effect.gen(function* () {
-      const gov = yield* Governance
-      yield* gov.precheck({
-        // production modelは全て同じ永続クォータ集計単位に載る。
-        pool: poolForModel(model),
-        at: nowIso(),
-        nowMs: Date.now(),
-        lane: currentLane(),
-      })
-      return undefined
-    }).pipe(Effect.catch((e) => Effect.succeed(e))),
-  )
-  if (refusal === undefined) return
-  throw new Error(isRefusal(refusal) ? describeRefusal(refusal) : `${refusal._tag}: ${refusal.message}`)
+async function gate(model: string): Promise<{ readonly at: string; readonly lane: Lane }> {
+  try {
+    return await run(
+      Effect.gen(function* () {
+        const gov = yield* Governance
+        const lane = currentLane()
+        yield* gov.precheck({
+          // production modelは全て同じ永続クォータ集計単位に載る。
+          pool: poolForModel(model),
+          at: nowIso(),
+          nowMs: Date.now(),
+          lane,
+        })
+        return { at: yield* gov.claimRun({ lane }), lane }
+      }),
+    )
+  } catch (refusal) {
+    if (isRefusal(refusal)) throw new Error(describeRefusal(refusal))
+    const tag = typeof refusal === "object" && refusal !== null && "_tag" in refusal ? refusal._tag : "Error"
+    const message = refusal instanceof Error ? refusal.message : String(refusal)
+    throw new Error(`${String(tag)}: ${message}`)
+  }
 }
 
 /**
@@ -56,14 +62,15 @@ async function account(
   usage: { inTok: number; outTok: number; cacheRead: number; cacheWrite: number },
   text: string,
   notionalUsd: number,
+  at: string,
+  lane: Lane,
 ): Promise<void> {
-  const at = nowIso()
   await run(
     Effect.gen(function* () {
       const ledger = yield* Ledger
       yield* ledger.record({
         kind: "turn",
-        role: accountingRole("dialogue"),
+        role: accountingRole("dialogue", lane),
         model,
         usage,
         summary: traceOf(text),
@@ -75,8 +82,7 @@ async function account(
 }
 
 /** 失敗してもクォータシグナルが取れていれば、リセット時刻まで再実行を抑止する。 */
-async function noteFailure(model: string, e: unknown): Promise<void> {
-  const at = nowIso()
+async function noteFailure(model: string, e: unknown, at: string, lane: Lane): Promise<void> {
   await run(
     Effect.gen(function* () {
       const gov = yield* Governance
@@ -84,7 +90,7 @@ async function noteFailure(model: string, e: unknown): Promise<void> {
       if (e instanceof ModelCallError && e.quota) yield* gov.noteQuota(e.quota, at, Date.now())
       yield* ledger.record({
         kind: "model-failed",
-        role: accountingRole("dialogue"),
+        role: accountingRole("dialogue", lane),
         model,
         usage: { inTok: 0, outTok: 0, cacheRead: 0, cacheWrite: 0 },
         summary: traceOf(e instanceof Error ? e.message : String(e)),
@@ -109,12 +115,12 @@ export function governance(): LanguageModelV4Middleware {
       throw new Error("stream 経路は統治(事前検査・会計)を通らない。generate を使う")
     },
     async wrapGenerate({ doGenerate, model }) {
-      await gate(model.modelId)
+      const claim = await gate(model.modelId)
       let result: Awaited<ReturnType<typeof doGenerate>>
       try {
         result = await doGenerate()
       } catch (e) {
-        await noteFailure(model.modelId, e)
+        await noteFailure(model.modelId, e, claim.at, claim.lane)
         throw e
       }
       const meta = result.providerMetadata?.[XAI_PROVIDER_META]
@@ -129,6 +135,8 @@ export function governance(): LanguageModelV4Middleware {
         },
         result.content.map((c) => (c.type === "text" ? c.text : "")).join(""),
         typeof meta?.notionalUsd === "number" ? meta.notionalUsd : 0,
+        claim.at,
+        claim.lane,
       )
       return result
     },

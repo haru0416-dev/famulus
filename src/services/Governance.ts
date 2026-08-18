@@ -11,12 +11,12 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { appConfig } from "../core/config.ts"
-import { DailyRunLimit, Halt, QuotaCooldown } from "../core/errors.ts"
+import { DailyRunLimit, DbFailed, Halt, QuotaCooldown } from "../core/errors.ts"
 import type { QuotaSignal } from "../model/models.ts"
 
 export type { QuotaSignal }
 
-import { localDayRange } from "../core/time.ts"
+import { localDayRange, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
 export interface QuotaState {
@@ -49,8 +49,8 @@ export const setLane = (next: Lane): void => {
 }
 export const currentLane = (): Lane => lane
 
-export const accountingRole = (role: string): string =>
-  currentLane() === "autonomous" ? AUTONOMOUS_ROLE : role
+export const accountingRole = (role: string, forLane: Lane = currentLane()): string =>
+  forLane === "autonomous" ? AUTONOMOUS_ROLE : role
 
 /** 使用率がこれ以上なら再実行を抑止する。期限はシグナルのリセット時刻、取得できなければ1時間後。 */
 export const QUOTA_WARN_PERCENT = 97
@@ -93,9 +93,62 @@ export interface PrecheckOptions {
   readonly lane?: Lane
 }
 
+interface RunClaimState {
+  readonly version: 1
+  readonly day: string
+  readonly total: number
+  readonly autonomous: number
+}
+
+const RUN_CLAIMS_KEY = "governance:run-claims"
+
+const parseRunClaims = (raw: string | undefined, currentDay: string): RunClaimState | undefined => {
+  if (raw === undefined) return undefined
+  const value = JSON.parse(raw) as Partial<RunClaimState>
+  if (
+    value.version !== 1 ||
+    typeof value.day !== "string" ||
+    !Number.isSafeInteger(value.total) ||
+    !Number.isSafeInteger(value.autonomous) ||
+    (value.total ?? -1) < 0 ||
+    (value.autonomous ?? -1) < 0 ||
+    (value.autonomous ?? 0) > (value.total ?? -1)
+  ) {
+    throw new Error("run claim state is invalid")
+  }
+  if (value.day > currentDay) throw new Error(`run claim state is from the future: ${value.day}`)
+  return value as RunClaimState
+}
+
 const makeGovernance = () =>
   Effect.gen(function* () {
     const db = yield* Db
+
+    const effectiveRunCounts = (at: string) =>
+      Effect.gen(function* () {
+        const day = localDayRange(at)
+        const rows = yield* db.get(
+          `SELECT COUNT(*) total,
+                  SUM(CASE WHEN role=? THEN 1 ELSE 0 END) autonomous
+             FROM ledger WHERE role IS NOT NULL AND at>=? AND at<?`,
+          AUTONOMOUS_ROLE,
+          day.startIso,
+          day.endIso,
+        )
+        const raw = yield* db.meta(RUN_CLAIMS_KEY)
+        const stored = yield* Effect.try({
+          try: () => parseRunClaims(raw, day.key),
+          catch: (error) => new DbFailed({ op: "read run claims", message: String(error) }),
+        })
+        const ledgerTotal = Number(rows?.total ?? 0)
+        const ledgerAutonomous = Number(rows?.autonomous ?? 0)
+        return {
+          day,
+          total: stored?.day === day.key ? Math.max(stored.total, ledgerTotal) : ledgerTotal,
+          autonomous:
+            stored?.day === day.key ? Math.max(stored.autonomous, ledgerAutonomous) : ledgerAutonomous,
+        }
+      })
 
     const readHalt = Effect.gen(function* () {
       const value = yield* db.meta("halt")
@@ -176,32 +229,62 @@ const makeGovernance = () =>
         // 想定外の従量課金を示すが、定額利用ではそうではない。
         // ここで halt を立てると、翌日には自動で戻るはずの上限が、人が `fam resume` を打つまで
         // 対話まで含めた全停止として残る(3b の自律実行上限で halt を設定しないのと同じ判断)。
-        const day = localDayRange(opts.at)
-        const row = yield* db.get(
-          "SELECT COUNT(*)n FROM ledger WHERE role IS NOT NULL AND at >= ?AND at < ?",
-          day.startIso,
-          day.endIso,
-        )
-        const runs = Number(row?.n ?? 0)
-        if (runs >= config.dailyRuns) {
-          return yield* Effect.fail(new DailyRunLimit({ count: runs, limit: config.dailyRuns }))
+        const counts = yield* effectiveRunCounts(opts.at)
+        if (counts.total >= config.dailyRuns) {
+          return yield* Effect.fail(new DailyRunLimit({ count: counts.total, limit: config.dailyRuns }))
         }
 
         // 3b. 自律実行上限 — cycle が対話用の実行回数まで消費しないよう分離する。
         // ここでは halt を設定しない。自律実行が日次上限に達しただけで人との対話まで止めるのは行き過ぎで、
         // 翌日には自動で戻るべきもの(halt は人が解除するまで解除されない)。
         if (opts.lane === "autonomous") {
-          const a = yield* db.get(
-            "SELECT COUNT(*)n FROM ledger WHERE role = ?AND at >= ?AND at < ?",
-            AUTONOMOUS_ROLE,
-            day.startIso,
-            day.endIso,
-          )
-          const auto = Number(a?.n ?? 0)
-          if (auto >= config.autonomousRuns) {
-            return yield* Effect.fail(new DailyRunLimit({ count: auto, limit: config.autonomousRuns }))
+          if (counts.autonomous >= config.autonomousRuns) {
+            return yield* Effect.fail(
+              new DailyRunLimit({ count: counts.autonomous, limit: config.autonomousRuns }),
+            )
           }
         }
+      })
+
+    /** provider I/O 直前に日次枠を1つ確保する。失敗やcrashも実行開始1回として数える。 */
+    const claimRun = (
+      opts: { readonly lane?: Lane; readonly at?: string } = {},
+      config: BudgetConfig = appConfig().governance,
+    ) =>
+      db.withImmediateTransaction<string, DailyRunLimit>("claim daily model run", (tx, abort) => {
+        const at = opts.at ?? nowIso()
+        const day = localDayRange(at)
+        const rows = tx.get(
+          `SELECT COUNT(*) total,
+                  SUM(CASE WHEN role=? THEN 1 ELSE 0 END) autonomous
+             FROM ledger WHERE role IS NOT NULL AND at>=? AND at<?`,
+          AUTONOMOUS_ROLE,
+          day.startIso,
+          day.endIso,
+        )
+        const raw = tx.get("SELECT value FROM schema_meta WHERE key=?", RUN_CLAIMS_KEY)?.value
+        const stored = parseRunClaims(typeof raw === "string" ? raw : undefined, day.key)
+        const ledgerTotal = Number(rows?.total ?? 0)
+        const ledgerAutonomous = Number(rows?.autonomous ?? 0)
+        const total = stored?.day === day.key ? Math.max(stored.total, ledgerTotal) : ledgerTotal
+        const autonomous =
+          stored?.day === day.key ? Math.max(stored.autonomous, ledgerAutonomous) : ledgerAutonomous
+        if (total >= config.dailyRuns) abort(new DailyRunLimit({ count: total, limit: config.dailyRuns }))
+        if (opts.lane === "autonomous" && autonomous >= config.autonomousRuns) {
+          abort(new DailyRunLimit({ count: autonomous, limit: config.autonomousRuns }))
+        }
+        const next: RunClaimState = {
+          version: 1,
+          day: day.key,
+          total: total + 1,
+          autonomous: autonomous + (opts.lane === "autonomous" ? 1 : 0),
+        }
+        tx.run(
+          "INSERT OR REPLACE INTO schema_meta(key,value) VALUES (?,?)",
+          RUN_CLAIMS_KEY,
+          JSON.stringify(next),
+        )
+        return at
       })
 
     return {
@@ -211,6 +294,7 @@ const makeGovernance = () =>
       quotaCooldown,
       noteQuota,
       precheck,
+      claimRun,
     } as const
   })
 

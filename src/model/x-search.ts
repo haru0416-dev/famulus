@@ -167,13 +167,15 @@ export const xSearch = (
     const gov = yield* Governance
     const ledger = yield* Ledger
     const model = AGENT_PROFILES["x-search"].model()
-    const at = nowIso()
+    const lane = currentLane()
+    let at = nowIso()
     const body = yield* Effect.try({
       try: () => buildXSearchBody(opts, model),
       catch: (e) => new RunnerFailed({ pool: XAI_POOL, message: e instanceof Error ? e.message : String(e) }),
     })
 
-    yield* gov.precheck({ pool: XAI_POOL, at, nowMs: Date.now(), lane: currentLane() })
+    yield* gov.precheck({ pool: XAI_POOL, at, nowMs: Date.now(), lane })
+    at = yield* gov.claimRun({ lane })
 
     const result = yield* Effect.tryPromise({
       try: async () => {
@@ -214,7 +216,7 @@ export const xSearch = (
       Effect.tapError((e) =>
         ledger.record({
           kind: "x-search",
-          role: accountingRole("x_search"),
+          role: accountingRole("x_search", lane),
           model,
           usage: { inTok: 0, outTok: 0, cacheRead: 0, cacheWrite: 0 },
           summary: traceOf(e.message),
@@ -226,7 +228,7 @@ export const xSearch = (
 
     yield* ledger.record({
       kind: "x-search",
-      role: accountingRole("x_search"), // role を入れないと日次 run 数の上限を適用できない
+      role: accountingRole("x_search", lane), // role を入れないと日次 run 数の上限を適用できない
       model,
       usage: result.usage,
       summary: traceOf(result.answer),

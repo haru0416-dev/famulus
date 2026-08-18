@@ -246,7 +246,9 @@ export async function callCodex(opts: ModelCallOptions): Promise<ModelCallResult
   const model = codexResponsesModel(opts.model)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 180_000)
-  opts.signal?.addEventListener("abort", () => controller.abort(), { once: true })
+  const abort = () => controller.abort(opts.signal?.reason)
+  if (opts.signal?.aborted) abort()
+  else opts.signal?.addEventListener("abort", abort, { once: true })
 
   try {
     const { stream } = await model.doStream({
@@ -302,6 +304,7 @@ export async function callCodex(opts: ModelCallOptions): Promise<ModelCallResult
     throw toCodexError(e)
   } finally {
     clearTimeout(timer)
+    opts.signal?.removeEventListener("abort", abort)
   }
 }
 

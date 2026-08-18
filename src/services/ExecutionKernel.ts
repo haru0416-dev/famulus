@@ -72,6 +72,12 @@ export type ModelAttemptFinish =
       readonly response: unknown
       readonly ledger: ModelAttemptLedgerInput
     }
+  | {
+      readonly outcome: "failed"
+      readonly tokens: number
+      readonly costMicrousd: number
+      readonly ledger: ModelAttemptLedgerInput
+    }
   | { readonly outcome: "unknown"; readonly ledger: ModelAttemptLedgerInput }
 
 export interface OpenSingleLoopInput {
@@ -243,7 +249,7 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
               })
             const recoveredAt = nowIso()
             const interrupted = tx.all(
-              `SELECT m.id,l.role,l.profile_snapshot
+              `SELECT m.id,m.started_at,l.role,l.profile_snapshot
                  FROM model_attempts m
                  JOIN loop_attempts a ON a.id=m.loop_attempt_id
                  JOIN loop_specs l ON l.id=a.loop_id
@@ -268,7 +274,7 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
                    (id,at,kind,role,model,in_tok,out_tok,cache_read,cache_write,summary,provenance,model_attempt_id)
                  VALUES (?,?,'recovered-model-attempt',?,?,0,0,0,0,NULL,?,?)`,
                 randomUUID(),
-                recoveredAt,
+                attempt.started_at,
                 attempt.role,
                 profile.model,
                 canonicalJson({ outcome: "unknown", recovered: true }),
@@ -492,10 +498,11 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
       db.withImmediateTransaction(`finish model attempt ${finish.outcome}`, (tx) => {
         assertCurrent(tx, token.context, false)
         const at = nowIso()
-        const actualTokens = finish.outcome === "succeeded" ? finish.tokens : 0
-        const actualCostMicrousd = finish.outcome === "succeeded" ? finish.costMicrousd : 0
+        const known = finish.outcome !== "unknown"
+        const actualTokens = known ? finish.tokens : 0
+        const actualCostMicrousd = known ? finish.costMicrousd : 0
         const overrun =
-          finish.outcome === "succeeded" &&
+          known &&
           (actualTokens > token.context.modelTokenAllowance ||
             actualCostMicrousd > token.context.modelCostAllowanceMicrousd)
         const attempt = tx.run(
@@ -503,8 +510,8 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
             WHERE id=? AND state='started' AND request_digest=?`,
           finish.outcome,
           finish.outcome === "succeeded" ? canonicalJson(finish.response) : null,
-          finish.outcome === "succeeded" ? actualTokens : null,
-          finish.outcome === "succeeded" ? actualCostMicrousd : null,
+          known ? actualTokens : null,
+          known ? actualCostMicrousd : null,
           at,
           token.id,
           token.requestDigest,

@@ -187,6 +187,22 @@ test("自走が枠を使い切っても対話は止まらない(仕切りであ�
   })
 })
 
+test("並行claimは日次上限を超えず、ledger未記帳のclaimもprecheckが見る", async () => {
+  await withHarness(async (h) => {
+    const config: BudgetConfig = { dailyRuns: 1, autonomousRuns: 1 }
+    const claim = Effect.flatMap(Governance, (gov) => gov.claimRun({ at: AT, lane: "interactive" }, config))
+    const results = await Promise.allSettled([h.run(claim), h.run(claim)])
+    assert.equal(results.filter((r) => r.status === "fulfilled").length, 1)
+    const rejected = results.find((r) => r.status === "rejected")
+    assert.equal((rejected as PromiseRejectedResult).reason._tag, "DailyRunLimit")
+
+    const e = await h.fail(
+      Effect.flatMap(Governance, (gov) => gov.precheck({ ...base, at: AT, nowMs: NOW }, config)),
+    )
+    assert.equal((e as { _tag: string })._tag, "DailyRunLimit")
+  })
+})
+
 test("外部データは境界マーカーで囲まれ、owner の指示と混ざらない", () => {
   const plain = buildFencedPrompt("要約して", [])
   assert.equal(plain, "要約して")
