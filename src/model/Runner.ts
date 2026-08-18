@@ -44,9 +44,11 @@ export const ROLE_MODEL: Record<Role, string> = {
   // (keepGrounded)。scout と同じ性質で対話ごとに通るため、処理量を抑えたmodelに置く。
   structurer: "grok-4.3",
   // 下書きの精査(assistant の draft)。外に出る前の最後の検査。「書いた側と別の系列」(ADR 0031)
-  // — 書き手は grok なので、精査は GPT(ChatGPT Pro 再契約の chatgpt-oauth 枠)。
-  // Pro x5 の小さい枠だが、精査は1日1〜数回なので載る。`codex login`(CLI)が資格情報の入口。
-  reviewer: "gpt-5.6-sol",
+  // — 書き手は grok なので、精査は GPT(ChatGPT Pro x5 の chatgpt-oauth 枠)。
+  // luna を選ぶのは単価(公表 output $1.2/1M)が sol より安く、小さい枠の消費を抑えるため。
+  // 品質は同一入力の実測で sol と同判定・引用全一致、判定は2走とも「直す」で安定(25〜45秒)。
+  // sol は MODEL_IDS に残してあり、luna 障害時は1行で戻せる。`codex login`(CLI)が資格情報の入口。
+  reviewer: "gpt-5.6-luna",
   scout: "grok-4.3", // 取り込みの構造化。引用を写す役(Intake.ingest)
   // 受け取った画像の記述(src/agent/vision.ts)。記述は言い換えなので確定値には昇格させない。
   looker: "grok-4.3",

@@ -30,8 +30,8 @@ export const CODEX_POOL = "chatgpt-oauth"
  * どちらも実行を開始した後なので、cycle なら1回ぶんの実行が失敗として残る。
  * 入口で失敗させれば、起動した時点で理由が読める。
  */
-// gpt-5.6-luna は 2026-08-18 実測(精査タスク同一入力): sol と同判定・同件数・引用全一致・同速度
-// (45〜46秒)。同じ chatgpt-oauth 枠なので切り替えの得は無く、sol 障害時の代替と2票制の候補として登録だけ。
+// GPT 2種は 2026-08-18 実測(精査タスク同一入力)で同判定・引用全一致・同速度(25〜46秒)。
+// reviewer は luna(公表単価 output $1.2/1M が sol より安く、x5 枠の消費を抑える)。sol は代替。
 export const MODEL_IDS = ["grok-4.6", "grok-4.3", "gpt-5.6-sol", "gpt-5.6-luna"] as const
 
 export const isKnownModel = (model: string): boolean => (MODEL_IDS as readonly string[]).includes(model)

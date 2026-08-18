@@ -115,7 +115,7 @@ test("profile ごとのモデル配線は既定 config で固定される", () =
       keeper: "grok-4.3",
       dream: "grok-4.3",
       scout: "grok-4.3",
-      reviewer: "gpt-5.6-sol",
+      reviewer: "gpt-5.6-luna",
     })
   } finally {
     configureApp()
