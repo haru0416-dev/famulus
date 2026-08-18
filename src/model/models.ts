@@ -31,7 +31,8 @@ export const CODEX_POOL = "chatgpt-oauth"
  * 入口で失敗させれば、起動した時点で理由が読める。
  */
 // GPT 2種は 2026-08-18 実測(精査タスク同一入力)で同判定・引用全一致・同速度(25〜46秒)。
-// reviewer は luna(公表単価 output $1.2/1M が sol より安く、x5 枠の消費を抑える)。sol は代替。
+// reviewer は強い側の sol(最後の関門は精度優先 — Haru の判断)。luna(公表単価 output $1.2/1M)は
+// 枠が逼迫したときの交代先。
 export const MODEL_IDS = ["grok-4.6", "grok-4.3", "gpt-5.6-sol", "gpt-5.6-luna"] as const
 
 export const isKnownModel = (model: string): boolean => (MODEL_IDS as readonly string[]).includes(model)
