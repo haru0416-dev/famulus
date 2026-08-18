@@ -132,14 +132,19 @@ export interface OwnerEvidence {
   readonly text: string
 }
 
-const CALENDAR_SUBJECT = /(?:カレンダー|予定(?:表)?|スケジュール|calendar)/i
-const CALENDAR_WRITE = /(?:入れ|追加|登録|作成|作って|書き込|載せ|反映|承認|進めて|お願い|頼む|やって)/
+const CALENDAR_DIRECT =
+  /(?:(?:カレンダー|予定表|スケジュール)(?:に|へ)[^。！？]{0,24}(?:入れ|追加|登録|作成|書き込|載せ|反映)|(?:カレンダー|予定表|スケジュール)(?:を)?(?:追加|登録|作成)|カレンダーの予定を(?:入れ|追加|登録|作成)|予定を(?:入れ|追加|登録|作成))/i
+const CALENDAR_APPROVAL =
+  /(?:カレンダー|予定表|スケジュール)(?:の|への|に関する|についての)?(?:件|予定|追加|登録|書き込み)?(?:を|は|、|,)?(?:承認(?:する)?|進めて|実行して|やって)/i
+const CALENDAR_NEGATION =
+  /(?:ないで|なくて|しない|していない|頼んでいない|お願いしていない|不要|禁止|やめ|取り消)/
 
 /** 今の owner 発言から写した、Calendar への書き込み依頼だけを通す。 */
 export function calendarWriteAuthorized(evidence: readonly OwnerEvidence[], quote: string): boolean {
   const compact = (value: string) => value.replace(/\s/g, "")
   const cited = compact(quote)
-  if (cited.length < 4 || !CALENDAR_SUBJECT.test(cited) || !CALENDAR_WRITE.test(cited)) return false
+  if (cited.length < 4 || CALENDAR_NEGATION.test(cited)) return false
+  if (!CALENDAR_DIRECT.test(cited) && !CALENDAR_APPROVAL.test(cited)) return false
   return evidence.some((item) => compact(item.text).includes(cited))
 }
 

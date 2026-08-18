@@ -136,8 +136,36 @@ test("ユーザーが話す入口はどちらも keeper を通す", () => {
 test("calendar書込は今のowner eventの原文と書込意図が揃ったときだけ許可する", () => {
   const evidence = [{ id: "owner-1", text: "8月24日の病院をカレンダーに入れて" }]
   assert.equal(calendarWriteAuthorized(evidence, "病院をカレンダーに入れて"), true)
+  assert.equal(
+    calendarWriteAuthorized(
+      [{ id: "owner-approval", text: "カレンダーの件、承認する" }],
+      "カレンダーの件、承認する",
+    ),
+    true,
+  )
   assert.equal(calendarWriteAuthorized(evidence, "歯医者をカレンダーに入れて"), false)
   assert.equal(calendarWriteAuthorized(evidence, "カレンダーの予定を教えて"), false)
+  assert.equal(
+    calendarWriteAuthorized(
+      [{ id: "owner-negative", text: "病院はカレンダーに入れないで" }],
+      "病院はカレンダーに入れないで",
+    ),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized(
+      [{ id: "owner-3", text: "カレンダーの予定を教えて。追加情報もほしい" }],
+      "カレンダーの予定を教えて。追加情報もほしい",
+    ),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized(
+      [{ id: "owner-2", text: "カレンダーの予定を教えてお願い" }],
+      "カレンダーの予定を教えてお願い",
+    ),
+    false,
+  )
 })
 
 test("自由文のツール結果は親モデルへの指示と分離する", () => {
