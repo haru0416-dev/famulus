@@ -492,17 +492,21 @@ const makeMemory = () =>
           toBlob(vec),
           wide,
         )
-        const rows: EventRow[] = []
-        for (const hit of hits) {
-          const row = yield* db.get(
-            `SELECT e.*, f.text AS text, ${IS_CURRENT} AS is_current FROM events e
-               JOIN events_fts f ON f.event_id = e.id
-              WHERE e.rowid = ? AND e.content IS NOT NULL ${exclude ? "AND e.id <> ?" : ""}`,
-            ...(exclude ? [Number(hit.rowid), exclude] : [Number(hit.rowid)]),
-          )
-          if (row) rows.push(row as unknown as EventRow)
-        }
-        return rows
+        if (hits.length === 0) return [] as EventRow[]
+        const rowids = hits.map((hit) => Number(hit.rowid))
+        const rows = yield* db.all(
+          `SELECT e.*, f.text AS text, ${IS_CURRENT} AS is_current FROM events e
+             JOIN events_fts f ON f.event_id = e.id
+            WHERE e.rowid IN (${rowids.map(() => "?").join(",")})
+              AND e.content IS NOT NULL ${exclude ? "AND e.id <> ?" : ""}`,
+          ...rowids,
+          ...(exclude ? [exclude] : []),
+        )
+        const byRowid = new Map(rows.map((row) => [Number(row.seq), row as unknown as EventRow]))
+        return rowids.flatMap((rowid) => {
+          const row = byRowid.get(rowid)
+          return row ? [row] : []
+        })
       })
 
     const recall = (query: string, limit = 10, exclude?: string) =>

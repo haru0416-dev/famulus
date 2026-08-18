@@ -874,3 +874,22 @@ test("意味検索の回収路でも今のターンの入力は返さない(excl
     assert.ok(!others.some((r) => r.id === self), "自分の入力が意味検索で返っている")
   })
 })
+
+test("意味検索は複数候補をKNN順位のまま一括取得する", async () => {
+  await withHarness(async (h) => {
+    const hits = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        yield* mem.remember({ content: "問題空間の誤定義を検証した", at: "2026-08-08T09:00:00Z" })
+        yield* mem.remember({ content: "問題設定の定義を検証した", at: "2026-08-08T09:01:00Z" })
+        yield* mem.remember({ content: "ポケカ販売サイトを設計した", at: "2026-08-08T09:02:00Z" })
+        return yield* mem.recall("誤前提 定義問題", 3)
+      }),
+    )
+    assert.equal(hits.length, 3)
+    assert.match(String(hits[0]?.text ?? ""), /問題設定/)
+    assert.ok(hits.some((row) => String(row.text ?? "").includes("問題設定")))
+    assert.ok(hits.some((row) => String(row.text ?? "").includes("誤定義")))
+    assert.ok(hits.every((row) => !("vector_rowid" in row)))
+  })
+})
