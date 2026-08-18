@@ -112,6 +112,23 @@ export interface NewEvent {
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
 const HAS_TIME_ZONE = /(?:Z|[+-]\d{2}:\d{2})$/i
+const LOCAL_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?$/
+const ZONED_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i
+
+const validDate = (value: string): boolean => {
+  if (!DATE_ONLY.test(value)) return false
+  const [year, month, day] = value.split("-").map(Number)
+  const date = new Date(Date.UTC(year as number, (month as number) - 1, day))
+  return date.toISOString().slice(0, 10) === value
+}
+
+const timeMs = (value: string): number => {
+  if (!ZONED_DATE_TIME.test(value) && !LOCAL_DATE_TIME.test(value))
+    throw new Error(`日時が ISO 日時ではない: ${value}`)
+  const parsed = Date.parse(HAS_TIME_ZONE.test(value) ? value : `${value}Z`)
+  if (!Number.isFinite(parsed)) throw new Error(`日時が ISO 日時ではない: ${value}`)
+  return parsed
+}
 
 /** Google の終日 end は排他(翌日の日付)。 */
 const nextDay = (date: string): string => {
@@ -122,22 +139,33 @@ const nextDay = (date: string): string => {
 
 const oneHourAfter = (start: string): string => {
   const zoned = HAS_TIME_ZONE.test(start)
-  const parsed = Date.parse(zoned ? start : `${start}Z`)
-  if (!Number.isFinite(parsed)) throw new Error(`開始日時が ISO 日時ではない: ${start}`)
+  const parsed = timeMs(start)
   const end = new Date(parsed + 3_600_000).toISOString()
   return zoned ? end : end.replace(/\.000Z$/, "").replace(/Z$/, "")
 }
 
 /** API へ送る形。挙動が分かれる(終日/時刻・end 省略)ので純関数に切って検査する。 */
 export function buildEventBody(input: NewEvent, timeZone: string): Record<string, unknown> {
+  const title = input.title.trim()
+  if (title === "") throw new Error("予定の題が空")
   if (DATE_ONLY.test(input.start)) {
+    if (!validDate(input.start)) throw new Error(`開始日が実在しない: ${input.start}`)
+    if (input.end !== undefined && !DATE_ONLY.test(input.end)) throw new Error("終日の終了は日付で指定する")
+    if (input.end !== undefined && !validDate(input.end)) throw new Error(`終了日が実在しない: ${input.end}`)
+    if (input.end !== undefined && input.end < input.start) throw new Error("終了日は開始日以降が必要")
     const endDate = input.end && DATE_ONLY.test(input.end) ? nextDay(input.end) : nextDay(input.start)
-    return { summary: input.title, start: { date: input.start }, end: { date: endDate } }
+    return { summary: title, start: { date: input.start }, end: { date: endDate } }
   }
+  if (input.end !== undefined && DATE_ONLY.test(input.end))
+    throw new Error("時刻ありの終了は ISO 日時で指定する")
+  if (input.end !== undefined && HAS_TIME_ZONE.test(input.start) !== HAS_TIME_ZONE.test(input.end))
+    throw new Error("開始と終了はタイムゾーン表記を揃える")
+  const startMs = timeMs(input.start)
   // 帯なしの日時は famulus 側のタイムゾーンとして送る。帯付きなら Google がそちらを読む。
   const endTime = input.end ?? oneHourAfter(input.start)
+  if (timeMs(endTime) <= startMs) throw new Error("終了日時は開始日時より後が必要")
   return {
-    summary: input.title,
+    summary: title,
     start: { dateTime: input.start, timeZone },
     end: { dateTime: endTime, timeZone },
   }

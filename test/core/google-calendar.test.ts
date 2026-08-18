@@ -174,6 +174,32 @@ test("buildEventBody: 終日は排他 end、帯なし日時の end 省略は同�
   const local = buildEventBody({ title: "病院", start: "2026-08-24T10:00:00" }, "Asia/Tokyo")
   assert.deepEqual(local.start, { dateTime: "2026-08-24T10:00:00", timeZone: "Asia/Tokyo" })
   assert.deepEqual(local.end, { dateTime: "2026-08-24T11:00:00", timeZone: "Asia/Tokyo" })
+  assert.throws(() => buildEventBody({ title: " ", start: "2026-08-24" }, "Asia/Tokyo"), /題が空/)
+  assert.throws(() => buildEventBody({ title: "病院", start: "2026-02-31" }, "Asia/Tokyo"), /実在しない/)
+  assert.throws(
+    () => buildEventBody({ title: "病院", start: "2026-08-24Z" }, "Asia/Tokyo"),
+    /ISO 日時ではない/,
+  )
+  assert.throws(
+    () => buildEventBody({ title: "病院", start: "2026-08-24", end: "2026-08-23" }, "Asia/Tokyo"),
+    /開始日以降/,
+  )
+  assert.throws(
+    () =>
+      buildEventBody(
+        { title: "病院", start: "2026-08-24T10:00:00+09:00", end: "2026-08-24T09:00:00+09:00" },
+        "Asia/Tokyo",
+      ),
+    /開始日時より後/,
+  )
+  assert.throws(
+    () =>
+      buildEventBody(
+        { title: "病院", start: "2026-08-24T08:00:00Z", end: "2026-08-24T16:00:00" },
+        "Asia/Tokyo",
+      ),
+    /タイムゾーン表記を揃える/,
+  )
 })
 
 test("insert は本文を POST し、応答の予定を link 付きで返す", async () => {

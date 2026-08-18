@@ -140,18 +140,105 @@ export interface OwnerEvidence {
 
 const CALENDAR_DIRECT =
   /(?:(?:カレンダー|予定表|スケジュール)(?:に|へ)[^。！？]{0,24}(?:入れ|追加|登録|作成|書き込|載せ|反映)|(?:カレンダー|予定表|スケジュール)(?:を)?(?:追加|登録|作成)|カレンダーの予定を(?:入れ|追加|登録|作成)|予定を(?:入れ|追加|登録|作成))/i
-const CALENDAR_APPROVAL =
-  /(?:カレンダー|予定表|スケジュール)(?:の|への|に関する|についての)?(?:件|予定|追加|登録|書き込み)?(?:を|は|、|,)?(?:承認(?:する)?|進めて|実行して|やって)/i
 const CALENDAR_NEGATION =
-  /(?:ないで|なくて|しない|していない|頼んでいない|お願いしていない|不要|禁止|やめ|取り消)/
+  /(?:ないで|なくて|でなく|ではなく|じゃなく|しない|していない|頼んでいない|お願いしていない|不要|禁止|やめ|取り消|キャンセル)/
 
-/** 今の owner 発言から写した、Calendar への書き込み依頼だけを通す。 */
-export function calendarWriteAuthorized(evidence: readonly OwnerEvidence[], quote: string): boolean {
-  const compact = (value: string) => value.replace(/\s/g, "")
-  const cited = compact(quote)
-  if (cited.length < 4 || CALENDAR_NEGATION.test(cited)) return false
-  if (!CALENDAR_DIRECT.test(cited) && !CALENDAR_APPROVAL.test(cited)) return false
-  return evidence.some((item) => compact(item.text).includes(cited))
+export interface CalendarWriteRequest {
+  readonly title: string
+  readonly start: string
+  readonly whenSource: string
+}
+
+const compact = (value: string): string => value.normalize("NFKC").replace(/\s/g, "")
+
+const calendarTimeGrounded = (start: string, source: string, nowMs: number = Date.now()): boolean => {
+  const parsed = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(start)
+  if (!parsed) return false
+  const [, year, month, day, hour, minute] = parsed
+  const y = Number(year)
+  const m = Number(month)
+  const d = Number(day)
+  const h = hour === undefined ? undefined : Number(hour)
+  const min = minute === undefined ? undefined : Number(minute)
+  const text = compact(source)
+  const currentYear = Number(
+    new Intl.DateTimeFormat("en-US", { timeZone: appConfig().timeZone, year: "numeric" }).format(nowMs),
+  )
+  const explicitDatePresent = [
+    `${y}年${m}月${d}日`,
+    `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+    `${y}/${m}/${d}`,
+  ].some((candidate) => text.includes(candidate))
+  if (!explicitDatePresent && y !== currentYear) return false
+  const datePresent = [
+    ...(explicitDatePresent ? ["explicit"] : []),
+    `${m}月${d}日`,
+    `${m}/${d}`,
+    `${String(m).padStart(2, "0")}/${String(d).padStart(2, "0")}`,
+  ].some((candidate) => text.includes(candidate))
+  if (!datePresent) return false
+  if (h === undefined || min === undefined) return true
+  if (h < 12 && text.includes(`午後${h}時`)) return false
+  if (h >= 12 && text.includes(`午前${h - 12}時`)) return false
+  const timePresent = [
+    `${h}時${min === 0 ? "" : `${min}分`}`,
+    ...(h >= 12 ? [`午後${h === 12 ? 12 : h - 12}時${min === 0 ? "" : `${min}分`}`] : []),
+    ...(h < 12 ? [`午前${h}時${min === 0 ? "" : `${min}分`}`] : []),
+    `${h}:${String(min).padStart(2, "0")}`,
+    `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`,
+  ].some((candidate) => text.includes(candidate))
+  if (!timePresent) return false
+  if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(start)) return true
+  const instant = Date.parse(start)
+  if (!Number.isFinite(instant)) return false
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: appConfig().timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(instant)
+      .map((part) => [part.type, part.value]),
+  )
+  return (
+    Number(parts.year) === y &&
+    Number(parts.month) === m &&
+    Number(parts.day) === d &&
+    Number(parts.hour) === h &&
+    Number(parts.minute) === min
+  )
+}
+
+/** 最新の owner 原文全体と書込み内容が同じ依頼に根拠を持つ場合だけ通す。 */
+export function calendarWriteAuthorized(
+  evidence: readonly OwnerEvidence[],
+  request: CalendarWriteRequest,
+): boolean {
+  const latest = evidence.at(-1)
+  if (!latest) return false
+  const text = compact(latest.text)
+  if (CALENDAR_NEGATION.test(text) || !CALENDAR_DIRECT.test(text)) return false
+  const title = compact(request.title)
+  const whenSource = compact(request.whenSource)
+  if (title.length < 2 || whenSource.length < 4) return false
+  const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const dateToken = `(?:(?:\\d{4}年)?\\d{1,2}月\\d{1,2}日|\\d{1,4}[-/]\\d{1,2}(?:[-/]\\d{1,2})?)`
+  const timeToken = `(?:(?:午前|午後)?\\d{1,2}(?:時(?:\\d{1,2}分)?|:\\d{2}))?`
+  const datedTitle = `${dateToken}${timeToken}(?:の|に|は)?${escapedTitle}(?:の予定)?`
+  const writeVerb = `(?:入れて|追加して|登録して|作成して|書き込んで|載せて|反映して)(?:ください|ほしい|くれる|もらえる)?`
+  const calendarTitleDirect = new RegExp(
+    `^(?:${datedTitle}を(?:カレンダー|予定表|スケジュール)(?:に|へ)${writeVerb}|(?:カレンダー|予定表|スケジュール)(?:に|へ)${datedTitle}を${writeVerb})[。！]?$`,
+  )
+  const dateMentions =
+    whenSource.match(/(?:\d{4}年)?\d{1,2}月\d{1,2}日|\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,2})?/g) ?? []
+  if (dateMentions.length !== 1) return false
+  if (text !== whenSource || !calendarTitleDirect.test(whenSource) || !CALENDAR_DIRECT.test(whenSource))
+    return false
+  return calendarTimeGrounded(request.start, request.whenSource)
 }
 
 /**
@@ -1004,8 +1091,8 @@ function buildTools(state: TurnState, gate: ToolGate) {
 
     calendar_add: tool({
       description:
-        "Google カレンダーに予定を1件入れる。**今の回のユーザー発言が、カレンダーへの追加・登録・承認を明言した場合だけ**使える。" +
-        "その発言から、書き込み意図を含む箇所の原文引用を渡す。日時が曖昧なら先に確かめる。" +
+        "Google カレンダーに予定を1件入れる。**今の回のユーザー発言が、題と絶対日時を含む追加・登録を明言した場合だけ**使える。" +
+        "その発言から題・日付・時刻・書込み動詞を同じ断片に含む原文を whenSource に渡す。日時が曖昧なら先に確かめる。" +
         "明示的な依頼が無い回は `propose` か `tell` で伝え、依頼を待つ。",
       inputSchema: vs(
         v.object({
@@ -1015,16 +1102,17 @@ function buildTools(state: TurnState, gate: ToolGate) {
             v.description("開始。時刻ありは ISO 日時(例 2026-08-24T10:00:00+09:00)、終日は YYYY-MM-DD。"),
           ),
           end: v.pipe(v.optional(v.string()), v.description("終了。省くと時刻ありは1時間後、終日は同日。")),
-          ownerQuote: v.pipe(
+          whenSource: v.pipe(
             v.string(),
-            v.description("その発言からそのまま写した、カレンダーへの追加・登録・承認を明言する箇所。"),
+            v.description(
+              "今の発言からそのまま写した、予定の題・日付・時刻・書込み動詞を同じ断片に含む箇所。",
+            ),
           ),
         }),
       ),
-      execute: async ({ title, start, end, ownerQuote }) => {
-        // 外部書き込みは、今の owner 発言に実在する引用と、その引用内の書き込み意図を機械で照合する。
-        if (!calendarWriteAuthorized(state.ownerEvidence, ownerQuote)) {
-          return "今の owner 発言から、カレンダーへの明示的な書き込み依頼を確認できない。追加せず、必要なら依頼を確認する。"
+      execute: async ({ title, start, end, whenSource }) => {
+        if (!calendarWriteAuthorized(state.ownerEvidence, { title, start, whenSource })) {
+          return "今の owner 発言全体から、題・日時を含むカレンダーへの明示的な書き込み依頼を確認できない。追加せず、必要なら絶対日時で依頼を確認する。"
         }
         if (!googleConfigured()) {
           return "Google 連携が未設定。`.env` に FAMULUS_GOOGLE_CLIENT_ID / FAMULUS_GOOGLE_CLIENT_SECRET を置いてから `fam google-login` を通すとつながる(手順はユーザーの作業)。"
@@ -1275,7 +1363,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
         "取得したコードや手順を実際に動かし、停止した処理段階・失敗した実行経路・要った時間を記録するのに使う。" +
         "隔離されたコンテナ(docker)の中で走るので、**ユーザーのファイルにも DB にも触れない**。" +
         "書けるのは永続作業ディレクトリ(workspace)だけで、コンテナは毎回捨てられる — 残るのは workspace に置いたファイルだけ。" +
-        "既定では外部ネットワークへ接続できない。clone や install が要るときだけ net を true にする。" +
+        "既定では外部ネットワークへ接続できない。clone や install が要るときだけ net を true にする。trueでも接続先は公開IPだけで、ホスト・LAN・private addressには届かない。" +
         "入っているもの: node / npm / npx / python3 / pip / venv / uv / git / curl / jq / rg / make / gcc。" +
         "**apt は通らない**(非 root)。python は uv か pip、それ以外は npx で足りる範囲でやる。" +
         "取得したパッケージのキャッシュ(npm / pip / uv)は workspace 間で共有されるので、二度目は取得し直さない。" +

@@ -138,39 +138,166 @@ test("ユーザーが話す入口はどちらも keeper を通す", () => {
   assert.match(chat, /run\(\s*keep\(\{/)
   assert.match(chat, /inputOriginKind:\s*"chat"/)
   assert.doesNotMatch(chat, /completeCycle/)
-  assert.match(read("src/cycle.ts"), /run\(\s*keep\(\{/)
+  assert.match(read("src/cycle.ts"), /run\(keep\(keepInput\)\)/)
 })
 
 test("calendar書込は今のowner eventの原文と書込意図が揃ったときだけ許可する", () => {
   const evidence = [{ id: "owner-1", text: "8月24日の病院をカレンダーに入れて" }]
-  assert.equal(calendarWriteAuthorized(evidence, "病院をカレンダーに入れて"), true)
   assert.equal(
-    calendarWriteAuthorized(
-      [{ id: "owner-approval", text: "カレンダーの件、承認する" }],
-      "カレンダーの件、承認する",
-    ),
+    calendarWriteAuthorized(evidence, {
+      title: "病院",
+      start: "2026-08-24",
+      whenSource: "8月24日の病院をカレンダーに入れて",
+    }),
     true,
   )
-  assert.equal(calendarWriteAuthorized(evidence, "歯医者をカレンダーに入れて"), false)
-  assert.equal(calendarWriteAuthorized(evidence, "カレンダーの予定を教えて"), false)
+  assert.equal(
+    calendarWriteAuthorized([{ id: "owner-approval", text: "カレンダーの件、承認する" }], {
+      title: "病院",
+      start: "2026-08-24T10:00:00+09:00",
+      whenSource: "8月24日10時の病院",
+    }),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized(evidence, { title: "歯医者", start: "2026-08-24", whenSource: "8月24日の病院" }),
+    false,
+  )
   assert.equal(
     calendarWriteAuthorized(
-      [{ id: "owner-negative", text: "病院はカレンダーに入れないで" }],
-      "病院はカレンダーに入れないで",
+      [{ id: "owner-negative", text: "『8月24日の病院をカレンダーに入れて』という文章だが、入れないで" }],
+      { title: "病院", start: "2026-08-24", whenSource: "8月24日の病院" },
+    ),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized([{ id: "owner-time", text: "8月24日10時の病院をカレンダーに入れて" }], {
+      title: "病院",
+      start: "2026-08-24T11:00:00+09:00",
+      whenSource: "8月24日10時の病院",
+    }),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized(
+      [
+        { id: "owner-positive", text: "8月24日10時の病院をカレンダーに入れて" },
+        { id: "owner-cancel", text: "やっぱりやめて" },
+      ],
+      { title: "病院", start: "2026-08-24T10:00:00+09:00", whenSource: "8月24日10時の病院" },
+    ),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized([{ id: "owner-zone", text: "8月24日10時の病院をカレンダーに入れて" }], {
+      title: "病院",
+      start: "2026-08-24T10:00:00Z",
+      whenSource: "8月24日10時の病院",
+    }),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized([{ id: "owner-year", text: "8月24日10時の病院をカレンダーに入れて" }], {
+      title: "病院",
+      start: "2027-08-24T10:00:00+09:00",
+      whenSource: "8月24日10時の病院",
+    }),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized([{ id: "owner-title", text: "8月24日10時に病院をカレンダーに入れて" }], {
+      title: "8",
+      start: "2026-08-24T10:00:00+09:00",
+      whenSource: "8月24日10時に病院",
+    }),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized(
+      [{ id: "owner-title-year", text: "2027年問題の会議を8月24日10時にカレンダーに入れて" }],
+      {
+        title: "2027年問題の会議",
+        start: "2027-08-24T10:00:00+09:00",
+        whenSource: "2027年問題の会議を8月24日10時",
+      },
     ),
     false,
   )
   assert.equal(
     calendarWriteAuthorized(
-      [{ id: "owner-3", text: "カレンダーの予定を教えて。追加情報もほしい" }],
-      "カレンダーの予定を教えて。追加情報もほしい",
+      [{ id: "owner-unrelated", text: "2026年8月24日10時は病院。歯医者をカレンダーに入れて" }],
+      {
+        title: "病院",
+        start: "2026-08-24T10:00:00+09:00",
+        whenSource: "2026年8月24日10時は病院",
+      },
     ),
     false,
   )
   assert.equal(
     calendarWriteAuthorized(
-      [{ id: "owner-2", text: "カレンダーの予定を教えてお願い" }],
-      "カレンダーの予定を教えてお願い",
+      [{ id: "owner-unrelated-full", text: "2026年8月24日10時は病院の予定。歯医者をカレンダーに入れて" }],
+      {
+        title: "病院",
+        start: "2026-08-24T10:00:00+09:00",
+        whenSource: "2026年8月24日10時は病院の予定。歯医者をカレンダーに入れて",
+      },
+    ),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized(
+      [
+        {
+          id: "owner-unrelated-comma",
+          text: "8月24日の病院を予約済みで、8月25日の歯医者をカレンダーに入れて",
+        },
+      ],
+      {
+        title: "病院",
+        start: "2026-08-24",
+        whenSource: "8月24日の病院を予約済みで、8月25日の歯医者をカレンダーに入れて",
+      },
+    ),
+    false,
+  )
+  for (const text of [
+    "8月24日の病院は予約済みで、歯医者をカレンダーに入れて",
+    "8月24日は病院。歯医者をカレンダーに入れて",
+    "8月24日の病院でなく歯医者をカレンダーに入れて",
+  ])
+    assert.equal(
+      calendarWriteAuthorized([{ id: "owner-date-unrelated", text }], {
+        title: "歯医者",
+        start: "2026-08-24",
+        whenSource: text,
+      }),
+      false,
+    )
+  assert.equal(
+    calendarWriteAuthorized([{ id: "owner-afternoon", text: "8月24日午後3時の病院をカレンダーに入れて" }], {
+      title: "病院",
+      start: "2026-08-24T03:00:00+09:00",
+      whenSource: "8月24日午後3時の病院をカレンダーに入れて",
+    }),
+    false,
+  )
+  assert.equal(
+    calendarWriteAuthorized([{ id: "owner-afternoon", text: "8月24日午後3時の病院をカレンダーに入れて" }], {
+      title: "病院",
+      start: "2026-08-24T15:00:00+09:00",
+      whenSource: "8月24日午後3時の病院をカレンダーに入れて",
+    }),
+    true,
+  )
+  assert.equal(
+    calendarWriteAuthorized(
+      [{ id: "owner-cancel-word", text: "8月24日10時の病院をカレンダーに入れて、はキャンセルで" }],
+      {
+        title: "病院",
+        start: "2026-08-24T10:00:00+09:00",
+        whenSource: "8月24日10時の病院をカレンダーに入れて",
+      },
     ),
     false,
   )
