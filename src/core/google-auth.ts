@@ -17,8 +17,15 @@ import { appConfig } from "./config.ts"
 const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 const REDIRECT_URI = "http://localhost:1/"
-/** 予定の読み書きだけ。Gmail 等を足すときは別途スコープを増やして再ログインする。 */
-const SCOPE = "https://www.googleapis.com/auth/calendar.events"
+/**
+ * 予定の読み書きと、メールの読み取りのみ。送信・変更のスコープは持たない —
+ * 外へ出る操作は famulus の承認機構の外に置かない。スコープを変えたら再ログインが要る
+ * (既存トークンは旧スコープのまま。API は 403 insufficient scopes を返す)。
+ */
+const SCOPE = [
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/gmail.readonly",
+].join(" ")
 
 /** access の期限のこの手前で更新する。access は1時間有効なので5分の余裕で足りる。 */
 const REFRESH_SKEW_MS = 5 * 60 * 1000

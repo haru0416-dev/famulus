@@ -66,6 +66,8 @@ export const PARENT_TOOLS: readonly string[] = [
   "card",
   "calendar",
   "calendar_add",
+  "gmail",
+  "gmail_read",
   "budget",
   "confusion",
 ]

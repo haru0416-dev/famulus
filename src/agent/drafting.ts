@@ -25,11 +25,21 @@ const DRAFT_MIN = 400
 const DRAFT_TARGET = `${DRAFT_MIN}〜${DRAFT_MAX}字`
 
 /** 連絡先の形。伏せる余地が無いもの — 一度出れば取り消せない。 */
-const CONTACT: readonly RegExp[] = [
-  /[\w.+-]+@[\w-]+\.[\w.-]+/g,
-  /0\d{1,4}-\d{1,4}-\d{3,4}/g,
-  /https?:\/\/[^\s)）」]+/g,
-]
+const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/g
+const PHONE_RE = /0\d{1,4}-\d{1,4}-\d{3,4}/g
+const CONTACT: readonly RegExp[] = [EMAIL_RE, PHONE_RE, /https?:\/\/[^\s)）」]+/g]
+
+/**
+ * 本文にあるメール・電話の形。実在かどうかを問わず全部返す — 規律は「書かない」であって
+ * 「秘密と一致したら書かない」ではない。URL は含めない: 記事は出典 URL を正当に引く。
+ * メールの本文が recall 経由で混ざる経路(gmail 読み取り)を足したとき、既知の秘密値との
+ * 照合(findLeaks)だけでは相手方の連絡先を拾えないため、形そのものを出口で止める。
+ */
+export function findContacts(body: string): string[] {
+  const hit = new Set<string>()
+  for (const re of [EMAIL_RE, PHONE_RE]) for (const m of body.matchAll(re)) hit.add(m[0])
+  return [...hit]
+}
 
 /** 一致とみなす長さ。日本語でこれだけ続けて偶然重なることはほぼ無い。 */
 const MIN_SHARED = 8

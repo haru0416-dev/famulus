@@ -8,7 +8,14 @@
 
 import assert from "node:assert/strict"
 import { test } from "vitest"
-import { DRAFTING, findLeaks, findShape, keepQuoted, reviewOutcome } from "../../src/agent/drafting.ts"
+import {
+  DRAFTING,
+  findContacts,
+  findLeaks,
+  findShape,
+  keepQuoted,
+  reviewOutcome,
+} from "../../src/agent/drafting.ts"
 
 const SECRETS = [
   "歯医者(さくら歯科)の次回予約は2026年8月19日(水)18:00に変更。",
@@ -192,4 +199,10 @@ test("写せた指摘は引用ごと返す", () => {
   )
   assert.equal(r.post, false)
   assert.match(r.post === false ? r.text : "", /「18回は別の枠へ出ていた」/)
+})
+
+test("連絡先の形は秘密値と無関係に拾う — URL は対象外(出典として正当に引く)", () => {
+  const hits = findContacts("問い合わせは a.b+c@example.co.jp か 03-1234-5678 へ。出典 https://example.com/x")
+  assert.deepEqual(hits.sort(), ["03-1234-5678", "a.b+c@example.co.jp"])
+  assert.deepEqual(findContacts("実測は 25 pass、走行は 164〜223 秒だった。"), [])
 })
