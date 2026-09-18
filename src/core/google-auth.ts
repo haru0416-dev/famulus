@@ -3,7 +3,7 @@
  * (`FAMULUS_GOOGLE_AUTH`、既定 `~/.famulus/data/google-auth.json`)に置く。
  *
  * client は共有せず、ユーザー自前の GCP プロジェクトの Desktop OAuth client を使う
- * (市場実勢: OpenClaw / Hermes とも Google は自前 client。docs/integration-survey-2026-08-18.md)。
+ * (市場実勢: OpenClaw / Hermes とも Google は自前 client)。
  * redirect は `http://localhost:1/` — どのプロセスも listen しない port なのでブラウザは即失敗し、
  * アドレスバーに code 付き URL が残る。それを丸ごと貼って交換する(headless の VPS で完結する形)。
  *

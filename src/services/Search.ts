@@ -593,7 +593,7 @@ const SOURCES: readonly Source[] = [
       "検索式は無く、**直近の掲載ぶんを語で絞るだけ** — 0件は「無い」ではなく feed の窓の外かもしれない",
     // feed に検索は無い。全量を取ってから語で絞る(sift)。公式 API(GraphQL)は
     // トークンが要るので、votes・日次順位が要るようになったらそちらへ上げる
-    // (docs/integration-survey-2026-08-18.md の段取りと同じ: まず認証不要の形で通す)。
+    // (まず認証不要の形で通す)。
     wide: false,
     accept: "application/atom+xml,application/xml,*/*;q=0.5",
     url: () => "https://www.producthunt.com/feed",

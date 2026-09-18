@@ -52,8 +52,8 @@ export interface AppConfig {
     readonly embedding: string
     /**
      * 対話 turn の reasoning.effort。未設定は API 既定(モデル任せ)。
-     * 精査役(reviewer)には効かせない — 判定が揺れることを実測済み(docs/recall-survey とは別、
-     * 精査の同一入力2回で low が 直す/出す に割れた)。
+     * 精査役(reviewer)には効かせない — 判定が揺れることを実測済み
+     * (精査の同一入力2回で low が 直す/出す に割れた)。
      */
     readonly turnEffort?: "low" | "medium" | "high"
     /**

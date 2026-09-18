@@ -4,7 +4,6 @@
  *
  * チャートと図解は SVG を経由して resvg で PNG 化。カードは takumi の一段構成。
  * spec の誤りは読める文で返す — 呼んだモデルが直せる形にする。
- * 選定の経緯と実測は docs/image-line-survey-2026-08-17.md。
  */
 import { existsSync } from "node:fs"
 
