@@ -1,9 +1,6 @@
 /**
- * Google Calendar(primary)の読みと1件挿入。REST 直(googleapis SDK は使わない —
- * 認証以外に要るものが無く、市場実勢も REST 直)。
- *
- * pull のみ。watch(push)は持たない — Pub/Sub + 公開エンドポイントの4段構成は
- * この規模(利用者1人)では割に合わないことを市場調査で確認済み。
+ * googleapis SDK は使わない(認証以外に要るものが無い)。watch(push)は Pub/Sub と公開
+ * エンドポイントが要るので持たない。
  */
 import { appConfig } from "./config.ts"
 import { loadGoogleAccess } from "./google-auth.ts"

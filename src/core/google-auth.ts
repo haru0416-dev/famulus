@@ -1,13 +1,7 @@
 /**
- * Google OAuth(installed app + PKCE)の資格情報。600 権限の JSON
- * (`FAMULUS_GOOGLE_AUTH`、既定 `~/.famulus/data/google-auth.json`)に置く。
- *
- * client は共有せず、ユーザー自前の GCP プロジェクトの Desktop OAuth client を使う
- * (市場実勢: OpenClaw / Hermes とも Google は自前 client)。
- * redirect は `http://localhost:1/` — どのプロセスも listen しない port なのでブラウザは即失敗し、
- * アドレスバーに code 付き URL が残る。それを丸ごと貼って交換する(headless の VPS で完結する形)。
- *
- * refresh token は xAI と違って rotation しない。並行 refresh の競合対策は要らない。
+ * redirect の `http://localhost:1/` は listen されない port。ブラウザが即失敗して code 付き URL が
+ * アドレスバーに残るので、それを貼って交換する(headless で完結させるため)。
+ * refresh token は rotation しないので、並行 refresh の競合対策は要らない。
  */
 import { createHash, randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"

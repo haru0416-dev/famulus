@@ -436,12 +436,9 @@ const REVIEWER_RULES: DangerRule[] = [
   },
 ]
 
-// ---- 拡張フックイベントの評価器(実験08で実証、851765d) --------------------------
+// ---- 拡張フックイベントの評価器 --------------------------------------------------
 //
-// preToolUse / beforeReadFile / beforeMCPExecution はSDK v1.0.23でheadless発火・
-// 実行前遮断を実測済み。
-// shellガード同様、位置づけはbest-effortの被害限定。reviewer系denyは
-// forbidden-delta(レビュー後の差分検査)が最終層になる多層の第0層。
+// best-effort。reviewer 系 deny の最終判定は forbidden-delta(レビュー後の差分検査)が持つ。
 
 /**
  * reviewerロール時にpreToolUseでdenyする変異系tool_name(第0層)。

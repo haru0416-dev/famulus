@@ -591,9 +591,7 @@ const SOURCES: readonly Source[] = [
     what:
       "Product Hunt の新着(フロントページの feed)。**商業プロダクトのローンチ**を探すとき名指しで。" +
       "検索式は無く、**直近の掲載ぶんを語で絞るだけ** — 0件は「無い」ではなく feed の窓の外かもしれない",
-    // feed に検索は無い。全量を取ってから語で絞る(sift)。公式 API(GraphQL)は
-    // トークンが要るので、votes・日次順位が要るようになったらそちらへ上げる
-    // (まず認証不要の形で通す)。
+    // feed に検索は無いので全量を取って sift で絞る。公式 GraphQL API はトークンが要る。
     wide: false,
     accept: "application/atom+xml,application/xml,*/*;q=0.5",
     url: () => "https://www.producthunt.com/feed",

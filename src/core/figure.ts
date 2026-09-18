@@ -1,9 +1,5 @@
 /**
- * 図の作成。モデルは宣言 spec(ECharts option の JSON / graphviz の dot / カードの中身)だけを
- * 書き、描画はここが決定的に行う — SVG をモデルに直書きさせない(座標計算で破綻する)。
- *
- * チャートと図解は SVG を経由して resvg で PNG 化。カードは takumi の一段構成。
- * spec の誤りは読める文で返す — 呼んだモデルが直せる形にする。
+ * モデルには宣言 spec だけを書かせる。SVG を直書きさせると座標計算で破綻する。
  */
 import { existsSync } from "node:fs"
 
