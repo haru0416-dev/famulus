@@ -1,10 +1,3 @@
-/**
- * 状態の置き場(~/.famulus 配下)を削除する処理の検査。消しすぎないことを固定する。
- *
- * こちらはモデルを呼ばない代わりに、取り消せない操作をする。
- * 見るのは「残すべきものが残るか」で、消えるほうは1件ずつ数える。
- */
-
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -12,7 +5,7 @@ import { join } from "node:path"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
 
-// 回す時刻の判定はユーザーの時計で切る。TZ はモジュール読み込み時に確定するので、import より先に差す。
+// TZ はモジュール読み込み時に確定するので、import より先に設定する。
 process.env.FAMULUS_TZ = "Asia/Tokyo"
 const { CLEANUP_DAILY, cleanup, cleanupDue } = await import("../../src/core/cleanup.ts")
 const { Db } = await import("../../src/services/Db.ts")
@@ -28,7 +21,7 @@ const age = (path: string, daysAgo: number): void => {
   utimesSync(path, t, t)
 }
 
-/** コンテナ列挙処理の差し替え。検査からホストの docker には触らない。 */
+/** ホストの docker を呼ばないための差し替え。 */
 const noOrphans = async (): Promise<{ removed: string[]; kept: string[] }> => ({ removed: [], kept: [] })
 
 const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): Promise<void> => {
@@ -36,7 +29,7 @@ const withTmp = async (fn: (dir: string, h: Harness) => Promise<void> | void): P
   const runs = process.env.FAMULUS_RUNS
   const cache = process.env.FAMULUS_RUN_CACHE
   process.env.FAMULUS_RUNS = join(dir, "runs")
-  // 既定のままだと本物の `.data/run-cache` を読む。上限を超えていたら検査が消してしまう。
+  // 既定のままだと本物の `.data/run-cache` を読み、上限超過なら検査が消してしまう。
   process.env.FAMULUS_RUN_CACHE = join(dir, "cache")
   try {
     await withHarness((h) => Promise.resolve(fn(dir, h)))
@@ -71,10 +64,7 @@ test("しばらく触られていない workspace だけ削除される", async 
   })
 })
 
-/**
- * 続きをやっている workspace を消さない。ルートディレクトリの mtime は子孫を書き換えても動かないので、
- * そこだけ見ると「10 日前から放置」に見える。全子孫の最大 mtime で判定する。
- */
+/** ルートの mtime は子孫を書き換えても変わらないので、全子孫の最大 mtime で判定する。 */
 test("子孫ファイルが更新された workspace は残る", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "working", 10, 1)
@@ -102,10 +92,7 @@ test("workspace が1つも無くても落ちない", async () => {
   })
 })
 
-/**
- * 共有キャッシュは古さで切らない。使い回すために置いてあるので、
- * 触られていないことは消してよい理由にならない。切るのは上限だけ。
- */
+/** 共有キャッシュは使い回すために置くので、古さでは消さない。 */
 test("共有キャッシュは上限を超えたときだけ削除される", async () => {
   await withTmp(async (dir, h) => {
     const cache = join(dir, "cache", "uv")
@@ -140,15 +127,11 @@ test("その日ぶんが済んでいれば回さない", async () => {
 
 test("ユーザーの時計で早すぎる時刻には回さない", async () => {
   await withHarness(async (h) => {
-    // 2026-08-12T18:30:00Z = JST 翌 3:30。日付は変わっているが既定の 4 時より前。
+    // JST 翌 3:30。日付は変わったが既定の 4 時より前。
     assert.equal(await h.run(cleanupDue("2026-08-12T18:30:00Z")), false)
   })
 })
 
-/**
- * 時刻では決まらない workspace がある。自分のソース(`selfdev`)は何日か触らなくても
- * 在り続けなければならない。触っていないことを理由に消すと、直したい日に限って無い。
- */
 test("keep を立てた workspace は古くても残る", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "selfdev", 30)
@@ -165,7 +148,6 @@ test("keep を立てた workspace は古くても残る", async () => {
   })
 })
 
-/** 実体を消したら説明も削除する。残すと、実体の無い説明だけが溜まっていく。 */
 test("削除した workspace の登録も消える(--dry では消えない)", async () => {
   await withTmp(async (dir, h) => {
     workspace(dir, "old", 30)

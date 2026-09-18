@@ -1,13 +1,6 @@
 /**
- * DB サービス。新規 DB は `src/db/schema.sql` から一度だけ作り、既存 DB は現行shapeだけを受理する。
- *
+ * 新規 DB は `src/db/schema.sql` から一度だけ作り、既存 DB は現行 schema だけを受理する。
  * events の append-only は SQL トリガで強制する(DELETE 禁止 / content:=NULL 以外の UPDATE 禁止)。
- * どのドライバから触っても同じように掛かる。
- *
- * Discord outbound は action と receipt を現行 schema に永続化し、曖昧な結果を再送しない。
- *
- * Tag + Layer にしてあるので、テストは `DbLive(":memory:")` を積むだけでトリガ込みの
- * 本物のスキーマを相手にできる。
  */
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
@@ -92,7 +85,6 @@ class DbTxAbortSignal<E> {
 
 export const defaultDbPath = (): string => appConfig().paths.db
 
-/** 接続を開き、スキーマを適用する。`:memory:` を渡せばプロセス内だけの本物の SQLite。 */
 export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed> =>
   Layer.effect(
     Db,
@@ -102,12 +94,11 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
           try: () => {
             if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true })
             const d = openDb(path)
-            // busy_timeout が先。これより前の文はロック待ちをせず、その場で locked になる。
-            // poll と cycle が同じ瞬間に開くと journal_mode が WAL の復旧ロックに当たって落ちていた。
+            // busy_timeout を最初に置く。これより前の文はロック待ちをせず locked で落ちる。
             d.exec("PRAGMA busy_timeout = 5000;")
             d.exec("PRAGMA foreign_keys = ON;")
             ensureCurrentSchema(d, path)
-            // shapeを受理してから接続モードを変更する。拒否したDBは変更しない。
+            // schema を受理してから WAL にする。拒否した DB は変更しない。
             if (path !== ":memory:") enableWalJournalMode(d)
             return d
           },
@@ -149,7 +140,6 @@ export const DbLive = (path: string = defaultDbPath()): Layer.Layer<Db, DbFailed
           catch: (e) => new DbFailed({ op: sql.slice(0, 40), message: String(e) }),
         })
 
-      /** schema_meta の1行を読む。halt / quota:* / cursor 類の置き場。 */
       const meta = (key: string) =>
         get("SELECT value FROM schema_meta WHERE key = ?", key).pipe(
           Effect.map((r) => (r?.value as string | undefined) ?? undefined),

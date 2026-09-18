@@ -1,8 +1,4 @@
-/**
- * 同一ループ内の recall 規律。実際の失敗は「同じ語を11回引き直す」「該当なしを読んでも
- * 止まらない」だったので、検査もその2点を踏む: 同じ語が検索へ抜けないこと、
- * 空振りの返り文が回数で変わり、当たったら連続空振りの数え直しになること。
- */
+/** 同じ語の引き直しと、該当なしを読んでも止まらないことの回帰を防ぐ。 */
 
 import assert from "node:assert/strict"
 import { test } from "vitest"
@@ -45,7 +41,6 @@ test("当たると連続空振りは数え直しになる", () => {
   const turn = newRecallTurn()
   recordRecall(turn, "計器", "該当なし", 0)
   recordRecall(turn, "利用量", "- [row]", 2)
-  // 直前に当たっているので、次の空振りは1回目の文(言い換えの一手)に戻る。
   assert.ok(recordRecall(turn, "週次レポート", "該当なし", 0).includes("別の語"))
 })
 

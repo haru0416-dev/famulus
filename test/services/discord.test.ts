@@ -1,11 +1,3 @@
-/**
- * Discord の検査。押されたことをどう見分けるかを主に見る。
- *
- * リアクションは自分で先に付けるので、絵文字の数は最初から 1 ある。そこを引かずに数えると、
- * 誰も押していない通知が全部「押された」になり、cycle が勝手に進む。
- * 既読位置の扱いも見る — 初回に全部拾うと、DM に残っている過去の一言が今日の指示になる。
- */
-
 import assert from "node:assert/strict"
 import { createServer, type IncomingMessage, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -49,10 +41,6 @@ interface Msg {
   attachments?: { url: string; filename?: string; content_type?: string; size?: number }[]
 }
 
-/**
- * Discord 役。DM を開く・出す・リアクションを付ける・一覧を返す、の4つだけ答える。
- * 出したものは `msgs` に積むので、テスト側から押されたことにできる。
- */
 const fakeDiscord = async (
   seed: Msg[] = [],
   respond?: (hit: Hit, hits: readonly Hit[]) => { status: number; body?: unknown } | undefined,
@@ -78,7 +66,7 @@ const fakeDiscord = async (
     })
     req.on("end", () => {
       const path = req.url ?? ""
-      // multipart(添付)の本文は JSON ではない。読めない本文は undefined として扱う。
+      // multipart(添付)の本文は JSON ではない。
       let body: Record<string, unknown> | undefined
       try {
         body = raw === "" ? undefined : (JSON.parse(raw) as Record<string, unknown>)
@@ -101,7 +89,7 @@ const fakeDiscord = async (
         at(ch).unshift({ id, content: String(body?.content ?? ""), author: { id: "bot" } })
         return json({ id })
       }
-      // スレッド。本物は起点の1通と同じ id を返す(スレッドそのものが場所になる)。
+      // 本物の Discord はスレッドに起点メッセージと同じ id を返す。
       const [, from] = /\/messages\/(\d+)\/threads$/.exec(path) ?? []
       if (from && req.method === "POST") {
         at(from)
@@ -120,7 +108,6 @@ const fakeDiscord = async (
               : [])
           return json(users.map((id) => ({ id })))
         }
-        // 自分で付けたリアクション。押す側から見ると数は 1 から始まる。
         const [, id, emoji] = /\/messages\/(\d+)\/reactions\/([^/]+)\/@me/.exec(path) ?? []
         const name = decodeURIComponent(emoji ?? "")
         const m = at(ch).find((x) => x.id === id)
@@ -218,7 +205,7 @@ const configured = Effect.gen(function* () {
   return d.configured()
 })
 
-/** 値を残すと後続テストが実 Discord へ接続し得るため、解除もこの helper に集約する。 */
+// 値を残すと後続テストが実 Discord へ接続し得るので、解除もここに集める。
 const wire = (url: string | undefined, ch?: { talk?: string; draft?: string; log?: string }) => {
   delete process.env.FAMULUS_DISCORD_CH_TALK
   delete process.env.FAMULUS_DISCORD_CH_DRAFT
@@ -238,7 +225,6 @@ const wire = (url: string | undefined, ch?: { talk?: string; draft?: string; log
   if (ch?.log) process.env.FAMULUS_DISCORD_CH_LOG = ch.log
 }
 
-/** wire を張って本文を回し、終わりに必ず外して fake を閉じる。 */
 const wired = async (
   dc: Awaited<ReturnType<typeof fakeDiscord>>,
   ch: Parameters<typeof wire>[1],
@@ -312,14 +298,14 @@ test("押されるまでは空。押されたら割り当てた文が返る", as
   await wired(dc, undefined, async () => {
     await withHarness(async (h) => {
       const id = await h.run(post({ text: "出していいか", taps: [{ emoji: "🛑", reply: "やめて" }] }))
-      // 自分で付けたぶんだけ。ここで拾うと、誰も押していない通知が承認になる。
+      // 数は自分で付けた 1 のまま。これを押されたと数えると、誰も押していない通知が承認になる。
       assert.deepEqual(await h.run(pollInbound), [])
 
       const m = dc.msgs.find((x) => x.id === id)
       const r = m?.reactions?.[0]
       if (r) r.count = 2
       assert.deepEqual(await h.run(pollInbound), [{ id: `${id}:🛑`, text: "やめて" }])
-      // 二度は返らない。返ると同じ指示が cycle のたびに効き続ける。
+      // 二度返すと同じ指示が cycle のたびに効き続ける。
       assert.deepEqual(await h.run(pollInbound), [])
     })
   })
@@ -415,7 +401,7 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
       assert.equal(await h.run(drainInbox), 0)
       const stored = await h.run(Effect.flatMap(Drafts, (drafts) => drafts.forDay()))
       assert.equal(stored?.id, draftId)
-      // ✏️ は終点ではなく差し戻し — 配送前の状態へ戻り、改稿ループに入る
+      // ✏️ は終端ではなく差し戻し。配送前の状態に戻る。
       assert.equal(stored?.state, "revision_needed")
       assert.equal(stored?.delivered_at, null)
       assert.match(String(stored?.review_feedback), /直す/)
@@ -426,7 +412,7 @@ test("下書きのリアクションは対象draftへ一度だけ適用する", 
 
 test("済んだ合図は見た合図を外す — ✅ を付けてから 👀 を消す", async () => {
   const dc = await fakeDiscord([{ id: "50", content: "たのむ", author: { id: OWNER } }])
-  // 宛先をチャンネルにする — DM 宛だと open_dm のアクションが先頭に足されて、ack だけを数えられない。
+  // DM 宛だと open_dm のアクションが先頭に足されて ack だけを数えられないので、チャンネル宛にする。
   await wired(dc, { talk: TALK }, async () => {
     await withHarness(async (h) => {
       const reactions = () => dc.msgs.find((m) => m.id === "50")?.reactions?.map((r) => r.emoji.name)
@@ -446,7 +432,7 @@ test("済んだ合図は見た合図を外す — ✅ を付けてから 👀 �
           }),
         )
 
-      // 受け取り時: 👀 だけ付く。PUT は 204 で本文が無いが、受領証は status で成立する
+      // PUT は 204 で本文が無いが、status だけで成功とする。
       const seen = await ackOnce("cycle-ack", "👀")
       assert.equal(seen?.state, "sent")
       assert.deepEqual(
@@ -455,7 +441,6 @@ test("済んだ合図は見た合図を外す — ✅ を付けてから 👀 �
       )
       assert.deepEqual(reactions(), ["👀"])
 
-      // 済んだ合図: ✅ を付けてから 👀 を外す。残るのは ✅ だけ
       const done = await ackOnce("cycle-done", "✅", "👀")
       assert.equal(done?.state, "sent")
       assert.deepEqual(
@@ -490,10 +475,10 @@ test("進行表示は台帳を通さない直接送信 — typing / post / edit 
         dc.msgs.find((m) => m.id === id),
         undefined,
       )
-      // 台帳に行が増えていない — 進行表示は配送記録ではない
+      // 進行表示は配送記録ではないので discord_outbound に行を足さない。
       assert.deepEqual(outbound, [])
 
-      // 失敗は握りつぶして処理を止めない(実在しない message の edit / delete)
+      // 実在しない message の edit / delete が失敗しても止まらない。
       await h.run(
         Effect.flatMap(Discord, (discord) =>
           Effect.gen(function* () {
@@ -544,16 +529,13 @@ test("progressFor は変化があるときだけ送り、post 失敗は次の ti
         dc.hits.filter((x) => x.method === "POST" && x.path === `/channels/${CH}/messages`).length
       const display = await h.run(Effect.map(Discord, (d) => d.progressFor(CH)))
 
-      // 1通も出していないうちの stop は何もしない
       await h.run(display.stop())
       assert.equal(dc.hits.length, 0)
 
-      // 内容が無いうちは typing だけ
       await h.run(display.tick())
       assert.equal(posts(), 0)
       assert.ok(dc.hits.some((x) => x.path === `/channels/${CH}/typing`))
 
-      // post が失敗した tick は次の tick で同じ内容を再試行する
       display.want("🛠 recall(病院)×2")
       await h.run(display.tick())
       assert.equal(dc.msgs.length, 0)
@@ -561,7 +543,6 @@ test("progressFor は変化があるときだけ送り、post 失敗は次の ti
       assert.equal(posts(), 2)
       assert.equal(dc.msgs[0]?.content, "🛠 recall(病院)×2")
 
-      // 同じ内容では送らない。変わったら同じ1通を edit
       await h.run(display.tick())
       assert.equal(posts(), 2)
       display.want("🛠 recall(病院)×2 · digger")
@@ -570,7 +551,6 @@ test("progressFor は変化があるときだけ送り、post 失敗は次の ti
       assert.equal(dc.msgs.length, 1)
       assert.equal(dc.msgs[0]?.content, "🛠 recall(病院)×2 · digger")
 
-      // stop は作った1通だけを消す
       await h.run(display.stop())
       assert.equal(dc.msgs.length, 0)
     })
@@ -614,7 +594,7 @@ test("記録完了前に終了した回の項目は、次の回にもう一度�
     await withHarness(async (h) => {
       await h.run(pollInbound)
       dc.msgs.unshift({ id: "71", content: "歯医者を来週にずらして", author: { id: OWNER } })
-      // 読んだが `seen` を呼ばずに終えた回。位置は進んでいない。
+      // 読んだが commit せずに終えた回。位置は進んでいない。
       const first = await h.run(peek)
       assert.deepEqual([...first.items], [{ id: "71", text: "歯医者を来週にずらして" }])
       // 二重記録は修復できるが、cursor 以前に取り残された項目は再取得できない。
@@ -812,7 +792,7 @@ test("押されたリアクションも、記録し終えるまでは消えな�
       r.count = 2
       const first = await h.run(peek)
       assert.deepEqual([...first.items], [{ id: `${id}:✅`, text: "出していい" }])
-      // 待ちリストから落ちるのも `seen` のとき。落ちる前に切られたら、次の回にもう一度返る。
+      // tap の対応表から外すのも commit のとき。
       const second = await h.run(peek)
       assert.deepEqual([...second.items], [{ id: `${id}:✅`, text: "出していい" }])
       await h.run(
@@ -849,7 +829,7 @@ test("自分の発言は拾わない — 出した文が次の cycle の入力�
 })
 
 test("DM専用構成でDiscordが落ちたら空受信ではなく失敗する", async () => {
-  // 1 番は特権ポートで、この環境では誰も listen していない(接続は即座に拒否される)。
+  // 1 番ポートは誰も listen していないので、接続は即座に拒否される。
   wire("http://127.0.0.1:1")
   try {
     await withHarness(async (h) => {
@@ -866,10 +846,7 @@ test("DM専用構成でDiscordが落ちたら空受信ではなく失敗する",
 const TALK = "7001"
 const DRAFT = "7002"
 
-/**
- * 分ける理由はミュートの単位。下書きと会話が同じ場所に出ると、
- * 「読まなくていいものをミュートする」と「返事が要るもの」も一緒に届かなくなる。
- */
+// 下書きと会話を分けるのはミュートの単位を分けるため。
 test("下書きは下書きの場所へ、会話は会話の場所へ出る", async () => {
   const dc = await fakeDiscord()
   await wired(dc, { talk: TALK, draft: DRAFT }, async () => {
@@ -907,7 +884,6 @@ test("リアクションは出した場所に付く — 会話の場所に出し
   })
 })
 
-/** 訊かれたチャンネルに返す。別のチャンネルに返すのは、書いた側からは返事が無いのと同じ。 */
 test("返事は最後に話しかけられた場所に返る — DM に書かれたら DM に返す", async () => {
   const dc = await fakeDiscord()
   await wired(dc, { talk: TALK, draft: DRAFT }, async () => {
@@ -929,10 +905,8 @@ test("返事は最後に話しかけられた場所に返る — DM に書かれ
   })
 })
 
-/**
- * 2つのチャンネルに同時に未読があるとき、どちらへ返すか。`listening()` は talk → DM の順で
- * 読むので、単に「最後に見たチャンネル」を覚えると常に DM になる。
- */
+// `listening()` は talk → DM の順で読むので、最後に読んだチャンネルを覚えるだけだと
+// 常に DM に返る。
 test("返事は、複数のチャンネルに未読があっても新しいほうへ返る", async () => {
   const dc = await fakeDiscord()
   await wired(dc, { talk: TALK }, async () => {
@@ -966,7 +940,6 @@ test("既読位置は場所ごとに持つ — 片方に書いても、もう片
       dc.at(TALK).unshift({ id: "51", content: "チャンネルの去年の話", author: { id: OWNER } })
       assert.deepEqual(await h.run(pollInbound), [])
       dc.at(TALK).unshift({ id: "52", content: "今日の指示", author: { id: OWNER } })
-      // DM 側は位置が動いていないが、そこに残っている過去の一言は出てこない。
       assert.deepEqual(await h.run(pollInbound), [{ id: "52", text: "今日の指示" }])
     })
   })
@@ -1004,10 +977,7 @@ test("呼びかけはチャンネルにだけ付く — DM では字が増える
   })
 })
 
-/**
- * リアクションは「どれに」までしか言えない。「直す」の中身は自由文でしか来ないが、
- * スレッド外に書かれた自由文はどの1件への返事か分からない。スレッドなら場所そのものが宛先になる。
- */
+// スレッド外の自由文はどの1件への返事か分からないので、スレッドを宛先にする。
 test("スレッドの名前を渡すと、出した1通からスレッドが立つ", async () => {
   const dc = await fakeDiscord()
   await wired(dc, { draft: DRAFT }, async () => {
@@ -1020,7 +990,6 @@ test("スレッドの名前を渡すと、出した1通からスレッドが立�
   })
 })
 
-/** チャンネル側を短く保ちつつ全文を届ける置き場。長文はスレッドの中に入る。 */
 test("threadNotes は立てたスレッドの中へ1要素1通で入る", async () => {
   const dc = await fakeDiscord()
   await wired(dc, { draft: DRAFT }, async () => {
@@ -1033,22 +1002,20 @@ test("threadNotes は立てたスレッドの中へ1要素1通で入る", async 
           threadNotes: ["全文そのもの", "根拠 dossier: d-1"],
         }),
       )
-      // スレッド(fake では起点メッセージと同じ id が場所になる)へ、順番どおり2通
       const made = dc.hits.find((x) => x.method === "POST" && x.path.endsWith("/threads"))
       const origin = /\/messages\/(\d+)\/threads$/.exec(made?.path ?? "")?.[1]
       assert.ok(origin)
-      // fake は新しい順に積む
+      // fake は新しい順に積む。
       assert.deepEqual(
         dc.at(origin).map((m) => m.content),
         ["根拠 dossier: d-1", "全文そのもの"],
       )
-      // チャンネル側には短い1通だけ
       assert.equal(dc.at(DRAFT).filter((m) => m.author.id === "bot").length, 1)
     })
   })
 })
 
-/** 生やした場所は位置を持たない。規則をそのまま当てると、最初の1通が黙って消える。 */
+// スレッドは既読位置を持たない。立てた時点で位置を置かないと最初の1通が拾われない。
 test("スレッドに書かれた1通目から拾う — 立てた時点で位置を置く", async () => {
   const dc = await fakeDiscord()
   await wired(dc, { talk: TALK, draft: DRAFT }, async () => {
@@ -1056,7 +1023,6 @@ test("スレッドに書かれた1通目から拾う — 立てた時点で位�
       const id = await h.run(post({ text: "下書き本文", to: "draft", thread: "題名" }))
       dc.at(String(id)).unshift({ id: "900", content: "ここの数字を直して", author: { id: OWNER } })
       assert.deepEqual(await h.run(pollInbound), [{ id: "900", text: "ここの数字を直して" }])
-      // 返事はスレッドの中に返る。スレッド外に返すと、どれへの返事か読む側が探すことになる。
       await h.run(post({ text: "直した" }))
       assert.equal(dc.at(String(id))[0]?.content, "直した")
     })
@@ -1078,7 +1044,6 @@ test("聞き続けるスレッドには上限がある — 古いものから落
         }),
       )
       assert.deepEqual(JSON.parse(open ?? "[]"), ids.slice(1))
-      // 落ちたスレッドに書いても拾わない(接続していない)。
       dc.at(String(ids[0])).unshift({ id: "910", content: "古いスレッドへの返事", author: { id: OWNER } })
       assert.deepEqual(await h.run(pollInbound), [])
     })
@@ -1087,10 +1052,7 @@ test("聞き続けるスレッドには上限がある — 古いものから落
 
 const LOG = "7003"
 
-/**
- * 進み具合は1回動くたびに1行出る。落とす先を持たせると、会話か DM がそれで埋まる
- * — 埋まった場所は読み飛ばす場所になるので、指していない間は出さない。
- */
+// 進み具合は毎回1行出るので、会話や DM に出すとそこが読まれなくなる。
 test("進み具合は指した場所にしか出ない — 指していなければ DM にも会話にも落ちない", async () => {
   const dc = await fakeDiscord()
   await wired(dc, { talk: TALK }, async () => {
@@ -1100,7 +1062,6 @@ test("進み具合は指した場所にしか出ない — 指していなけれ
         dc.hits.filter((x) => x.method === "POST" && x.path.endsWith("/messages")),
         [],
       )
-      // 会話は指したままなので、そちらは出る(log を止めても他の経路は塞がない)。
       await h.run(post({ text: "返事" }))
       assert.equal(dc.at(TALK)[0]?.content, "返事")
     })
@@ -1118,7 +1079,6 @@ test("進み具合の場所を指すとそこへ出る — 呼びかけは付け
   })
 })
 
-/** こちらから返事を求めない場所でも、ユーザーは書く。聞かない場所は黙って消える場所になる。 */
 test("進み具合の場所に書かれたものも拾う", async () => {
   const dc = await fakeDiscord()
   await wired(dc, { talk: TALK, log: LOG }, async () => {
@@ -1845,14 +1805,12 @@ test("ack は本文を1通も出さず、受信メッセージに直接リアク
   const dc = await fakeDiscord()
   await wired(dc, { talk: CH }, async () => {
     await withHarness(async (h) => {
-      // post ヘルパは本文の message id を返すので、本文の無い ack では undefined になる。
-      // ここで見るのは実際に飛んだ HTTP のほう。
+      // post は本文の message id を返すので ack では undefined。実際の HTTP を見る。
       await h.run(post({ text: "", ack: { channelId: "999", messageId: "12345", emoji: "👀" } }))
       const puts = dc.hits.filter((x) => x.method === "PUT")
       assert.equal(puts.length, 1)
       assert.ok(puts[0]?.path.includes("/channels/999/messages/12345/reactions/"))
       assert.ok(puts[0]?.path.includes(encodeURIComponent("👀")))
-      // 本文は1通も出ない
       assert.equal(dc.hits.filter((x) => x.method === "POST" && x.path.endsWith("/messages")).length, 0)
     })
   })
@@ -1869,7 +1827,7 @@ test("画像つき・画像だけのメッセージも受け、実体は media �
     process.env.FAMULUS_DATA = dir
     await wired(dc, undefined, async () => {
       await withHarness(async (h) => {
-        // 初回で cursor を確定してから、新しいメッセージを積む
+        // 初回で cursor を確定させる。
         assert.equal(await h.run(drainInbox), 0)
         dc.msgs.unshift({
           id: "60",
@@ -1877,7 +1835,6 @@ test("画像つき・画像だけのメッセージも受け、実体は media �
           author: { id: OWNER },
           attachments: [
             { url: `${dc.url}/cdn/yoyaku.png`, filename: "yoyaku.png", content_type: "image/png", size: 11 },
-            // 画像以外の添付は受けない
             { url: `${dc.url}/cdn/doc.pdf`, filename: "doc.pdf", content_type: "application/pdf", size: 11 },
           ],
         })
@@ -1902,10 +1859,9 @@ test("画像つき・画像だけのメッセージも受け、実体は media �
           mediaType: string
           name?: string
         }[]
-        assert.equal(imgs60.length, 1) // pdf は落ちる
+        assert.equal(imgs60.length, 1)
         assert.equal(imgs60[0]?.name, "yoyaku.png")
         assert.ok(existsSync(join(dir, "media", `${imgs60[0]?.sha}.png`)))
-        // 画像だけのメッセージ(本文なし)も1件として入る
         const imgs61 = JSON.parse(String(rows[1]?.imgs)) as { sha: string }[]
         assert.equal(imgs61.length, 1)
         assert.equal(rows[1]?.said, "")
@@ -1951,7 +1907,7 @@ test("添付つきの投稿は multipart で送り、参照切れの添付は落
           ["succeeded"],
         )
 
-        // 参照切れ(実体の無い sha)は添付を落として本文だけ届く — 投稿ごと失敗させない
+        // 実体の無い sha は添付を落として本文だけ送る。投稿ごと失敗させない。
         const broken = await h.run(
           Effect.gen(function* () {
             const discord = yield* Discord
@@ -1987,7 +1943,6 @@ const PROPOSAL = {
   howVerified: "calendar で読み直す",
 }
 
-/** 出した1通の messageId。押されたことにするために要る。 */
 const postedMessageId = (id: string, data: ProposalCard = PROPOSAL) =>
   Effect.gen(function* () {
     const discord = yield* Discord
@@ -2025,7 +1980,6 @@ test("提案のリアクションは承認と却下をそのまま提案へ適�
           }
         }),
       )
-      // 判断に要るものがチャンネル側の1通に載り、根拠と5要素はスレッドへ落ちる。
       const posted = dc.msgs.find((m) => m.id === okMsg)?.content ?? ""
       assert.match(posted, /^\*\*8\/24 10:00 病院をカレンダーに入れる\*\*$/m)
       assert.match(posted, /^入れてよいか$/m)
@@ -2045,7 +1999,7 @@ test("提案のリアクションは承認と却下をそのまま提案へ適�
       )
       assert.equal(ok?.status, "approved")
       assert.equal(ng?.status, "denied")
-      // deny は理由が必須。絵文字1つには乗らないので、押した事実そのものを理由に置く。
+      // deny は理由が必須なので、押した事実を理由に置く。
       assert.equal(ng?.deny_reason, REACTION_DENY_REASON)
       const actions = await h.run(
         Effect.flatMap(Db, (db) =>
@@ -2077,7 +2031,7 @@ test("決定済みの提案を押しても受信は止まらない — 適用で
         }),
       )
       press(dc, messageId, "✅")
-      // 押した文(owner 発言)は入る。落ちると、同じ回に読んだ他の発言まで消える。
+      // 押した文が落ちると、同じ回に読んだ他の発言まで消える。
       assert.equal(await h.run(drainInbox), 1)
 
       const after = await h.run(Effect.flatMap(Proposals, (proposals) => proposals.get(id)))

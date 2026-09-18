@@ -1,7 +1,4 @@
-/**
- * coder の検査。Cursor SDK(課金 run・ネットワーク)には触れない —
- * runCursorTask を差し替えて、coder が渡す引数と、run の前後の git 処理だけを見る。
- */
+/** Cursor SDK(課金 run・ネットワーク)は呼ばず、runCursorTask を差し替えて検査する。 */
 
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
@@ -28,7 +25,6 @@ vi.mock("../../src/model/cursor.ts", () => ({
   },
 }))
 
-/** 差し替えた実装で1件走らせ、終わりに必ず既定へ戻す。 */
 const withImpl = async <T>(
   impl: (o: Record<string, unknown>) => Promise<unknown>,
   fn: () => Promise<T>,
@@ -60,7 +56,7 @@ test("scaffolding: guard.sh は実行可能で、4イベントとも同じ guard
   const script = join(root, ".cursor", "hooks", "guard.sh")
   assert.ok(statSync(script).mode & 0o100, "実行ビットが無い")
   const body = readFileSync(script, "utf8")
-  // hook は famulus 本体の CLI を絶対パスで呼ぶ。workspace からの相対では、cwd が違うと外れる。
+  // workspace からの相対パスは cwd が違うと外れるので、hook は CLI を絶対パスで呼ぶ。
   assert.ok(body.includes(join(PROJECT_ROOT, "src/cli.ts")))
   assert.ok(body.includes('cursor-hook "$FAMULUS_CODER_ROLE"'))
   const guard = [{ command: "./.cursor/hooks/guard.sh" }]
@@ -106,7 +102,7 @@ test("plan: branch も snapshot も作らず、mode=plan と model を渡す", a
       assert.equal(out.snapshotSha, undefined)
       assert.equal(out.model, "claude-fable-5")
       assert.ok(out.branchDetail.includes("plan"))
-      // takeSnapshot が呼ばれていれば .agent/ が出来る。plan では出来ない。
+      // .agent/ は takeSnapshot が作る。
       assert.ok(!existsSync(join(root, ".agent")))
     },
   )
@@ -116,7 +112,7 @@ test("plan: model 未指定なら config の cursor.model で数える", async (
   const root = mkdtempSync(join(tmpdir(), "famulus-coder-"))
   const out = await runCodeTask({ root, task: "t", plan: true })
   assert.equal(out.model, appConfig().cursor.model)
-  // usage の無い run は costUsd を出さない(0 ではなく不明)。
+  // usage が無いときは 0 ではなく不明として扱う。
   assert.equal(out.costUsd, undefined)
 })
 
@@ -128,7 +124,7 @@ test("cost: usage があれば単価表で概算 USD を載せる", async () => 
       usage: { inputTokens: 2_000_000, outputTokens: 1_000_000 },
     }),
     async () => {
-      // composer-2.5: input 0.5 USD/M・output 2.5 USD/M(fast=false 側)→ 2*0.5 + 1*2.5
+      // composer-2.5(fast=false): input 0.5・output 2.5 USD/M → 2*0.5 + 1*2.5
       const out = await runCodeTask({ root, task: "t", plan: true, model: "composer-2.5" })
       assert.ok(out.costUsd !== undefined)
       assert.ok(Math.abs(out.costUsd - 3.5) < 1e-9)
@@ -151,7 +147,7 @@ test("task: 成果をブランチにコミットして base へ復帰する", as
       assert.equal(git(dir, "branch", "--show-current"), "main")
       assert.ok(out.branch !== undefined)
       assert.ok(git(dir, "ls-tree", "-r", "--name-only", out.branch).includes("b.txt"))
-      // ハーネス内部状態(.agent / .cursor)以外は clean で戻る。
+      // .agent / .cursor はハーネスの内部状態なので除く。
       const noise = git(dir, "status", "--porcelain")
         .split("\n")
         .filter((l) => l !== "" && !l.includes(".agent") && !l.includes(".cursor"))
@@ -187,7 +183,6 @@ test("task: dirty tree ではブランチを切らず、run は走らせる", as
       assert.equal(cursor.calls.length, 1)
       assert.equal(out.branch, undefined)
       assert.ok(out.branchDetail.includes("混入防止"))
-      // 人間の未コミットはそのまま(何も変えない)。
       assert.equal(readFileSync(join(dir, "a.txt"), "utf8"), "uncommitted human work\n")
     },
   )

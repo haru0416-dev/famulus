@@ -1,5 +1,3 @@
-/** 観測・確定記憶・外部操作の権限と、利用者へ返す結果を検査する。 */
-
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -42,7 +40,7 @@ test("親 Agent の remember は観測だけを追記し、確定値を直接書
 })
 
 test("belief は読み専用で、外れたら既存の slot を見せる", async () => {
-  // slot 名は推測で引かれる。外れを「無い」で終えると別名の slot が生まれる
+  // slot 名は推測で引かれるので、外れを「無い」で終えると別名の slot が作られる
   const listed = beliefMissMessage("dentist.next_appt", [{ slot: "hospital.appointment" }])
   assert.match(listed, /'dentist\.next_appt' は確定していない/)
   assert.match(listed, /hospital\.appointment/)
@@ -287,7 +285,7 @@ test("stats の集計 SQL は全系列が実 schema で実行できる", async (
       const rows = await h.run(Effect.flatMap(Db, (db) => db.all(q.sql, "2026-01-01T00:00:00Z")))
       assert.ok(Array.isArray(rows), name)
       for (const r of rows) assert.match(q.line(r), /^\d{4}-\d{2}-\d{2} /, name)
-      // 行の整形は全系列を合成行でも確かめる(空 DB でも関数を通す)
+      // 空 DB でも整形関数を通すため合成行で確かめる
       assert.match(q.line(sample), /^2026-08-08 /, name)
     }
   })

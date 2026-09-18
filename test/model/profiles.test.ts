@@ -1,11 +1,3 @@
-/**
- * 実行主体の全数登録と scope 交差の検査。
- *
- * - 登録(宣言)と assistant の実体の一致は型検査、ここでは profile 全体の閉包を検査する。
- * - provider-native の外部 I/O 道具が profile に紛れ込んだら落ちる。
- * - 委譲は交差で減るだけ — どの次元も親を超えられない。
- */
-
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -23,8 +15,7 @@ test("全 profile の道具はローカル実装の閉じた集合に収まり�
       assert.ok(local.has(tool), `${profile.id} の ${tool} はローカル道具ではない`)
     }
   }
-  // 回帰検査: provider 側で実行される道具名は、委譲先(worker / reviewer)のモデルに見えない。
-  // 親の `x_search` はローカル道具名(実体は独立呼び出しへの隔離 — src/model/x-search.ts)なので対象外。
+  // provider 側で実行される道具は委譲先のモデルに見せない。親の `x_search` はローカル道具名なので対象外。
   for (const profile of Object.values(AGENT_PROFILES)) {
     if (profile.loopRole === "interactive" || profile.loopRole === "autonomous") continue
     for (const forbidden of ["web_search", "x_search", "code_interpreter", "file_search"]) {
@@ -34,8 +25,7 @@ test("全 profile の道具はローカル実装の閉じた集合に収まり�
 })
 
 test("モデル呼び出しの実装が provider 側 tools を注入しない(x-search の隔離だけが例外)", () => {
-  // Responses の body に tools を積むのは x-search.ts だけ。xai-responses(全モデル呼び出しの実体)に
-  // tools が現れたら、provider 実行の外部 I/O がモデル経路に入った可能性がある。
+  // xai-responses に tools が現れたら、provider 実行の外部 I/O がモデル経路に入っている。
   const adapter = read("src/model/xai-responses.ts")
   assert.ok(
     !/\btools\s*:/.test(adapter),
@@ -79,7 +69,7 @@ test("要求を省いた委譲も深さは必ず1減る", () => {
   assert.equal(child.maxDelegationDepth, 1)
   const grandchild = intersectScope(child, {})
   assert.equal(grandchild.maxDelegationDepth, 0)
-  // 葉からの委譲は拒否 — 際限のない再委譲を型ではなく実行時にも塞ぐ。
+  // 型だけでなく実行時にも再委譲を拒否する。
   assert.throws(() => intersectScope(grandchild, {}), DelegationDenied)
 })
 

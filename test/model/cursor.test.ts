@@ -1,10 +1,4 @@
-/**
- * runCursorTask / listCursorModels の検査。@cursor/sdk は vi.mock で丸ごと置き換え、
- * 実 SDK・課金 run は一切呼ばない。対象は SDK 呼び出しの外側にあるロジックだけ:
- * 引数の組み立て(モデル選択・store の置き場所)、doom-loop ガード(道具回数・時間・token 予算)、
- * 要約の組み立て(git 欄・error 欄)。message/result の形はここで合成しているので、
- * SDK 側の形が変わったらこの検査では気づけない(それは実走側で拾う)。
- */
+/** @cursor/sdk は vi.mock で置き換える。message/result の形はここで合成しているので、SDK 側の形の変化には気づけない。 */
 
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
@@ -15,14 +9,14 @@ import { afterEach, beforeEach, test, vi } from "vitest"
 import { configureApp } from "../../src/core/config.ts"
 import { listCursorModels, requireCursorKey, runCursorTask } from "../../src/model/cursor.ts"
 
-/** vi.mock の factory は import より先に評価されるため、共有状態は vi.hoisted で先に作る。 */
+/** vi.mock の factory は import より先に評価されるので、共有状態は vi.hoisted で作る。 */
 const state = vi.hoisted(() => ({
   createCalls: [] as unknown[],
   cancels: 0,
   messages: [] as Record<string, unknown>[],
   result: {} as Record<string, unknown>,
   models: [] as Record<string, unknown>[],
-  /** true なら message を流し終えた後 cancel されるまで stream を止める(時間ガードの検査用)。 */
+  /** true なら message を流し終えた後、cancel まで stream を止める(時間ガード用)。 */
   block: false,
   release: undefined as (() => void) | undefined,
 }))
@@ -78,7 +72,7 @@ const ENV_KEYS = [
 const savedEnv = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]))
 const roots: string[] = []
 
-/** cursor 系の env を検査ごとに丸ごと決め直す(.env 由来の値に依存しない)。 */
+/** .env 由来の値に依存しないよう、cursor 系の env を検査ごとに決め直す。 */
 const configure = (env: Partial<Record<(typeof ENV_KEYS)[number], string>> = {}): void => {
   for (const key of ENV_KEYS) delete process.env[key]
   process.env.FAMULUS_CURSOR_API_KEY = "test-key"
@@ -180,7 +174,7 @@ test("token 予算は cacheRead を除いて数え、超過で budget-tokens 中
     // 生の total の和は 18000 で上限超だが、cacheRead を除けば 9000 に収まる。
     { type: "usage", usage: { totalTokens: 9_000, cacheReadTokens: 5_000 } },
     { type: "usage", usage: { totalTokens: 7_000, cacheReadTokens: 2_000 } },
-    // cacheReadTokens 無し(?? 0)。累計 11000 でここが超過になる。
+    // cacheReadTokens 無し。累計 11000 でここが超過になる。
     { type: "usage", usage: { totalTokens: 2_000 } },
   ]
   state.result = { status: "cancelled" }
@@ -220,7 +214,7 @@ test("git の無い cwd では git 欄を省き、result.error は message だ�
   assert.equal("gitBefore" in summary, false)
   assert.equal("gitAfter" in summary, false)
   assert.equal("diffStat" in summary, false)
-  // message が1つも来ていないので firstEventMs も無い。durationMs は経過時間で埋まる。
+  // message が来ていないので firstEventMs は無く、durationMs は経過時間になる。
   assert.equal("firstEventMs" in summary, false)
   assert.equal(typeof summary.durationMs, "number")
 })

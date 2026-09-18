@@ -1,14 +1,7 @@
 /**
- * SuperGrok OAuth の資格情報。`auth.x.ai` の device-code flow(RFC 8628)で取得し、
- * 600 権限の JSON(`FAMULUS_XAI_AUTH`、既定 `~/.famulus/data/xai-auth.json`)に置く。
- *
- * client_id は公認ハーネス(OpenClaw)がソースに公開している device flow の公開クライアント。
- * secret は無い。トークンは grok.com アカウントの契約枠(週次共有プール)に紐づく —
- * console.x.ai の API キー(従量課金)とは別物で、ここでは扱わない。
- *
- * refresh token は rotation する(使うと新しい refresh に置き換わる)。書き手が競合すると
- * 片方の refresh が無効になるので、refresh が拒否されたらファイルを読み直し、
- * 別プロセスが先に回していた場合だけ新しい側で1回やり直す。
+ * SuperGrok OAuth の資格情報。device-code flow(RFC 8628)で取得し、600 権限の JSON(`FAMULUS_XAI_AUTH`)に置く。
+ * client_id は device flow の公開クライアントで secret は無い。console.x.ai の API キー(従量課金)とは別物。
+ * refresh token は rotation するので、拒否されたらファイルを読み直し、別プロセスが先に更新していた場合だけ1回やり直す。
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
@@ -20,13 +13,13 @@ const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth2/token"
 const DEVICE_ENDPOINT = "https://auth.x.ai/oauth2/device/code"
 
-/** access の期限のこの手前で更新する。access は数時間有効なので5分の余裕で足りる。 */
+/** access は数時間有効なので5分の余裕で足りる。 */
 const REFRESH_SKEW_MS = 5 * 60 * 1000
 
 export interface XaiAuth {
   readonly access: string
   readonly refresh: string
-  /** access の期限(epoch ms)。 */
+  /** epoch ms。 */
   readonly expires: number
   readonly email?: string
 }
@@ -118,12 +111,7 @@ async function refreshOnce(refresh: string, nowMs: number, email?: string): Prom
   return toAuth(body, nowMs, email)
 }
 
-/**
- * 有効な access token を返す。期限が近ければ refresh して保存する。
- *
- * refresh が拒否されたらファイルを読み直す — 別プロセスが先に rotation を回していれば
- * ファイルには新しい refresh が入っている。同じ値のままなら本当に失効しているので、再ログインを求める。
- */
+/** 同じ refresh のまま拒否されたら本当に失効しているので、再ログインを求める。 */
 export async function loadXaiAccess(nowMs: number = Date.now(), path: string = authPath()): Promise<string> {
   const auth = readXaiAuth(path)
   if (!needsRefresh(auth, nowMs)) return auth.access
@@ -152,10 +140,7 @@ interface DeviceCodeResponse {
   readonly expires_in?: number
 }
 
-/**
- * device-code flow を1回通して保存する。VPS にブラウザは要らない —
- * `onPrompt` に渡る URL とコードを、手元のブラウザで開いて承認する。
- */
+/** VPS にブラウザは要らない。`onPrompt` に渡る URL とコードを手元のブラウザで開いて承認する。 */
 export async function xaiDeviceLogin(
   onPrompt: (verificationUri: string, userCode: string) => void,
   path: string = authPath(),

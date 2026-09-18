@@ -1,19 +1,7 @@
 /**
- * X(旧Twitter)を xAI のサーバ側 `x_search` で調べる。SuperGrok OAuth の同じ pool を消費する。
- *
- * `search` の x(SearXNG の site:x.com)は検索エンジンの要約止まりで、こちらは実在の投稿と
- * 引用 URL が返る。中身はサーバ側の委譲エージェント(検索を複数回回して回答を書く)なので、
- * researcher 級の重さとして扱う。実測(2026-08-17): grok-4.3 + handle filter で約10秒・入力9.6k tok、
- * grok-4.6 だと64秒・入力25.9k tok。委譲は research model(grok-4.3)で回す。
- *
- * 統治は Runner と同じ順(precheck → 実行 → クォータ状態更新 → 会計)を通す。
- * ここを通らない x_search の経路を作らない。
- *
- * これは「provider 実行の外部 I/O 道具を使わない」方針からの意図的な逸脱。
- * provider の web_search を外せたのはホスト側の代替(search+fetch)があったからで、
- * X には代替が無い(本文の取れる API が全滅 — src/services/Search.ts)。代わりに、
- * エージェントのモデル呼び出しへ注入せず独立呼び出しに隔離し、precheck を I/O に先行させる。
- * Capability 登録が入ったら、この道具はそこへ登録して分類を受ける。
+ * X を xAI のサーバ側 `x_search` で調べる(SuperGrok OAuth の同じ pool を消費する)。X には本文の取れる
+ * 代替 API が無いので provider の道具を使う。モデル呼び出しへ注入せず独立呼び出しにし、precheck を I/O より先に通す。
+ * Runner と同じ統治を通らない x_search の経路を作らない。
  */
 import * as Effect from "effect/Effect"
 import type { DailyRunLimit, DbFailed, Halt, QuotaCooldown } from "../core/errors.ts"
@@ -27,10 +15,9 @@ import { traceOf } from "./trace.ts"
 import { loadXaiAccess } from "./xai-auth.ts"
 import { classifyXaiFailure, XAI_BASE_URL } from "./xai-responses.ts"
 
-/** 1回の x_search に許す時間。実測の上限(grok-4.6 で64秒)に余裕を足した値。 */
 export const X_SEARCH_TIMEOUT_MS = 120_000
 
-/** ハンドル指定の上限。上流の仕様は公開されていないので、参照実装(OpenClaw)の検証に合わせて手で決めた。 */
+/** 上流の仕様は公開されていないので手で決めた。 */
 const HANDLE_LIMIT = 10
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -48,7 +35,6 @@ export interface XSearchOptions {
 export interface XSearchResult {
   readonly answer: string
   readonly citations: readonly { url: string; title?: string }[]
-  /** サーバ側で実際に走った検索の回数。 */
   readonly searches: number
   readonly usage: { inTok: number; outTok: number; cacheRead: number; cacheWrite: number }
 }
@@ -63,10 +49,7 @@ const cleanHandles = (handles: readonly string[] | undefined, label: string): st
   return cleaned
 }
 
-/**
- * 要求 body を組む。入力の検証はここで落とす — 上流へ出てからの 400 は
- * 1回ぶんの持ち時間とクォータを使った後の失敗になる。
- */
+/** 入力の検証はここで落とす。上流の 400 は持ち時間とクォータを使った後の失敗になる。 */
 export function buildXSearchBody(opts: XSearchOptions, model: string): Record<string, unknown> {
   const query = opts.query.trim()
   if (!query) throw new ModelCallError("query が空")
@@ -103,17 +86,16 @@ export function buildXSearchBody(opts: XSearchOptions, model: string): Record<st
 }
 
 /**
- * 本文に混ざる引用の描画マーカーを落とす。実測で観測したのは
- * `display render_inline_citation with citation_id is 25` の形だけ — 他の形は未観測で、
- * 出たら追加する。引用そのものは annotation(url_citation)から別に取るので情報は失わない。
+ * 観測した形は `display render_inline_citation with citation_id is 25` だけ。引用は annotation(url_citation)から
+ * 別に取るので情報は失わない。
  */
 const stripCitationMarkers = (text: string): string =>
-  // 空白は横方向だけ食う。\s にすると行末のマーカーが次行との改行まで消して文が繋がる。
+  // 空白は横方向だけ消す。\s にすると行末のマーカーの後の改行まで消えて文が繋がる。
   text
     .replace(/[ \t]*\(?[ \t]*display render_inline_citation with citation_id (?:is )?\d+[ \t]*\)?/gi, "")
     .trim()
 
-/** 応答 JSON から回答・引用・使用量を取り出す。壊れた応答は欄が空になるだけで投げない。 */
+/** 壊れた応答は欄が空になるだけで例外にしない。 */
 export function parseXSearchResponse(payload: unknown): XSearchResult {
   const root = (payload ?? {}) as Record<string, unknown>
   const output = Array.isArray(root.output) ? root.output : []
@@ -155,7 +137,6 @@ export function parseXSearchResponse(payload: unknown): XSearchResult {
   }
 }
 
-/** precheck → POST /responses(x_search 付き) → 会計。 */
 export const xSearch = (
   opts: XSearchOptions,
 ): Effect.Effect<

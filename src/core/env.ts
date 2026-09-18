@@ -1,38 +1,20 @@
 /**
- * `.env` を読む。入口(cli / cycle / agent)の先頭で1回だけ呼ぶ。
- *
- * systemd から起きる cycle はログインシェルを通らないので、シェルに書いた値は届かない。
- * かといって unit ファイルに書くと、644 の設定ファイルに秘密を置くことになる。
- * 600 の `.env`(git 管理外)を読む側で解決すれば、どの入口から起きても同じ値が見える。
- *
- * 無くても失敗しない。設定が無いのは異常ではない — 通知先を決めていない状態は普通にある。
- *
- * 解析は自前。前は `process.loadEnvFile()` を呼んでいたが、あれは Node にしか無い。
- * Bun 1.3.14 では未実装で、`try/catch` に落ちて `.env` が丸ごと読まれないまま静かに進んだ
- * (Discord のトークンも宛先も未設定として動く)。必要な構文が限定されているため、
- * Node 固有 API に依存しない小さな parser を持つ。
+ * systemd の cycle はログインシェルを通らず、unit ファイルに秘密を書くと 644 になるので、600 の `.env` を読む。
+ * `process.loadEnvFile()` は Bun に無く、失敗が黙って握りつぶされるので自前で解析する。
  */
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 const ENV_PATH = fileURLToPath(new URL("../../.env", import.meta.url))
 
-/** このプロセスが起動した時点の環境。`.env` より外から渡された値のほうを勝たせるために取っておく。 */
+/** 外から渡された値を `.env` より優先するため、起動時点の鍵を取っておく。 */
 const OUTER = new Set(Object.keys(process.env))
 
 let done = false
 
-/** `KEY=値` / 先頭の `export` / 前後の空白。ここに合わない行は落とす。 */
 const LINE = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/
 
-/**
- * 1行を `[鍵, 値]` にする。合わない行(空行・`#` で始まる行・`=` の無い行)は `undefined`。
- *
- * 引用符で囲んだ値は中身を取り、二重引用符では `\n` を改行へ戻した後、
- * 残る backslash escape から backslash を外す。単一引用符では変換しない。
- * 囲んでいない値は、空白を挟んだ `#` から後ろをコメントとして捨てる —
- * 値そのものに ` #` を含めたいときは引用符で囲む。
- */
+/** 囲んでいない値は空白を挟んだ `#` 以降を捨てる。` #` を含めたい値は引用符で囲む。 */
 function entry(raw: string): [string, string] | undefined {
   const line = raw.trim()
   if (!line || line.startsWith("#")) return undefined
@@ -48,11 +30,6 @@ function entry(raw: string): [string, string] | undefined {
   return [key, rest.replace(/\s+#.*$/, "").trimEnd()]
 }
 
-/**
- * `.env` の値を `process.env` に載せる。2回目以降は何もしない。
- * 既にプロセスに入っていた値は `.env` で上書きしない(systemd の `Environment=` と
- * `FOO=x fam ...` が常に勝つ)。
- */
 export function loadEnv(path: string = ENV_PATH): void {
   if (done) return
   done = true

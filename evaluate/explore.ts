@@ -1,18 +1,6 @@
 #!/usr/bin/env bun
-/**
- * 調査モードの比較評価(現行経路 vs explore fan-out)。`bun run evaluate:explore -- <cmd>`。
- *
- *   list                  … 固定fixture(実際に過去に調べた問い)の一覧
- *   contract <n>          … 評価契約(語彙・予想・除外・rubric)をファイルに固定する。
- *                           **実行より先に呼ぶ。既にあれば上書きしない** — 結果を見てから
- *                           基準を書くと候補経路に有利な分類になる。
- *   run <n> current       … 現行経路(researcher 1本)で実行し、生の結果を保存する
- *   run <n> explore       … explore fan-out(7方向)で実行し、生の結果と dossier を保存する
- *   compare <n>           … 機械で数えられる指標を並べ、判定欄が空の比較表を書き出す
- *
- * 置き場は `docs/explore-eval/`。生の結果は消さない — 判定は raw artifacts に対して行う。
- * 実行はクォータを使う(explore は7分岐)。
- */
+// contract は run より先に呼ぶ。結果を見てから基準を書くと候補経路に有利な分類になる。
+// 判定は生の結果に対して行うので、生の結果は消さない。
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { Output, stepCountIs, ToolLoopAgent } from "ai"
@@ -36,10 +24,7 @@ import { Research } from "../src/services/Research.ts"
 
 const OUT = new URL("../docs/explore-eval/", import.meta.url).pathname
 
-/**
- * fixture は実際に過去に調べた問い(research_dossiers / questions の実データ)。
- * 結果から題を作らない — 知りたいのは「実際の問いで差が出るか」だけ。
- */
+// fixture は実際に過去に調べた問い。結果から題を作らない。
 const FIXTURES = [
   {
     id: 1,
@@ -80,7 +65,7 @@ const fixture = (n: number) => {
 }
 
 const contractPath = (n: number) => `${OUT}${n}-contract.json`
-// FAMULUS_EVAL_TAG を付けると別ファイルに書く。モデル差し替えの対を取るとき、既存の raw を上書きしない。
+// FAMULUS_EVAL_TAG はモデル差し替えの比較で既存の raw を上書きしないためのもの。
 const resultPath = (n: number, path: string) =>
   `${OUT}${n}-${path}${process.env.FAMULUS_EVAL_TAG ? `-${process.env.FAMULUS_EVAL_TAG}` : ""}.json`
 
@@ -95,7 +80,7 @@ function writeContract(n: number): string {
   return `固定した: ${p}`
 }
 
-/** 現行経路。researcher 道具の中身と同じ組み立て(instructions・道具・schema・手数)。 */
+// researcher 道具と同じ組み立てを保つ。ずれると比較にならない。
 async function runCurrent(seed: string) {
   const fetched: FetchedEvidence[] = []
   const began = Date.now()
@@ -161,7 +146,7 @@ async function runExplorePath(seed: string) {
   }
 }
 
-/** explore の分岐を実DBの dossier に固定する。捏造 quote は記録側の検証で落ちる。 */
+// 捏造 quote は記録側の検証で落ちる。
 const recordExplore = (
   f: (typeof FIXTURES)[number],
   branches: readonly BranchOutcome[],

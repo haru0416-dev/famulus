@@ -1,7 +1,4 @@
-/**
- * 埋め込みの検査。実モデル(ruri)はネットワークが要るのでここでは触らない —
- * 実モデルの検索品質は eval:recall が測る。ここで見るのは stub の決定性と、off が undefined を返すこと。
- */
+/** 実モデル(ruri)はネットワークが要るので呼ばない。検索品質は eval:recall で見る。 */
 
 import assert from "node:assert/strict"
 import { test } from "vitest"

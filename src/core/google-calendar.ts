@@ -1,7 +1,4 @@
-/**
- * googleapis SDK は使わない(認証以外に要るものが無い)。watch(push)は Pub/Sub と公開
- * エンドポイントが要るので持たない。
- */
+/** watch(push)は Pub/Sub と公開エンドポイントが要るので持たない。 */
 import { appConfig } from "./config.ts"
 import { loadGoogleAccess } from "./google-auth.ts"
 import { localStamp } from "./time.ts"
@@ -11,7 +8,7 @@ const BASE = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 export interface CalendarEvent {
   readonly id: string
   readonly title: string
-  /** ISO 日時、または終日なら YYYY-MM-DD。 */
+  /** 終日なら YYYY-MM-DD。 */
   readonly start: string
   readonly end: string
   readonly allDay: boolean
@@ -59,7 +56,6 @@ const toEvent = (e: ApiEvent): CalendarEvent | undefined => {
   }
 }
 
-/** これから days 日ぶんの予定。繰り返しは1回ごとに展開し、開始順で返す。 */
 export async function listCalendarEvents(days: number, nowMs: number = Date.now()): Promise<CalendarEvent[]> {
   const events: CalendarEvent[] = []
   const seenTokens = new Set<string>()
@@ -88,7 +84,6 @@ export async function listCalendarEvents(days: number, nowMs: number = Date.now(
   return events
 }
 
-/** 終日は日付のまま、時刻付きはユーザーの時計で見せる。 */
 export const renderCalendarEvents = (events: readonly CalendarEvent[]): string =>
   events.length === 0
     ? "予定なし"
@@ -102,7 +97,7 @@ export const renderCalendarEvents = (events: readonly CalendarEvent[]): string =
 
 export interface NewEvent {
   readonly title: string
-  /** ISO 日時(時刻あり)か YYYY-MM-DD(終日)。 */
+  /** 終日なら YYYY-MM-DD。 */
   readonly start: string
   readonly end?: string
 }
@@ -141,7 +136,6 @@ const oneHourAfter = (start: string): string => {
   return zoned ? end : end.replace(/\.000Z$/, "").replace(/Z$/, "")
 }
 
-/** API へ送る形。挙動が分かれる(終日/時刻・end 省略)ので純関数に切って検査する。 */
 export function buildEventBody(input: NewEvent, timeZone: string): Record<string, unknown> {
   const title = input.title.trim()
   if (title === "") throw new Error("予定の題が空")
@@ -158,7 +152,7 @@ export function buildEventBody(input: NewEvent, timeZone: string): Record<string
   if (input.end !== undefined && HAS_TIME_ZONE.test(input.start) !== HAS_TIME_ZONE.test(input.end))
     throw new Error("開始と終了はタイムゾーン表記を揃える")
   const startMs = timeMs(input.start)
-  // 帯なしの日時は famulus 側のタイムゾーンとして送る。帯付きなら Google がそちらを読む。
+  // タイムゾーン表記の無い日時は famulus のタイムゾーンとして送る。表記があれば Google はそちらを使う。
   const endTime = input.end ?? oneHourAfter(input.start)
   if (timeMs(endTime) <= startMs) throw new Error("終了日時は開始日時より後が必要")
   return {

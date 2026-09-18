@@ -22,22 +22,19 @@ export interface AppConfig {
     readonly db: string
     readonly backups: string
     readonly runs: string
-    /** 受け取った画像の実体。DB には sha256 の参照だけを置く。 */
+    /** DB には sha256 の参照だけを置く。 */
     readonly media: string
     readonly runCache: string
     readonly exportRoot: string
     readonly transcriptRoot: string
     readonly xaiAuth: string
     readonly googleAuth: string
-    /** Codex CLI の資格情報。famulus は読むだけで、ログインは `codex login`(CLI 本体)が持つ。 */
+    /** famulus は読むだけ。書くのは `codex login`。 */
     readonly codexAuth: string
-    /**
-     * 共有 skill(SKILL.md)の正本。`~/.famulus`(famulus 専用のディレクトリ — vendor の `~/.openclaw` と同型で、
-     * 属するのは Haru 自身のエージェント)を直接読む。Claude 側は symlink で同じ正本を読む。
-     */
+    /** 共有 skill の正本。`~/.claude/skills` は symlink でここを指す。 */
     readonly skills: string
   }
-  /** Google 連携(installed app OAuth)。未設定なら calendar 系の道具は設定手順を返すだけ。 */
+  /** 未設定なら calendar 系の道具は設定手順を返すだけ。 */
   readonly google: {
     readonly clientId?: string
     readonly clientSecret?: string
@@ -48,17 +45,11 @@ export interface AppConfig {
     readonly cycle: string
     readonly work: string
     readonly research: string
-    /** ローカル埋め込みの選択。ruri-v3-30m / stub(検査用)/ off。LLM ではないので isKnownModel の対象外。 */
+    /** LLM ではないので isKnownModel の対象外。 */
     readonly embedding: string
-    /** 対話 turn の reasoning.effort。未設定は API 既定。精査役には効かせない(同一入力で判定が割れた)。 */
+    /** 未設定は API 既定。精査役には効かせない(同一入力で判定が割れた)。 */
     readonly turnEffort?: "low" | "medium" | "high"
-    /**
-     * 調査委譲(researcher / explore)の reasoning.effort。既定 medium。
-     * 実測(2026-08-18、grok-4.6・同一 fixture): 既定(厚い推論)は 132〜148秒で claim 6〜7、
-     * 別の問いでは4走とも出力に至らず失敗。medium は 55〜92秒で claim 5〜8・引用一致 34/34、
-     * 失敗していた問いも通る。**推論を厚くすると手数を考え込みに使い果たし、調査が浅くなる。**
-     * low(21〜32秒)はさらに速いが fetch 数が半分。
-     */
+    /** high にすると推論に手数を使い切って出力に至らない問いがあり、low は fetch 数が減る。 */
     readonly researchEffort: "low" | "medium" | "high"
   }
   readonly cycle: {
@@ -239,7 +230,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
     ["FAMULUS_RESEARCH_MODEL", models.research],
   ] as const) {
     if (!isKnownModel(id)) issues.push(`${key}: 既知のmodel idが必要です: ${id}`)
-    // 対話・委譲は xai 経路のみ。GPT の Codex 経路は精査役専用 — 高頻度の役を小さい契約枠に載せない。
+    // Codex 経路は契約枠が小さいので精査役専用。高頻度の対話・委譲には使わない。
     else if (providerForModel(id) !== "xai") issues.push(`${key}: 対話・委譲に使えるのは xai 系のみ: ${id}`)
   }
   const googleClientId = optional(env, "FAMULUS_GOOGLE_CLIENT_ID")
@@ -313,7 +304,7 @@ export function parseConfig(env: Env = process.env, rootDir: string = PROJECT_RO
         min: 60_000,
         max: 7_200_000,
       }),
-      // 1run の非キャッシュtoken上限(coder の予算内層)。従量課金の暴走をここで先に切る。
+      // 1 run の非キャッシュ token 上限。従量課金なので coder 全体の予算より先にここで止める。
       runTokens: integer(env, "FAMULUS_CURSOR_RUN_TOKENS", 300_000, issues, {
         min: 10_000,
         max: 100_000_000,

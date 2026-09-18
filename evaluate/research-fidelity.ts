@@ -1,18 +1,6 @@
 #!/usr/bin/env bun
-/**
- * researcher(外部文献を引く役)のモデル比較。`bun run eval:research [model ...]`。
- *
- * 測るもの(判定器はこのファイルに固定 — 結果を見てから変えない):
- *   - quote一致  … evidence の quote が「その url を fetch した本文」と原文一致する率(主指標)
- *   - url実在    … evidence の url が実際に fetch されたものである率
- *   - claim 数と conclusion の有無、fetch 数・手数・所要(従指標)
- *
- * quote が取得物と一致しない evidence は、捏造か検索索引の写し(原文でないもの)のどちらか。
- * どちらも「出典の無い主張は書かない」の違反として同じ側に数える。
- *
- * 実行は本物の governedModel + 実ネットワーク。クォータを消費する。
- * 生の結果は docs/evals/research/ に残す。
- */
+// 判定器は結果を見てから変えない。
+// quote が取得本文と一致しない evidence は、捏造も検索索引の写しも同じ違反として数える。
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { Output, stepCountIs, ToolLoopAgent } from "ai"
@@ -32,7 +20,7 @@ import { vs } from "../src/model/schema.ts"
 
 const OUT = new URL("../docs/evals/research/", import.meta.url).pathname
 
-/** 実際に過去に調べた問い(evaluate/explore.ts の fixture 2・3 と同じ)。答えの検証先が一次資料にある。 */
+// 答えの検証先が一次資料にある問いを選んでいる。
 const FIXTURES = [
   {
     id: "discord-resume",
@@ -46,7 +34,6 @@ const FIXTURES = [
 
 const bare = (s: string) => s.replace(/\s+/g, "")
 
-/** 走行中の reasoning effort(引数 "id@low" で指定)。 */
 let EFFORT: "low" | "medium" | "high" | undefined
 
 interface Score {
@@ -70,7 +57,7 @@ async function runOne(fixture: (typeof FIXTURES)[number]): Promise<Score> {
     model: governedModel(appConfig().models.research, EFFORT ? { reasoningEffort: EFFORT } : undefined),
     instructions: RESEARCHER,
     tools: gateTools({ search: searchTool(), fetch: fetchTool(fetched) }, undefined),
-    // RESEARCH_OBJECT(assistant.ts)と同形。検証の正本は下の RESEARCH_SCHEMA.validate。
+    // RESEARCH_OBJECT と同形に保つ。検証は RESEARCH_SCHEMA.validate が行う。
     output: Output.object({
       schema: vs(
         v.object({
@@ -142,7 +129,6 @@ const main = async () => {
   const models = process.argv.slice(2)
   if (models.length === 0) models.push("grok-4.3")
   for (const spec of models) {
-    // "grok-4.6@low" の形で reasoning effort を指定できる(既定は API 任せ)。
     const [model, effort] = spec.split("@") as [string, "low" | "medium" | "high" | undefined]
     process.env.FAMULUS_RESEARCH_MODEL = model
     configureApp()
@@ -150,7 +136,7 @@ const main = async () => {
     console.log(`\n== ${spec} ==`)
     const scores: Score[] = []
     for (const fixture of FIXTURES) {
-      // 途中失敗(出力なし・手数切れ)は0点の1走として数える。捨てると失敗しやすい側が有利になる。
+      // 途中失敗を捨てると失敗しやすいモデルが有利になるので、0点の1走として数える。
       const s = await runOne(fixture).catch(
         (e): Score => ({
           fixture: fixture.id,

@@ -1,17 +1,8 @@
-/**
- * リポジトリマップ(aiderの軽量版)。
- *
- * exportシンボルの地図を .cursor/rules/ に置き、モデルの探索ツールコール
- * (glob/grep/read)を削る。aiderはtree-sitter+参照グラフだが、まずは
- * 依存ゼロのregexベース(TS向け)+予算内切り詰めで効果を測る。
- *
- * 予算(文字数)はContext Rot対策 — 全runに注入されるため小さく保ち、
- * シンボル数の多いファイルから優先して詰める。
- */
+/** export シンボルの一覧を .cursor/rules/ に置き、モデルの glob/grep/read を減らす。全 run に注入されるので小さく保つ。 */
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 
-/** 地図の文字数予算(≈1kトークン。aiderの--map-tokens既定と同水準)。 */
+/** 約1k トークン。 */
 export const MAP_CHAR_BUDGET = 4_000
 
 const SYMBOL_RE = /^export\s+(?:async\s+)?(function|class|interface|type|const|enum)\s+([A-Za-z0-9_]+)/
@@ -21,7 +12,6 @@ export interface FileSymbols {
   symbols: string[]
 }
 
-/** 1ファイルのexportシンボルを抽出する(kindの短縮表記つき)。 */
 export function extractSymbols(source: string): string[] {
   const out: string[] = []
   for (const line of source.split("\n")) {
@@ -44,7 +34,6 @@ function walkTsFiles(root: string, dir: string, acc: string[]): void {
   }
 }
 
-/** リポジトリのexportシンボル地図を収集する(テスト・宣言ファイル除く)。 */
 export function collectMap(cwd: string): FileSymbols[] {
   const files: string[] = []
   try {
@@ -64,10 +53,6 @@ export function collectMap(cwd: string): FileSymbols[] {
   return out
 }
 
-/**
- * 地図をrulesファイル本文に描画する。予算超過時はシンボル数の多いファイル優先で
- * 切り詰め、省略を明示する(fail-loud)。
- */
 export function renderMap(map: FileSymbols[], budget = MAP_CHAR_BUDGET): string {
   const header = [
     "---",
@@ -92,7 +77,6 @@ export function renderMap(map: FileSymbols[], budget = MAP_CHAR_BUDGET): string 
     used += clipped.length + 1
     lines.push(clipped)
   }
-  // ファイルパス順で出力(モデルが辿りやすい)
   lines.sort()
   const footer = omitted > 0 ? `\n(…${omitted} more files omitted by budget — use grep for those)` : ""
   return `${header}${lines.join("\n")}${footer}\n`

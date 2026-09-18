@@ -40,9 +40,9 @@ describe("snapshotストア(①スナップショット式undo)", () => {
 
       const r = restoreSnapshot(cwd, snap.sha)
       expect(r.ok).toBe(true)
-      expect(read(cwd, "keep.txt")).toBe("original\n") // 修正が戻る
-      expect(read(cwd, "gone.txt")).toBe("will be deleted\n") // 削除が復活
-      expect(existsSync(join(cwd, "added.txt"))).toBe(false) // 追加が除去
+      expect(read(cwd, "keep.txt")).toBe("original\n")
+      expect(read(cwd, "gone.txt")).toBe("will be deleted\n")
+      expect(existsSync(join(cwd, "added.txt"))).toBe(false)
     } finally {
       rmSync(cwd, { recursive: true, force: true })
     }
@@ -59,12 +59,10 @@ describe("snapshotストア(①スナップショット式undo)", () => {
       const snap = takeSnapshot(cwd, { label: "pre", kind: "pre-step" })
       assert.ok(snap)
 
-      // .agent と ignored を変異させてから復元
       writeFileSync(join(cwd, ".agent", "internal.txt"), "MUTATED internal\n")
       writeFileSync(join(cwd, "node_modules", "dep.js"), "MUTATED dep\n")
       const r = restoreSnapshot(cwd, snap.sha)
       expect(r.ok).toBe(true)
-      // どちらも復元されず変異のまま残る(= restoreの管理外 = 保護されている)
       expect(read(cwd, ".agent/internal.txt")).toContain("MUTATED")
       expect(read(cwd, "node_modules/dep.js")).toContain("MUTATED")
     } finally {
@@ -82,7 +80,7 @@ describe("snapshotストア(①スナップショット式undo)", () => {
       writeFileSync(join(cwd, "a.txt"), "2\n")
       takeSnapshot(cwd, { label: "s2", kind: "manual" })
       const log = execFileSync("git", ["-C", cwd, "log", "--oneline"], { encoding: "utf8" }).trim()
-      expect(log.split("\n")).toHaveLength(1) // baseの1件のみ
+      expect(log.split("\n")).toHaveLength(1)
     } finally {
       rmSync(cwd, { recursive: true, force: true })
     }
@@ -100,7 +98,6 @@ describe("snapshotストア(①スナップショット式undo)", () => {
       expect(r.safety).toBeDefined()
       assert.ok(r.safety)
       expect(read(cwd, "a.txt")).toBe("v1\n")
-      // 安全スナップショットへ戻せば v2 が復活(復元の取り消し)
       const back = restoreSnapshot(cwd, r.safety.sha)
       expect(back.ok).toBe(true)
       expect(read(cwd, "a.txt")).toBe("v2\n")
@@ -135,10 +132,10 @@ describe("snapshotストア(①スナップショット式undo)", () => {
       assert.ok(s1)
 
       const list = listSnapshots(cwd)
-      expect(list[0]?.sha).toBe(s1.sha) // 新しい順
-      expect(resolveSnapshot(cwd, s0.sha.slice(0, 8))?.sha).toBe(s0.sha) // 短縮SHA
+      expect(list[0]?.sha).toBe(s1.sha)
+      expect(resolveSnapshot(cwd, s0.sha.slice(0, 8))?.sha).toBe(s0.sha)
       expect(resolveSnapshot(cwd, "deadbeef")).toBeUndefined()
-      expect(latestFlowSnapshot(cwd, "f-9")?.stepIndex).toBe(1) // 最新pre-step
+      expect(latestFlowSnapshot(cwd, "f-9")?.stepIndex).toBe(1)
       expect(latestFlowSnapshot(cwd, "nope")).toBeUndefined()
     } finally {
       rmSync(cwd, { recursive: true, force: true })

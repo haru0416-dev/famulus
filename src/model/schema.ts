@@ -1,23 +1,8 @@
 /**
- * valibot のスキーマを AI SDK の道具定義に渡せる形にする1枚。
- *
- * AI SDK は道具の入力を JSON Schema に落としてモデルへ載せる。valibot は Standard Schema を
- * 実装しているが、その規格に JSON Schema 変換は含まれていない —
- * 素で渡すと `Standard schema vendor 'valibot' does not support JSON Schema conversion.` で落ちる。
- *
- * 落とした案: 道具18件を zod で書き直す。変換は要らなくなるが、
- * DB 側(src/services/*.ts)の検証も全部 valibot なので、1つのプロセスに2つのスキーマ言語が並ぶ。
- * 変換を1枚挟むほうが、書き換える行数も後から読む人の負担も小さい。
- *
- * ## `validate` を渡す
- * 渡さないと検証されない。AI SDK の `safeValidateTypes` は `schema.validate == null` を
- * 「検証なしで成功」として通す。つまり `validate` を省くと、valibot のスキーマは
- * JSON Schema を作るためだけに使われ、モデルが返した値はそのまま `execute` へ入る —
- * 実行時検証が無いと `hours: "24"`(文字列)も、必須の欠けも通る。
- *
- * 落ちた呼び出しは turn を止めない。AI SDK が `tool-error` を積み、次の呼び出しの
- * 「## ツール結果」に valibot の指摘が載るので、モデルは同じ turn の中で呼び直せる。
- * 代わりに手数(`stepCountIs`)を1つ使う。
+ * valibot のスキーマを AI SDK の道具定義へ渡す変換。Standard Schema に JSON Schema 変換は含まれないので、素で渡すと落ちる。
+ * zod に書き換えないのは、src/services の検証も valibot で1プロセスに2つのスキーマ言語が並ぶため。
+ * `validate` を省くと AI SDK は検証なしで成功扱いにし、モデルの値がそのまま `execute` へ入る。
+ * 検証に落ちた呼び出しは turn を止めず、次の呼び出しに指摘が載る(手数を1つ使う)。
  */
 import { toJsonSchema } from "@valibot/to-json-schema"
 import { jsonSchema } from "ai"
@@ -29,12 +14,9 @@ export interface RuntimeSchema<T> {
 }
 
 /**
- * Runner の構造化出力を、モデルへ渡す JSON Schema と実行時検証の組で持つ。
- *
- * `errorMode: "ignore"` は JSON Schema に表せない action(`trim` など)を変換から落とす。
- * 黙って弱くなるのは JSON Schema の側だけ — 検証の正本は下の `validate`(safeParse)で、
- * そちらは全 action を実行する。既定の throw のままだと、表せない action を含む道具が
- * 1つあるだけで assistant の組み立てが丸ごと落ちる(実測: v.trim() で cycle が起動不能)。
+ * `errorMode: "ignore"` は JSON Schema に表せない action(`trim` など)を変換から落とす。検証の正本は
+ * `validate`(safeParse)で全 action を実行する。既定の throw だと、表せない action を含む道具が1つあるだけで
+ * assistant の組み立てが失敗する。
  */
 export const rs = <T extends v.GenericSchema>(s: T): RuntimeSchema<v.InferOutput<T>> => ({
   jsonSchema: toJsonSchema(s, { errorMode: "ignore" }) as Record<string, unknown>,

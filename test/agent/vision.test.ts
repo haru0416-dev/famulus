@@ -1,9 +1,3 @@
-/**
- * looker(画像の記述役)の検査。モデルは RunnerStub。実画像の判定品質はここでは見ない —
- * それは実走で確かめる。ここで固定するのは前処理の規律:
- * 1画像1回・記述は taint=1 の system 記録・実体の無い参照は飛ばす。
- */
-
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -57,11 +51,9 @@ test("未記述の画像に記述を1回だけ付け、taint=1 の system 記録
         assert.equal(Number(row?.taint), 1)
         assert.match(String(row?.d), /病院の予約票/)
 
-        // 2回目は記述済みなので何もしない(stub の残り台本も消費しない)
         const second = await h.run(describePendingImages(events))
         assert.equal(second.length, 0)
 
-        // 記述は recall で引ける(検索テキストに入っている)
         const hits = await h.run(Effect.flatMap(Memory, (m) => m.recall("予約票")))
         assert.ok(hits.some((r) => String(r.text ?? "").includes("画像の記述(未検証)")))
       },

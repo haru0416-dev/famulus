@@ -1,19 +1,5 @@
 /**
- * workspace の一覧。`~/.famulus/runs/<名前>` に何が置いてあるかを、次の cycle が読める形にする。
- *
- * `shell` は前から同じ名前を渡せば続きから走る作りになっていたが、どんな名前が在るかを
- * 知る手段が無かった。名前は毎回モデルが思い付きで書くので、実測では同じ調べ物に
- * `hn` と `ossrun` と `boundary-probe` が別々に立ち、どれが何のためのものかは
- * ディレクトリ名からしか読めない状態になっていた。続きから走らせるための仕組みが、
- * 続きの在り処を渡していない。
- *
- * ここに置くのはファイルシステムが知らないことだけ。
- *
- * - `purpose` … 何のための場所か。ディレクトリを見ても出てこない。
- * - `keep` … 触られなくても消してはいけない場所か。時刻からは決まらない(src/core/cleanup.ts)。
- *
- * 大きさと最後に触った時刻は木を走査すれば分かるので列にしない。持つと必ずずれる —
- * コンテナが書き込むのはホスト側のファイルなので、DB を経由せずに中身が変わる。
+ * DB には `purpose` と `keep` だけを持つ。大きさと更新時刻はコンテナが DB を経由せずに変えるので、列にせず毎回走査する。
  */
 
 import { existsSync, lstatSync, readdirSync } from "node:fs"
@@ -25,13 +11,11 @@ import { nowIso } from "./time.ts"
 
 export interface Workspace {
   readonly name: string
-  /** ホスト側の絶対パス。 */
   readonly dir: string
-  /** 登録が無ければ undefined。「説明が無い」ことも読ませるので、行ごと落とさない。 */
+  /** 説明が無いことも読ませるので、未登録でも行を落とさない。 */
   readonly purpose: string | undefined
   readonly keep: boolean
   readonly bytes: number
-  /** ディレクトリ配下で最も新しい更新時刻(ミリ秒)。 */
   readonly touchedMs: number
 }
 
@@ -40,7 +24,7 @@ export interface TreeStat {
   readonly newestMs: number
 }
 
-/** 読めないディレクトリは空として扱う。走行中に消えることがある。 */
+/** 走行中に消えることがある。 */
 const entriesOf = (dir: string) => {
   try {
     return readdirSync(dir, { withFileTypes: true })
@@ -50,24 +34,9 @@ const entriesOf = (dir: string) => {
 }
 
 /**
- * ディレクトリを1回だけ再帰走査し、合計サイズと最新更新時刻を同時に取得する。
- *
- * ルートディレクトリの時刻だけを見ると、配下のファイルを書き換えても親ディレクトリの時刻が変わらないため、
- * 使用中の workspace が「古い」と表示される。配下を走査して最も新しい更新時刻を採る。
- *
- * ## 同じ実体を2回数えない
- * workspace の内容はほとんどが `node_modules` で、bun の isolated と pnpm はそこを
- * symlink と hard link で構成する(bun は `node_modules/.bun/` へ、pnpm は `.pnpm/` へ張る)。
- *
- * - `readdirSync(recursive: true)` は symlink の参照先を走査する(Bun / Node どちらも)。
- *   この構造では同じディレクトリを繰り返し走査し、走査件数もサイズも数倍になる。
- *   symlink の循環があれば `ELOOP` を投げ、一覧取得全体が失敗する。
- * - hard link では同じ inode が複数のパスに現れる。パスごとに加算すると、
- *   消しても空かない分を数えることになる。
- *
- * 明示的に再帰走査して `lstat` で確認する。symlink は辿らず、容量にも含めない。
- * regular file の hard link は `dev:ino` で1回だけ数え、同じ実体の重複加算を避ける。
- * この方針はリンク構造で走査量と容量が膨らむのを防ぐためのもの。
+ * 配下のファイルを書き換えても親ディレクトリの時刻は変わらないので、配下の最新時刻を採る。
+ * `readdirSync(recursive: true)` は symlink を辿り、node_modules の構造で重複走査や ELOOP になるので使わない。
+ * hard link は `dev:ino` で1回だけ数える。
  */
 export const scanTree = (dir: string): TreeStat => {
   let bytes = 0
@@ -86,7 +55,7 @@ export const scanTree = (dir: string): TreeStat => {
       try {
         s = lstatSync(p)
       } catch {
-        continue // 走査との競合で消えた項目。1件の競合で一覧全体を失敗させない。
+        continue
       }
       if (s.mtimeMs > newestMs) newestMs = s.mtimeMs
       if (e.isDirectory()) {
@@ -106,7 +75,6 @@ export const scanTree = (dir: string): TreeStat => {
 
 export const mb = (bytes: number): string => `${(bytes / 1_048_576).toFixed(1)}MB`
 
-/** 「3 時間前」「5 日前」。刻そのものより、放置の長さのほうが選ぶときに要る。 */
 export const sinceLabel = (touchedMs: number, nowMs: number): string => {
   const h = (nowMs - touchedMs) / 3_600_000
   if (h < 1) return "さっき"
@@ -114,10 +82,7 @@ export const sinceLabel = (touchedMs: number, nowMs: number): string => {
   return `${Math.round(h / 24)} 日前`
 }
 
-/**
- * 登録と実体を突き合わせる。実体のあるものだけ返す — 消えた workspace の説明だけ残しても、
- * 一覧から選んだ先が空になる。並びは最後に触った順(続きをやる相手が上に来る)。
- */
+/** 実体のあるものだけ返す。消えた workspace の説明を返すと、選んだ先が空になる。 */
 export const listWorkspaces = Effect.gen(function* () {
   const db = yield* Db
   const rows = yield* db.all("SELECT name, purpose, keep FROM workspaces")
@@ -142,7 +107,6 @@ export const listWorkspaces = Effect.gen(function* () {
   return out.sort((a, b) => b.touchedMs - a.touchedMs)
 })
 
-/** プロンプトにも `fam ws` にも同じ形で出す。説明の無いものは無いと書く。 */
 export const renderWorkspaces = (list: readonly Workspace[], nowMs: number): string => {
   if (list.length === 0) return "(まだ1つも無い)"
   return list
@@ -161,10 +125,7 @@ export const purposeOf = (name: string) =>
     return r === undefined ? undefined : (r.purpose as string)
   })
 
-/**
- * 説明を書く/上書きする。`keep` はここからは動かせない —
- * 消えないようにする指定は取り消せない側(残り続ける)なので、ホスト側の管理経路からだけ変更する。
- */
+/** `keep` はモデルから変えさせない。ホスト側の管理経路(`keepWorkspace`)だけが立てる。 */
 export const noteWorkspace = (name: string, purpose: string) =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -177,7 +138,6 @@ export const noteWorkspace = (name: string, purpose: string) =>
     )
   })
 
-/** 触られなくても消さない場所として登録する。`fam selfdev` のようなホスト側の管理経路から呼ぶ。 */
 export const keepWorkspace = (name: string, purpose: string) =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -190,14 +150,12 @@ export const keepWorkspace = (name: string, purpose: string) =>
     )
   })
 
-/** 消さない指定のある名前。cleanup がこれを避ける。 */
 export const keptNames = Effect.gen(function* () {
   const db = yield* Db
   const rows = yield* db.all("SELECT name FROM workspaces WHERE keep = 1")
   return new Set(rows.map((r) => r.name as string))
 })
 
-/** 実体を消したあとに登録も削除する。残すと、実体の無い説明が一覧に出ない代わりに溜まる。 */
 export const forgetWorkspaces = (names: readonly string[]) =>
   Effect.gen(function* () {
     if (names.length === 0) return

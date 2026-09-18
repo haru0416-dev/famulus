@@ -36,8 +36,7 @@ describe("renderMap", () => {
     expect(out).toContain("alwaysApply: true")
     expect(out).toContain("- src/a.ts: a(), b(), c()")
     expect(out).toContain("- src/b.ts: d()")
-    // ヘッダ(≈204字)+ a.ts行(26字)は収まるが b.ts行(16字)は溢れる予算。
-    // シンボル少ない側(b.ts)が省略され、fail-loudに明示されることを検証する。
+    // ヘッダと a.ts 行は収まり、b.ts 行は溢れる予算。
     const tiny = renderMap(map, 235)
     expect(tiny).toContain("omitted by budget")
     expect(tiny).not.toContain("- src/b.ts: d()")

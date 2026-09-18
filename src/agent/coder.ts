@@ -1,11 +1,6 @@
 /**
- * coder — コーディングを Cursor SDK へ委譲する実行の1本。
- *
- * 順路: scaffolding(guard hook)→ snapshot → task ブランチ → runCursorTask →
- * commit して base へ復帰 → 概算コストを添えて返す。記帳(ledger)は CLI 側が行う。
- *
- * 自走(cycle)へは渡さない — 入口は `fam code` だけ。従量課金のコスト上限が
- * governance に入るまでこの境界は動かさない。merge/push はここには無い(人間が行う)。
+ * コーディングを Cursor SDK へ委譲する。ledger への記帳は CLI が行い、merge/push は人間が行う。
+ * cycle からは呼ばない(入口は `fam code` だけ)。従量課金のコスト上限が governance に入るまで変えない。
  */
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -16,11 +11,7 @@ import { takeSnapshot } from "../core/snapshot.ts"
 import { type CursorRunSummary, runCursorTask } from "../model/cursor.ts"
 import { estimateRunCostUSD } from "../model/cursor-pricing.ts"
 
-/**
- * workspace に guard hook の scaffolding を置く(冪等)。
- * settingSources:["project"] 経由でロードされ、4イベントとも同じ guard.sh が
- * `fam cursor-hook` を呼ぶ。role は guard.sh が env から argv へ展開する。
- */
+/** 冪等。settingSources:["project"] 経由で Cursor に読まれる。 */
 export function ensureCoderScaffolding(root: string): void {
   const hooksDir = join(root, ".cursor", "hooks")
   mkdirSync(hooksDir, { recursive: true })
@@ -52,7 +43,7 @@ export function ensureCoderScaffolding(root: string): void {
   }
 }
 
-/** repo のシンボル地図を .cursor/rules に置く(探索ツールコールの削減)。 */
+/** 探索のツールコールを減らすため、シンボル地図を .cursor/rules に置く。 */
 export function writeRepoMap(root: string): string {
   const rulesDir = join(root, ".cursor", "rules")
   mkdirSync(rulesDir, { recursive: true })
@@ -65,7 +56,7 @@ export interface CodeTaskOptions {
   readonly root: string
   readonly task: string
   readonly model?: string
-  /** 読み取り志向の計画モード。branch/snapshot/commit を行わない。 */
+  /** branch/snapshot/commit を行わない。 */
   readonly plan?: boolean
 }
 
@@ -79,7 +70,7 @@ export interface CodeOutcome {
   readonly model: string
 }
 
-/** 1タスクを workspace 上で実行する。失敗しても成果(ブランチ・snapshot)を失わない方向に倒す。 */
+/** 失敗してもブランチと snapshot は残す。 */
 export async function runCodeTask(opts: CodeTaskOptions): Promise<CodeOutcome> {
   const { root, task, plan } = opts
   ensureCoderScaffolding(root)
@@ -101,7 +92,7 @@ export async function runCodeTask(opts: CodeTaskOptions): Promise<CodeOutcome> {
   }
 
   const snapshot = takeSnapshot(root, { label: `pre-task ${task.slice(0, 80)}` })
-  // ブランチ名は日付+タスク先頭を語単位で。記号をそのまま詰めるとハイフンだらけで読めない。
+  // 記号の連続を1つのハイフンにまとめる。1文字ずつ置き換えるとハイフンだらけで読めない。
   const slug =
     task
       .slice(0, 60)

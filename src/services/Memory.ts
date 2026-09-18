@@ -1,10 +1,6 @@
 /**
- * memory サービス。記録の基準は append-only の `events`。belief履歴はview、FTSはprojection。
- *
- * 抹消は本文・検索文・根拠の引用をNULLにし、同じtransactionでredactイベントを追記する。
- *
- * `remember` は引数を最小・既定値を厚くしてある。仕組みがあっても記録が溜まらなければ DB は無いのと同じで、
- * 溜まらない原因が API の摩擦なら、それは設計の側で消せる。
+ * 正本は append-only の `events`。belief_slots と FTS は events から導く projection。
+ * `remember` は必須引数を最小にしてある(呼び出しが面倒だと記録が溜まらない)。
  */
 import { createHash, randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
@@ -20,16 +16,13 @@ export type EventKind = "observe" | "belief" | "redact" | "import"
 export type EventSource = "owner" | "calendar" | "gmail" | "web" | "system"
 export type Exposure = "private" | "public"
 
-/** 現在区間の `valid_from` がこの日数より古い確定事実(belief)を再確認候補として表示する。 */
+/** 現在区間の `valid_from` がこの日数より古い belief を再確認候補にする。 */
 export const STALE_BELIEF_DAYS = 90
 
 const sha256Hex = (s: string): string => createHash("sha256").update(s).digest("hex")
 const toBlob = (v: Float32Array): Uint8Array => new Uint8Array(v.buffer, v.byteOffset, v.byteLength)
 
-/**
- * FTS と意味検索の合流。BM25 と cosine 距離はスケールが違うので順位だけを使う(RRF、k=60)。
- * 片方が空ならもう片方の順序がそのまま残る — 埋め込みが無い構成では FTS だけの順になる。
- */
+/** BM25 と cosine 距離はスケールが違うので順位だけを使う(RRF)。 */
 export const rrfMerge = <T extends { readonly id: string }>(
   fts: readonly T[],
   semantic: readonly T[],
@@ -59,13 +52,11 @@ export interface RememberInput {
   readonly kind?: EventKind
   readonly source?: EventSource
   readonly content: unknown
-  /** 不信データ由来か。gmail/web は既定で 1。 */
   readonly taint?: boolean
   readonly exposure?: Exposure
-  /** 訂正・忘却の対象イベント id(lineage)。 */
   readonly supersedes?: string
   readonly provenance?: readonly SourceRef[]
-  /** 検索用テキスト。省略時は content から導く。 */
+  /** 検索用テキスト。省略時は content から導く。"" なら索引に入れない。 */
   readonly text?: string
   readonly at?: string
   readonly origin?: { readonly kind: string; readonly id: string }
@@ -101,35 +92,21 @@ export interface EventRow {
   readonly supersedes: string | null
   readonly provenance: string
   readonly content: string | null
-  /** FTS に入れた素のテキスト(JSON の構造を除いたもの)。読ませるのはこちら。 */
+  /** JSON の構造を除いたテキスト。モデルと人にはこちらを見せる。 */
   readonly text: string | null
-  /** belief のとき、その slot の今の値か(0 なら上書き済みの旧版)。 */
   readonly is_current: number
 }
 
 /**
- * この belief イベントが、その slot の今の値か。
- *
- * `recordBelief()` は追記なので、同じ slot を2回確定すると belief イベントが2本残る。
- * 両方を「確定」として並べると、読む側は古い値と新しい値を区別できないまま受け取る。
- * どちらが今なのかは projection(`belief_slots`)だけが知っている。
- *
- * 区間が閉じているかまで見る。`resolved_from` の一致だけで判定していると、
- * 「転職活動中」を確定した行は上書きされた後も一致し続け、検索結果の最上位に残る。
+ * 同じ slot の belief イベントは複数残るので、今の値かは belief_slots で判定する。
+ * `resolved_from` の一致だけでは、上書き済みの行も一致し続ける。
  */
 const IS_CURRENT =
   "EXISTS (SELECT 1 FROM belief_slots b WHERE b.resolved_from = e.id AND b.valid_until IS NULL)"
 
 /**
- * 層の重み。bm25 は「小さいほど関連が強い」負の値なので、引くと前に出る。
- *
- * DB は1つの events 表だが、記録種別によって検索順位を変える。確定事実(belief)はユーザーに確認した1行、
- * `source='system'` は famulus が保存した記録。同じ語を含んでいても、検索結果としての優先度が違う。
- *
- * `kind` と `source` は別の問いに答えている。source は誰が書いたか、kind はどんな記録か。
- * 取り込み(`import`)は自分が書くので source は system だが、中身はユーザーの判断の要約であって
- * famulus 自身の実行記録ではない。source だけで下げると、取り込んだ会話要約がすべて検索結果の下位になる。
- * だから `import` を `source='system'` より先に判定する。順序がそのまま意味になっている。
+ * bm25 は小さいほど関連が強い負の値なので、引くと前に出る。
+ * `import` は source が system だが中身はユーザーの判断の要約なので、`source='system'` より先に判定する。
  */
 const LAYER_BIAS = `CASE
     WHEN e.kind = 'belief' AND ${IS_CURRENT} THEN -2.5
@@ -139,17 +116,7 @@ const LAYER_BIAS = `CASE
     ELSE 0.0
   END`
 
-/**
- * 検索結果を読ませる形にする。呼ぶ側(CLI / recall ツール)で揃えたいのでここに置く。
- *
- * 生の `content` をそのまま出すと `{"said":"…` という JSON 構造がモデルにも人にも見える。
- * JSON 構造は保存形式であって本文ではない。索引に入れた素のテキストのほうを見せる。
- * 併せてどの層の1行なのかを頭に付ける — 確定した事実とシステム記録を、
- * 読む側が区別できないまま並べない。
- *
- * 時刻はユーザーの時計で出す(`localStamp`)。UTC のまま帯なしで渡すと、
- * 夜中の記録が前日として読まれる。
- */
+// 時刻は `localStamp` で出す。UTC のままだと夜中の記録が前日として読まれる。
 export function renderRecall(rows: readonly EventRow[], perRow = 180): string {
   if (rows.length === 0) return "該当なし"
   return rows
@@ -160,8 +127,7 @@ export function renderRecall(rows: readonly EventRow[], perRow = 180): string {
             ? "確定"
             : "確定(旧版)"
           : r.kind === "import"
-            ? // 由来が要約であることを隠さない。ユーザーが直接そう言った1行と混ぜて読ませない。
-              "取り込み"
+            ? "取り込み"
             : r.source === "system"
               ? r.taint === 1
                 ? "システム記録(未検証)"
@@ -174,7 +140,6 @@ export function renderRecall(rows: readonly EventRow[], perRow = 180): string {
     .join("\n")
 }
 
-/** content(JSON 文字列)から素のテキストに戻す。索引を持たない行だけがここに来る。 */
 function safeText(content: string | null): string {
   if (content === null) return ""
   try {
@@ -184,10 +149,7 @@ function safeText(content: string | null): string {
   }
 }
 
-/**
- * 重複する本文の行を除外する。関連度順で最初に出たものを残す。
- * 同じことを5回言われた DB では、除外しないと1つの話題だけで結果上限を埋める。
- */
+/** 除外しないと、繰り返し言われた1つの話題が結果の上限を埋める。 */
 function dedupe(rows: readonly EventRow[], limit: number): EventRow[] {
   const seen = new Set<string>()
   const out: EventRow[] = []
@@ -201,10 +163,9 @@ function dedupe(rows: readonly EventRow[], limit: number): EventRow[] {
   return out
 }
 
-/** FTS の trigram tokenizer は3文字窓。2文字以下のクエリは引けないので呼ぶ前に弾く。 */
+/** trigram tokenizer は2文字以下を引けない。 */
 export const FTS_MIN_QUERY = 3
 
-/** content から検索テキストを起こす。文字列はそのまま、構造体は値だけ拾って連結。 */
 function deriveText(content: unknown): string {
   if (typeof content === "string") return content
   if (content === null || content === undefined) return ""
@@ -221,7 +182,7 @@ function deriveText(content: unknown): string {
   return parts.join(" ")
 }
 
-/** FTS5 のクエリ構文文字を落として素の語として扱う(ユーザー入力をそのまま渡さない)。 */
+/** 入力を FTS5 のクエリ構文として解釈させない。 */
 function sanitizeFts(q: string): string {
   return q.replace(/["'*(){}:^-]/g, " ").trim()
 }
@@ -241,7 +202,6 @@ const makeMemory = () =>
       }
       const source = input.source ?? "owner"
       const kind = input.kind ?? "observe"
-      // gmail/web は既定で taint。明示指定があればそれを優先する。
       const taint = input.taint ?? (source === "gmail" || source === "web")
       const provenance = JSON.stringify(input.provenance ?? [{ kind: source, at }])
       const content = JSON.stringify(input.content ?? null)
@@ -276,12 +236,11 @@ const makeMemory = () =>
       return id
     }
 
-    /** 埋め込みを2表へ書く。呼ぶ側が埋め込みの有無を判定済み(off・失敗なら呼ばれない)。 */
     const writeEmbedding = (tx: DbTx, eventId: string, text: string, vec: Float32Array, at: string) => {
-      // events の rowid は seq の別名なので、素の `SELECT rowid` は {seq} で返る。別名で受ける。
+      // rowid は seq の別名なので、素の `SELECT rowid` は {seq} で返る。
       const row = tx.get("SELECT rowid AS r FROM events WHERE id = ?", eventId)
       if (!row) return
-      // 重複取り込み(append が既存 id を返す経路)では埋め込みも既にある。二重に書かない。
+      // append が既存 id を返した場合は埋め込みも既にある。
       if (tx.get("SELECT 1 FROM events_embedding WHERE rowid = ?", Number(row.r))) return
       tx.run("INSERT INTO events_vec(rowid, embedding) VALUES (?, ?)", Number(row.r), toBlob(vec))
       tx.run(
@@ -294,7 +253,6 @@ const makeMemory = () =>
       )
     }
 
-    /** イベントとFTS projection・埋め込みを同じtransactionで追記する。 */
     const remember = (input: RememberInput) =>
       Effect.gen(function* () {
         const id = randomUUID()
@@ -302,8 +260,7 @@ const makeMemory = () =>
         const meta = input.origin
           ? { ...EMPTY_META, originKind: input.origin.kind, originId: input.origin.id }
           : EMPTY_META
-        // 埋め込みは tx の外で作る(モデル呼び出しは非同期)。off・失敗は undefined —
-        // 記憶の書き込みを埋め込みの都合で止めない。取りこぼしは embedMissing が埋め直す。
+        // 埋め込みの失敗で書き込みを止めない。取りこぼしは embedMissing が埋め直す。
         const text = input.text ?? deriveText(input.content)
         const vec = text.length > 0 ? yield* Effect.promise(() => embedPassage(text)) : undefined
         return yield* db.withImmediateTransaction("remember event", (tx) => {
@@ -314,16 +271,8 @@ const makeMemory = () =>
       })
 
     /**
-     * belief slot を確定する。projection を直接上書きせず、必ず belief event を経由させる
-     * (`resolved_from` が NOT NULL の FK なので、根拠なしにスロットは立たない)。
-     *
-     * 上書きしない。今の区間に `valid_until` を打って閉じ、次の区間を隣に足す。
-     * 上書きにすると「転職活動中」だった時期そのものが DB から消え、
-     * 過去形の問い(「去年の今ごろ何をしていたか」)に答えられなくなる。
-     *
-     * `validFrom` はその事実がいつ真になったかで、記録時刻とは別物。
-     * 「6月に終わっていたと8月に知った」なら validFrom は6月、updated_at は8月。
-     * 分からなければ記録時刻に落ちる — 推測で埋めるより「遅くともこの時点」のほうが正しい。
+     * slot は上書きせず、今の区間を `valid_until` で閉じて次の区間を足す(過去の時点の値を問えるように)。
+     * `validFrom` は事実が真になった時刻で記録時刻とは別。不明なら記録時刻にする。
      */
     const recordBelief = (
       slot: string,
@@ -351,7 +300,7 @@ const makeMemory = () =>
             "SELECT resolved_from, valid_from FROM belief_slots WHERE slot = ?AND valid_until IS NULL",
             slot,
           )
-          // 遡って書くとき、前の区間より前には戻さない(区間が裏返るとどの並びも壊れる)。
+          // 前の区間より前には戻さない。区間が逆転すると順序の前提が崩れる。
           const prevFrom = cur === undefined ? undefined : String(cur.valid_from)
           const asked = opts?.validFrom ?? at
           const validFrom = prevFrom !== undefined && asked < prevFrom ? prevFrom : asked
@@ -363,7 +312,7 @@ const makeMemory = () =>
               source: "system",
               content: value,
               exposure,
-              // 何を訂正したのかは events 側にも残す。projection を捨てても系譜が辿れる。
+              // belief_slots を捨てても訂正の系譜を events から辿れるようにする。
               ...((opts?.supersedes ?? cur)
                 ? { supersedes: opts?.supersedes ?? String(cur?.resolved_from) }
                 : {}),
@@ -402,16 +351,13 @@ const makeMemory = () =>
     const SLOT_COLS =
       "value, exposure, resolved_from, updated_at, valid_from, valid_until, invalidated_reason"
 
-    /** 今の値。閉じていない区間は slot ごとに高々1本(部分 UNIQUE が保証している)。 */
+    /** 閉じていない区間は slot ごとに高々1本(部分 UNIQUE)。 */
     const currentBelief = (slot: string) =>
       db
         .get(`SELECT ${SLOT_COLS} FROM belief_slots WHERE slot = ?AND valid_until IS NULL`, slot)
         .pipe(Effect.map((r) => view(slot, r)))
 
-    /**
-     * その時点での値。過去形の問いはここを通る。
-     * 半開区間 `[valid_from, valid_until)` — 隣り合う区間が同じ瞬間を二重に主張しない。
-     */
+    /** 半開区間 `[valid_from, valid_until)`。隣り合う区間が同じ時刻で重ならない。 */
     const beliefAsOf = (slot: string, at: string) =>
       db
         .get(
@@ -428,12 +374,7 @@ const makeMemory = () =>
         .all(`SELECT ${SLOT_COLS} FROM belief_slots WHERE slot = ?ORDER BY valid_from ASC`, slot)
         .pipe(Effect.map((rows) => rows.map((r) => view(slot, r)).filter((v) => v !== undefined)))
 
-    /**
-     * 現在区間の `valid_from` が指定時刻より古い事実。
-     *
-     * これは確認鮮度(`updated_at`)ではなく、事実がいつ真になったかという valid time で切る。
-     * 後から知った古い事実も対象になるため、「最後に確認してからの経過」とは解釈しない。
-     */
+    /** `updated_at`(記録時刻)ではなく valid_from で切るので、最後に確認してからの経過ではない。 */
     const staleBeliefs = (before: string, limit = 20) =>
       db
         .all(
@@ -445,12 +386,7 @@ const makeMemory = () =>
         )
         .pipe(Effect.map((rows) => rows.map((r) => view(String(r.slot), r)).filter((v) => v !== undefined)))
 
-    /**
-     * いま閉じていない区間の全部。新しい値を上げる前に、既にある名前を見せるための一覧。
-     *
-     * 同じ事柄に別名の slot を作られると、どちらを引いても片方しか出てこない DB になる。
-     * 検索では防げない — 別名は別名として素直に当たるので、書く側に既存の名前を見せるしかない。
-     */
+    /** 書く前に既存の slot 名を見せ、同じ事柄に別名の slot が作られるのを防ぐ。検索では防げない。 */
     const currentBeliefs = (limit = 50) =>
       db
         .all(
@@ -460,31 +396,7 @@ const makeMemory = () =>
         )
         .pipe(Effect.map((rows) => rows.map((r) => view(String(r.slot), r)).filter((v) => v !== undefined)))
 
-    /**
-     * 全文検索。trigram なので部分一致する。
-     *
-     * 2文字以下は FTS では引けない(trigram は3文字窓)。日本語は「会議」「予定」「金額」のように
-     * 常用語の多くが2文字なので、ここで空を返すと「無いのか引けないのか分からない」状態になる。
-     * その帯だけ LIKE の素朴な走査に落とす(events は個人の DB 規模で、走査しても実用上問題ない)。
-     *
-     * 並びは bm25 の関連度。`at DESC` にすると「一致した中の新着順」でしかなくなり、
-     * cycle が毎回書く長い自己言及が"新しい"というだけで上位を占めて、探している事実を押し下げる。
-     *
-     * 併せて層で重みを付ける。同じ語を含むだけの独り言より、確定した1行のほうが常に役に立つ。
-     */
-    /**
-     * @param exclude 検索から外す event id。今のターンの入力そのものを渡す。
-     *
-     * 入力は モデルを呼ぶ前に DB へ落ちる(assistant.ts の useAgentStart)ので、これが無いと
-     * 自分が今受け取ったばかりの発言が検索に当たり、過去の記録として読まれる
-     * (「さっき言われたこと」を「前にも言っていた」と言い出す)。
-     * 自走側は `text: ""` で索引に入れないことで同じ経路を止めているが、対話の入力は索引に要る
-     * (溜まらないと引けるようにならない)ので、除外は検索の側でやる。
-     */
-    /**
-     * 意味検索。埋め込みが無い構成では空を返し、recall は FTS だけで動く。
-     * KNN は事前フィルタできない(vec0 の制約)ので多めに引き、events 側の条件で絞る。
-     */
+    // vec0 の KNN は事前フィルタできないので、多めに引いて events 側の条件で絞る。
     const semanticRows = (query: string, wide: number, exclude?: string) =>
       Effect.gen(function* () {
         const vec = yield* Effect.promise(() => embedQuery(query))
@@ -511,21 +423,23 @@ const makeMemory = () =>
         })
       })
 
+    /**
+     * 並びは bm25 の関連度。`at DESC` だと cycle が毎回書く長い記録が上位を占める。
+     * @param exclude 今のターンの入力の event id。入力はモデル呼び出し前に DB に入るので、
+     *   除外しないと今の発言が過去の記録として当たる。
+     */
     const recall = (query: string, limit = 10, exclude?: string) =>
       Effect.gen(function* () {
-        // 空白は語の区切りとして扱う。1本のフレーズとして投げると空白ごと含む行しか当たらず、
-        // 「エージェント メモリ」のような絞り込みが該当なしになる。
+        // 1本のフレーズにすると空白ごと含む行しか当たらない。
         const terms = sanitizeFts(query)
           .split(/\s+/)
           .filter((t) => t.length > 0)
         if (terms.length === 0) return [] as EventRow[]
-        // 同じことを繰り返し言われた行が結果上限を占有しないよう、多めに取って重複を除外する。
+        // 重複を除外した後に limit 件残るよう多めに取る。
         const wide = Math.max(limit * 3, 30)
-        // trigram は3文字窓なので、2文字以下の語は索引では引けない(日本語の常用語の多くがこれ)。
-        // その語だけ本文への LIKE に落とし、索引で引ける語と AND で重ねる。
+        // 2文字以下の語は trigram で引けない(日本語の常用語の多くがこれ)ので LIKE で重ねる。
         const indexed = terms.filter((t) => t.length >= FTS_MIN_QUERY)
         const short = terms.filter((t) => t.length < FTS_MIN_QUERY)
-        // LIKE のワイルドカードはリテラルとして扱う(検索語をクエリ構文にしない)。
         const likes = short.map(() => "f.text LIKE '%' || ? || '%' ESCAPE '\\'").join(" AND ")
         const args = short.map((t) => t.replace(/[\\%_]/g, "\\$&"))
         const notSelf = exclude ? "AND e.id <> ?" : ""
@@ -533,8 +447,7 @@ const makeMemory = () =>
 
         const rows =
           indexed.length === 0
-            ? // 内部結合にする: 索引を持たない行(cycle が自分に出したプロンプトなど)は
-              // DB には残すが検索には出さない。`text: ""` の意味を両経路で揃える。
+            ? // 内部結合で、索引を持たない行(`text: ""`)を FTS 経路と同じく検索から外す。
               yield* db.all(
                 `SELECT e.*, f.text AS text, ${IS_CURRENT} AS is_current FROM events e
                    JOIN events_fts f ON f.event_id = e.id
@@ -561,14 +474,11 @@ const makeMemory = () =>
               )
         if (rows.length > 0) return dedupe(rows as unknown as EventRow[], limit)
 
-        // FTS が0件のときだけ意味検索で拾い直す。当たっている回には足さない — AND の絞りが
-        // 返した結果を薄めない。意味検索は、語の一致では届かない言い換えの回収路。
+        // 意味検索は FTS が0件のときだけ。当たっている回に足すと AND で絞った結果が薄まる。
         const semantic = yield* semanticRows(query, wide, exclude)
         if (terms.length < 2) return dedupe(semantic, limit)
 
-        // 盛りすぎた問いを1回だけ緩める。AND で0件なら語ごとに引き直して束ねる —
-        // Search の broaden と同じ思想で、別の問いを発明するためではない。
-        // 実測(eval:recall 2026-08-17): and-overspecify が合成 0/2、実DBの唯一の miss も同型だった。
+        // AND で0件なら、語ごとに引き直して束ねる(1回だけ)。
         const loose: Row[] = []
         for (const term of terms.slice(0, 4)) {
           const one =
@@ -610,7 +520,6 @@ const makeMemory = () =>
         )
         .pipe(Effect.map((rows) => rows as unknown as EventRow[]))
 
-    /** 本文・根拠の引用・索引の抹消と監査event追記を同じtransactionで行う。 */
     const redact = (eventId: string, reason: string) =>
       Effect.gen(function* () {
         const id = randomUUID()
@@ -625,7 +534,7 @@ const makeMemory = () =>
             eventId,
           )
           tx.run("DELETE FROM events_fts WHERE event_id = ?", eventId)
-          // 埋め込みは原文から作られる。原文を消して埋め込みを残すと、消した意味が無い。
+          // 埋め込みは原文から作られるので一緒に消す。
           const row = tx.get("SELECT rowid AS r FROM events WHERE id = ?", eventId)
           if (row) {
             tx.run("DELETE FROM events_vec WHERE rowid = ?", Number(row.r))
@@ -649,11 +558,7 @@ const makeMemory = () =>
 
     const count = db.get("SELECT COUNT(*)n FROM events").pipe(Effect.map((r) => Number(r?.n ?? 0)))
 
-    /**
-     * 埋め込みの無い行をまとめて埋める。書き込み時に埋められなかった分(off の期間・失敗・
-     * migration 前からの行)の埋め直し。1件ずつ tx を分ける — 長いバッチで書き込みを塞がない。
-     * 埋め込みが使えない構成では最初の1件で 0 を返して終わる。
-     */
+    /** 書き込みロックを長く持たないよう、1件ずつ tx を分ける。 */
     const embedMissing = (limit = 200) =>
       Effect.gen(function* () {
         const targets = yield* db.all(

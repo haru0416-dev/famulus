@@ -1,8 +1,3 @@
-/**
- * SKILL.md 取り込み(no-exec)の検査。
- * 読み込み・封じ込め・分類 deny-by-default・世代の内容固定を見る。実行は何もしない。
- */
-
 import assert from "node:assert/strict"
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -51,13 +46,13 @@ test("取り込みは壊れた1件で全体を止めず、封じ込めとサイ�
   const root = makeRoot()
   const outside = makeRoot()
   put(root, "good", skillMd("good"))
-  put(root, "misnamed", skillMd("other-name")) // ディレクトリ名と frontmatter がずれ
+  put(root, "misnamed", skillMd("other-name")) // ディレクトリ名と frontmatter の name がずれている
   put(root, "huge", skillMd("huge", "x".repeat(SKILL_MD_MAX_BYTES)))
   // root の外を指す symlink
   writeFileSync(join(outside, "SKILL.md"), skillMd("escaped"))
   mkdirSync(join(root, "escaped"))
   symlinkSync(join(outside, "SKILL.md"), join(root, "escaped", "SKILL.md"))
-  mkdirSync(join(root, "no-skill-here")) // SKILL.md を持たないディレクトリは対象外(拒否でもない)
+  mkdirSync(join(root, "no-skill-here")) // SKILL.md の無いディレクトリは拒否ではなく対象外
 
   const result = importSkillsFrom(root)
   assert.deepEqual(
@@ -74,13 +69,12 @@ test("取り込みは壊れた1件で全体を止めず、封じ込めとサイ�
 test("分類済みの取り込み skill は合成でき、未分類は拒否される", () => {
   const root = makeRoot()
   put(root, "jissoku-writing", skillMd("jissoku-writing", "# 実測を書く\n「効く」で文を締めない。"))
-  put(root, "impeccable", skillMd("impeccable")) // 実在しても分類が無い
+  put(root, "impeccable", skillMd("impeccable")) // 実在するが分類が無い
   process.env.FAMULUS_SKILLS = root
   configureApp()
 
   const plan = compileSkillPlan({ profile: "autonomous-parent", presentation: "jissoku-writing" })
   assert.ok(renderSkillOverlay(plan).includes("「効く」で文を締めない"))
-  // DRAFTING(orthogonal)と対にもできる
   const pair = compileSkillPlan({ profile: "autonomous-parent", presentation: "jissoku-writing" })
   assert.equal(pair.presentation?.id, "skill:jissoku-writing")
 

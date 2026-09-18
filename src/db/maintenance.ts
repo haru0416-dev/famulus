@@ -32,7 +32,6 @@ const assertFileDatabase = (path: string): void => {
   if (!existsSync(path)) throw new Error(`database does not exist: ${path}`)
 }
 
-/** Verify data integrity, foreign keys, and the exact current schema shape. */
 export const checkDatabase = (path: string): DatabaseCheck => {
   assertFileDatabase(path)
   const db = openDb(path)
@@ -52,7 +51,6 @@ export const checkDatabase = (path: string): DatabaseCheck => {
   }
 }
 
-/** Copy a backup to a throwaway location and open that restored copy for verification. */
 export const verifyRestore = (backupPath: string): DatabaseCheck => {
   assertFileDatabase(backupPath)
   const root = mkdtempSync(join(tmpdir(), "famulus-restore-"))
@@ -156,7 +154,6 @@ export const verifyAndRecordRestore = (
   return check
 }
 
-/** Create a transaction-consistent SQLite snapshot, rehearse restore, then prune old successful backups. */
 export const createBackup = (
   sourcePath: string,
   backupDir: string,

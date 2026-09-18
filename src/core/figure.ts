@@ -1,9 +1,7 @@
-/**
- * モデルには宣言 spec だけを書かせる。SVG を直書きさせると座標計算で破綻する。
- */
+/** モデルには宣言 spec だけを書かせる。SVG を直書きさせると座標計算で破綻する。 */
 import { existsSync } from "node:fs"
 
-/** 日本語の出るフォント。先に見つかったものを使う。無ければ文字が出ないまま描く(形は出る)。 */
+/** 無ければ文字が出ないまま描く。 */
 const FONT_CANDIDATES = [
   "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
   "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
@@ -13,9 +11,8 @@ const FONT_CANDIDATES = [
 export const fontPath = (): string | undefined => FONT_CANDIDATES.find((p) => existsSync(p))
 
 /**
- * 図のテーマ。出力先が Discord(暗い面)なので dark 面の値で1つに決める。
- * 系列7色は CVD 分離・明度帯・面とのコントラストを検証器で通した組(順序固定・循環させない)。
- * 文字は文字色だけを着る — 系列色を文字に使わない。
+ * 出力先の Discord は暗い背景なので dark の値だけを持つ。系列7色は色覚差とコントラストを検証した組なので
+ * 順序を変えず循環させない。系列色を文字に使わない。
  */
 const T = {
   surface: "#1a1a19",
@@ -34,7 +31,6 @@ const axisTheme = {
   nameTextStyle: { color: T.text2 },
 }
 
-/** ECharts のテーマ。線2px・棒の先端 4px 丸・目盛りと格子は退く。 */
 const ECHARTS_THEME = {
   color: [...T.series],
   backgroundColor: T.surface,
@@ -69,10 +65,7 @@ const toPng = async (svg: string): Promise<Uint8Array> => {
   return new Uint8Array(resvg.render().asPng())
 }
 
-/**
- * ECharts option(JSON 文字列)からチャートを描く。SSR は DOM 不要。
- * animation は必ず切る — SSR の SVG は既定で CSS アニメを含み、静止画にならない。
- */
+/** SSR の SVG は既定で CSS アニメを含み静止画にならないので animation を必ず切る。 */
 export const renderChart = async (optionJson: string, width = 800, height = 480): Promise<Figure> => {
   let option: Record<string, unknown>
   try {
@@ -87,7 +80,7 @@ export const renderChart = async (optionJson: string, width = 800, height = 480)
   echarts.registerTheme("famulus", ECHARTS_THEME)
   const chart = echarts.init(null, "famulus", { renderer: "svg", ssr: true, width, height })
   try {
-    // 余白の既定。title と legend が重ならない高さを空ける。option 側の指定が勝つ。
+    // title と legend が重ならない既定の余白。option 側の指定が優先する。
     const legend = option.legend
     const spaced = {
       grid: { top: 84, left: 56, right: 28, bottom: 44, containLabel: true },
@@ -106,7 +99,6 @@ export const renderChart = async (optionJson: string, width = 800, height = 480)
   }
 }
 
-/** graphviz の dot から図解を描く。dot の構文エラーは graphviz の文言のまま返す。 */
 export const renderDiagram = async (dot: string): Promise<Figure> => {
   const { Graphviz } = await import("@hpcc-js/wasm-graphviz")
   const graphviz = await Graphviz.load()
@@ -125,7 +117,7 @@ export interface CardSpec {
   readonly footer?: string
 }
 
-/** 統計カード。レイアウトはここで固定 — モデルが書くのは中身だけ。 */
+/** レイアウトはここで固定し、モデルには中身だけを書かせる。 */
 export const renderCard = async (spec: CardSpec, width = 800): Promise<Uint8Array> => {
   const { Renderer } = await import("@takumi-rs/core")
   const { container, text } = await import("@takumi-rs/helpers")
@@ -146,7 +138,6 @@ export const renderCard = async (spec: CardSpec, width = 800): Promise<Uint8Arra
       flexDirection: "row",
     },
     children: [
-      // 左の帯1本だけが色を着る。文字は文字色(スキルの規律: 系列色を文字に使わない)。
       container({ style: { width: 8, height, flexShrink: 0, backgroundColor: T.series[0] } }),
       container({
         style: {

@@ -1,12 +1,6 @@
 /**
- * `.env` の読み込みの検査。外から渡した値が勝つかだけを見る。
- *
- * 逆向き(ファイルが勝つ)にすると、`FOO=x fam ...` で一度だけ差し替えることができなくなり、
- * テストも本番の `.env` に引きずられる。順序が壊れても実行時には何も起きないので、
- * ここで固定していないと壊れたことに気づけない。
- *
- * 読み込み済みフラグはモジュール単位なので、各テストで Vitest のモジュールキャッシュを消して
- * 1テスト1インスタンスとして読み込み直している。
+ * ファイルが勝つと `FOO=x fam ...` で差し替えられず、テストも本番の `.env` を読む。
+ * 読み込み済みフラグはモジュール単位なので、各テストでモジュールキャッシュを消す。
  */
 
 import assert from "node:assert/strict"
@@ -23,7 +17,7 @@ const envFile = (name: string, body: string): string => {
   return path
 }
 
-/** 毎回まっさらな env.ts を得る。`OUTER` は import 時の環境を捕まえるので、先に差してから呼ぶ。 */
+/** `OUTER` は import 時の環境を読むので、先に設定してから呼ぶ。 */
 const fresh = async (): Promise<typeof import("../../src/core/env.ts")> => {
   vi.resetModules()
   return import("../../src/core/env.ts")

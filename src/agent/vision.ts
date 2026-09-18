@@ -1,10 +1,7 @@
 /**
- * looker は、受け取った画像に検索と返信で使える記述を付ける前処理。cycle の実行が決まった回に、
- * コードが固定の手順で1画像1回だけ呼ぶ(モデルの裁量に任せない)。
- *
- * 記述はモデルの言い換えであって引用照合が効かないため、確定値(belief)には決して昇格させない —
- * taint=1 の system 記録として残す。keeper は taint=0 の owner 発言しか材料にしないので、
- * この線はコードの既存の関門で守られる。
+ * 受け取った画像に検索と返信用の記述を付ける。モデルの裁量に任せず、コードが1画像1回だけ呼ぶ。
+ * 記述は引用照合が効かないので belief に昇格させず、taint=1 の system 記録にする
+ * (keeper は taint=0 の owner 発言しか材料にしない)。
  */
 import * as Effect from "effect/Effect"
 import type { DbFailed } from "../core/errors.ts"
@@ -16,7 +13,7 @@ import type { ObservedEvent } from "../services/Attention.ts"
 import { Db } from "../services/Db.ts"
 import { Memory } from "../services/Memory.ts"
 
-/** 1回の cycle で記述する画像の上限。連投されても1回の実行時間を画像で使い切らない。 */
+/** 連投されても1回の cycle の実行時間を画像で使い切らないための上限。 */
 export const DESCRIBE_MAX = 4
 
 export const LOOKER_PROMPT = `あなたは受け取った画像に、後から検索と返信で使える記述を付ける役です。
@@ -30,7 +27,6 @@ interface PendingImage {
   readonly saidText: string
 }
 
-/** owner イベントの content から未記述の画像参照を拾う。 */
 const pendingImages = (events: readonly ObservedEvent[]): PendingImage[] => {
   const out: PendingImage[] = []
   for (const e of events) {
@@ -59,10 +55,7 @@ const pendingImages = (events: readonly ObservedEvent[]): PendingImage[] => {
   return out
 }
 
-/**
- * 未記述の画像に記述イベントを付け、この回のプロンプトへ載せる行を返す。
- * 記述イベントは source=system なので次回の実行条件にならない(自分の書き込みでは起きない)。
- */
+/** 記述イベントは source=system なので、次回の cycle の実行条件にならない。 */
 export const describePendingImages = (
   events: readonly ObservedEvent[],
   opts: { readonly signal?: AbortSignal } = {},

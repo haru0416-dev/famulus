@@ -1,6 +1,4 @@
-/**
- * Cursor 単価概算の検査。cache 込み input の二重計上と「不明を0円に数える」を塞ぐ。
- */
+/** cache 込み input の二重計上と、不明を0円に数えることを防ぐ。 */
 
 import assert from "node:assert/strict"
 import { test } from "vitest"

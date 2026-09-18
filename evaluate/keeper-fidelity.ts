@@ -1,20 +1,7 @@
 #!/usr/bin/env bun
-/**
- * keeper の確定値補完の実測評価。`bun run eval:keeper`。
- *
- * 測るもの(分類規則はこのファイルに固定 — 結果を見てから変えない):
- *   - capture   … 保存すべき事実のうち、実際に belief として保存された割合
- *   - false+    … 保存してはいけない発話(一時的状態・疑問・伝聞・推測)から保存された数
- *   - fidelity  … 保存された quote が発話に原文一致する割合(keepGrounded がコードで強制するので
- *                 100% を下回ったら評価ではなくコードの回帰)
- *
- * 実行は本物の Runner(grok)+ `:memory:` の本物 schema — 本番 DB には何も書かない。
- * 物理的なクォータは消費する(1回 = fixture 件数ぶんのモデル呼び出し)。
- * 生の結果は docs/evals/keeper/ に残す。閾値は初回 baseline を記録してから設ける
- * (回帰検知はこのファイルではなく baseline との差分で行う)。
- *
- * fixture は全部合成(実在の私的データを使わない — docs は git 管理下にある)。
- */
+// 分類規則は結果を見てから変えない。
+// quote の原文一致は keepGrounded がコードで強制するので、違反が出たら評価ではなくコードの回帰。
+// fixture は全部合成。結果の置き場は git 管理下なので実在の私的データを使わない。
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import * as Effect from "effect/Effect"
@@ -33,18 +20,12 @@ const OUT = new URL("../docs/evals/keeper/", import.meta.url).pathname
 interface Fixture {
   readonly id: string
   readonly material: string
-  /** 保存されるべき事実。value か quote にこの部分文字列が現れたら captured と数える。 */
   readonly expect: readonly string[]
-  /** 保存されてはいけない内容の目印。slot/value/quote のどこかに現れたら false+ と数える。 */
   readonly reject: readonly string[]
 }
 
-/**
- * 分類規則(固定):
- * - expect は「確定した・ユーザー自身の・次に参照して意味を持つ」値の断片。
- * - reject は一時的状態・疑問・伝聞(らしい)・推測(かも)・雑談の断片。
- * - どちらにも当たらない保存は false+ に数えない(規則外の余剰として記録だけする)。
- */
+// expect は確定した・ユーザー自身の・次に参照して意味を持つ値の断片。
+// reject は一時的状態・疑問・伝聞・推測・雑談の断片。
 const FIXTURES: readonly Fixture[] = [
   {
     id: "single-fact",
@@ -135,7 +116,7 @@ interface CaseResult {
 const bare = (s: string) => s.replace(/\s+/g, "")
 
 async function runCase(fixture: Fixture): Promise<CaseResult> {
-  // 1 fixture = 1つの隔離 runtime。belief が fixture 間で混ざらない。
+  // belief が fixture 間で混ざらないよう fixture ごとに runtime を分ける。
   const rt = ManagedRuntime.make(makeAppLayer(DbLive(":memory:"), RunnerLive))
   const run = <A, E>(e: Effect.Effect<A, E, AppServices>) => rt.runPromise(e)
   try {
@@ -173,10 +154,8 @@ async function runCase(fixture: Fixture): Promise<CaseResult> {
   }
 }
 
-/** 1モデルぶんの走行。引数なしは structurer(役割表)のまま。 */
 const runModel = async (model: string | undefined) => {
-  // 比較は役割表の差し替えで行う(評価だけの操作)。production Runner は生の model id を
-  // 拒否する設計(runner.test の固定 role ガード)なので、経路はそのままに役割の中身を替える。
+  // Runner は生の model id を拒否するので、役割表の中身を替えて比較する。
   if (model !== undefined) ROLE_MODEL.structurer = model
   const label = model ?? `${ROLE_MODEL.structurer}(ROLE_MODEL.structurer)`
   console.log(`\n== ${label} ==`)
@@ -195,7 +174,7 @@ const runModel = async (model: string | undefined) => {
   const violations = results.reduce((a, r) => a + r.fidelityViolations.length, 0)
   const summary = {
     at: new Date().toISOString(),
-    // 経路は三つ組で書く(~/dev/test/agent-experiment-pitfalls.md §2.2 — モデル名だけの比較は再現しない)
+    // モデル名だけでは再現しないので harness・backend も残す。
     route: { harness: "famulus keeper", backend: "api.x.ai/v1 responses", model: label },
     rev: execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim(),
     cases: FIXTURES.length,
@@ -215,7 +194,6 @@ const main = async () => {
   loadEnv()
   configureApp()
   mkdirSync(OUT, { recursive: true })
-  // 引数にモデル id を並べると同じ fixture で順に走る(比較用)。なしは従来どおり役割表のモデル。
   const models = process.argv.slice(2)
   for (const m of models.length === 0 ? [undefined] : models) await runModel(m)
 }

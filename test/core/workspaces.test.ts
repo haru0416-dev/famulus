@@ -1,8 +1,6 @@
 /**
- * workspace の一覧の検査。実体と登録がずれたときにどちらを信じるかを固定する。
- *
- * ここがずれる経路は2つある。コンテナは DB を通さずにホストのファイルを書き換えるし、
- * 掃除はファイルを消しても登録は消さないことがある。在るのは実体のほうに倒す。
+ * コンテナは DB を通さずにファイルを書き換え、掃除は登録を残すことがあるので、
+ * 実体と登録がずれたら実体を正とする。
  */
 
 import assert from "node:assert/strict"
@@ -83,7 +81,6 @@ test("説明を書き直すと上書きされる(区間は持たない)", async 
   })
 })
 
-/** `keep` はモデル側の経路(`noteWorkspace`)からは変更できない。消えない指定は取り消しが効かない。 */
 test("noteWorkspace は keep を変更しない", async () => {
   await withRuns(async (root, h) => {
     put(root, "selfdev", 16)
@@ -99,10 +96,7 @@ test("noteWorkspace は keep を変更しない", async () => {
   })
 })
 
-/**
- * 子孫だけが更新されたディレクトリで、時刻も大きさも取れること。
- * ルートの mtime しか見ないと、使っている workspace が古いと出る(cleanup がそれで消す)。
- */
+/** ルートの mtime だけだと使用中の workspace が古く見え、cleanup が消す。 */
 test("scanTree は子孫を含む最大 mtime と合計サイズを返す", async () => {
   const dir = mkdtempSync(join(tmpdir(), "fam-scan-"))
   try {
@@ -121,10 +115,7 @@ test("scanTree は子孫を含む最大 mtime と合計サイズを返す", asyn
   }
 })
 
-/**
- * 同じ実体を2回数えない。workspace の中身はほとんどが `node_modules` で、
- * bun の isolated はそこを symlink と hard link で組む。数え直すと大きさが数倍に出る。
- */
+/** bun の isolated は `node_modules` を symlink と hard link で組むので、数え直すと大きさが数倍に出る。 */
 test("scanTree は symlink の先へ降りない", () => {
   const dir = mkdtempSync(join(tmpdir(), "fam-scan-sym-"))
   try {
@@ -148,7 +139,7 @@ test("scanTree は hard link を1回だけ数える", () => {
   }
 })
 
-/** 輪があっても落ちない。投げると一覧そのものが出なくなる — cycle のプロンプトも作れない。 */
+/** ここで例外になると一覧が出ず、cycle のプロンプトも作れない。 */
 test("scanTree は symlink の輪で落ちない", () => {
   const dir = mkdtempSync(join(tmpdir(), "fam-scan-loop-"))
   try {

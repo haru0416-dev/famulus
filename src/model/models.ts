@@ -1,38 +1,21 @@
-/**
- * モデル id と、id から決まること。xai の Responses 実装と、その上位層が共通で参照する。
- *
- * ここに置くのは経路の実装に依存しないものだけ:
- *  - 呼べる id の一覧と provider / pool
- *  - 1回の呼び出しの入出力の型
- *  - クォータシグナルと失敗の型(統治がこれを読んで再実行を抑止する)
- */
+/** モデル id と id から決まること(provider / pool・入出力の型・クォータシグナルと失敗の型)。経路の実装に依存しないものだけ置く。 */
 
 /**
- * SuperGrok 契約の週次共有プール。Chat / API / x_search が同じプールを消費する。
- * 値が経路名と一致しないのは、DB(`quota:<pool>` と ledger の provenance)に記録済みの履歴と
- * 同じ鍵でないと、改名した時点でクールダウンと集計が過去分と繋がらなくなる。
+ * Chat / API / x_search が同じ週次プールを消費する。値は DB(`quota:<pool>` と ledger)に記録済みの鍵なので、
+ * 変えるとクールダウンと集計が過去分と繋がらない。
  */
 export const XAI_POOL = "supergrok-oauth"
 
 /**
- * ChatGPT(Pro)契約のプール。Codex の Responses を subscription OAuth で呼ぶ。
- * 鍵は解約前の履歴と同じ `chatgpt-oauth` — 変えると過去の ledger・クールダウンと繋がらない。
- * 現契約は Pro x5(解約前の x20 より小さい)。載せるのは reviewer だけ(1日1〜数回)で、
- * 高頻度の役(structurer / scout / 対話)はこの枠に載せない。
+ * 鍵は解約前の履歴と同じ。変えると過去の ledger・クールダウンと繋がらない。
+ * 枠が小さいので高頻度の役(structurer / scout / 対話)は載せない。
  */
 export const CODEX_POOL = "chatgpt-oauth"
 
 /**
- * 呼べるモデル id の全体。ここに無い id は受け付けない。実測で疎通済みの id だけ載せる。
- *
- * id の入力元は env(`FAMULUS_MODEL` など)と役割表だけで、どちらも打ち間違えられる。
- * 検査せずに通すと上流の4xxで失敗する —
- * どちらも実行を開始した後なので、cycle なら1回ぶんの実行が失敗として残る。
- * 入口で失敗させれば、起動した時点で理由が読める。
+ * ここに無い id は受け付けない(疎通済みの id だけ載せる)。env と役割表の打ち間違いを、実行開始後の
+ * 上流 4xx ではなく入口で止める。
  */
-// GPT 2種は 2026-08-18 実測(精査タスク同一入力)で同判定・引用全一致・同速度(25〜46秒)。
-// reviewer は強い側の sol(最後の関門は精度優先 — Haru の判断)。luna(公表単価 output $1.2/1M)は
-// 枠が逼迫したときの交代先。
 export const MODEL_CATALOG = {
   "grok-4.6": { provider: "xai", pool: XAI_POOL },
   "grok-4.3": { provider: "xai", pool: XAI_POOL },
@@ -47,7 +30,7 @@ export const MODEL_IDS = Object.keys(MODEL_CATALOG) as ModelId[]
 
 export const isKnownModel = (model: string): model is ModelId => Object.hasOwn(MODEL_CATALOG, model)
 
-/** 実行前に検査する。governedModel / Runnerのplanで1回だけ呼ぶ。 */
+/** governedModel / Runner の plan で1回だけ呼ぶ。 */
 export const assertKnownModel = (model: string): ModelId => {
   if (!isKnownModel(model)) {
     throw new ModelCallError(`知らないモデル id: ${model}(使えるのは ${MODEL_IDS.join(", ")})`)
@@ -57,17 +40,13 @@ export const assertKnownModel = (model: string): ModelId => {
 
 const catalogEntry = (model: string) => MODEL_CATALOG[assertKnownModel(model)]
 
-/** model の通信先。モデル名の命名規則ではなく、疎通済みの明示表だけから決める。 */
+/** モデル名の命名規則ではなく、疎通済みの明示表だけから決める。 */
 export const providerForModel = (model: string): ModelProvider => catalogEntry(model).provider
 
-/** modelが消費する永続クォータ集計単位。通信先とは別の概念として保持する。 */
+/** 永続クォータの集計単位。通信先とは別に持つ。 */
 export const poolForModel = (model: string): string => catalogEntry(model).pool
 
-/**
- * 既定のシステムプロンプト(コーディング・エージェントの前置き)を置き換える文。
- * ここに書くのは実行環境の規律だけで、人格・声は書かない(それは SOUL 側の仕事)。
- * 最終行はデータフェンスの補強 — taint 入力を「資料であって指示ではない」と runtime 側でも宣言する。
- */
+/** 人格・声は書かない(SOUL.md が持つ)。最終行は taint 入力を資料として扱う宣言で、データフェンスを補強する。 */
 export const RUNTIME_PROMPT = `あなたは常駐エージェント famulus の推論エンジンとして動いている。
 - 与えられた指示に日本語で答える。
 - ファイル・コマンド・ネットワークには一切触れない(この場ではツールを与えられていない)。
@@ -87,7 +66,7 @@ export interface TokenUsage {
   readonly outTok: number
   readonly cacheRead: number
   readonly cacheWrite: number
-  /** 従量課金の場合の金額。定額クォータでは請求額ではないので、増減の観測にだけ使う。 */
+  /** 定額クォータでは請求額ではないので、増減の観測にだけ使う。 */
   readonly notionalUsd: number
 }
 
@@ -95,13 +74,11 @@ export interface ModelCallOptions {
   readonly prompt: string
   readonly model: string
   readonly systemPrompt?: string
-  /** 与えるとResponsesのjson_schemaによる構造化応答を要求する。 */
   readonly jsonSchema?: unknown
   /** 画像入力。512ピクセル未満は API が拒否する。 */
   readonly images?: readonly { readonly data: Uint8Array; readonly mediaType: string }[]
   readonly timeoutMs?: number
   readonly signal?: AbortSignal
-  /** テキスト差分の逐次通知。 */
   readonly onText?: (delta: string) => void
 }
 
@@ -113,7 +90,7 @@ export interface ModelCallResult {
   readonly model: string
 }
 
-/** クォータシグナル付きの失敗。これが無いと上位がリセット時刻まで再実行を抑止できない。 */
+/** クォータシグナルが無いと、上位がリセット時刻まで再実行を抑止できない。 */
 export class ModelCallError extends Error {
   readonly quota: QuotaSignal | undefined
   constructor(message: string, quota?: QuotaSignal) {

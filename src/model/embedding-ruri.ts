@@ -1,9 +1,6 @@
 /**
- * ruri-v3-30m の実ロード。初回はネットワークからモデルを取るため、ゲート(テスト)からは
- * 実行できない — カバレッジ除外(vitest.config.ts)。検索品質の実測は eval:recall が担う。
- *
- * ONNX 配布側(onnx-community)に tokenizer が同梱されていないため、tokenizer は
- * 本家 cl-nagoya から別に読み、mean pooling を自前で行う。
+ * 初回はネットワークからモデルを取るのでゲートからは実行できない(カバレッジ除外)。
+ * ONNX 配布(onnx-community)に tokenizer が無いので本家 cl-nagoya から読み、mean pooling を自前で行う。
  */
 
 export type Embedder = (text: string) => Promise<Float32Array>

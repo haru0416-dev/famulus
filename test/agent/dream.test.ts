@@ -1,17 +1,10 @@
-/**
- * 何日ぶんかの見直しの検査。材料の集め方を固定する。
- *
- * 判定そのものは keeper と共通なので、そちらの検査(test/keeper.test.ts)で押さえてある。
- * ここで見るのは、渡してはいけないものが材料に混ざらないことと、
- * 同じ材料を毎晩読み直さないこと。混ざると未検証の値が確定対象になり、
- * 読み直すと有効期間が1日だけの履歴行が増え続ける。
- */
+/** 判定は keeper と共通なので keeper.test.ts で見る。 */
 
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
 
-// 回す時刻の判定はユーザーの時計で切る。TZ はモジュール読み込み時に確定するので、import より先に差す。
+// TZ はモジュール読み込み時に確定するので、import より先に設定する。
 process.env.FAMULUS_TZ = "Asia/Tokyo"
 const { DREAM_CURSOR, dream, dreamDue, dreamMaterial } = await import("../../src/agent/dream.ts")
 const { Db } = await import("../../src/services/Db.ts")
@@ -24,16 +17,16 @@ const seed = Effect.gen(function* () {
   const mem = yield* Memory
   yield* mem.remember({ kind: "observe", source: "owner", content: "月曜の発言", at: "2026-08-10T01:00:00Z" })
   yield* mem.remember({ kind: "observe", source: "owner", content: "火曜の発言", at: "2026-08-11T01:00:00Z" })
-  // 自分が書いたもの。ユーザーが言ったことではないので確定値の保存対象ではない。
+  // ユーザーの発言ではないので確定値の保存対象外。
   yield* mem.remember({
     kind: "observe",
     source: "system",
     content: "自分の記録",
     at: "2026-08-11T02:00:00Z",
   })
-  // 外から来たもの。taint=1 は点を引くのではなく候補から外す。
+  // taint=1 は減点ではなく候補から外す。
   yield* mem.remember({ kind: "observe", source: "web", content: "拾ってきた文", at: "2026-08-11T03:00:00Z" })
-  // 窓の外。7 日より前は見ない。
+  // 7 日より前は対象外。
   yield* mem.remember({ kind: "observe", source: "owner", content: "先月の発言", at: "2026-07-01T01:00:00Z" })
 })
 
@@ -83,10 +76,7 @@ test("材料が無ければモデルを呼ばない", async () => {
   })
 })
 
-/**
- * 最後に処理した位置を保存する。これが無いと同じ材料を毎晩読み直すことになり、
- * 同じ値が毎晩再保存されて有効期間が1日だけの履歴行が増え続ける。
- */
+/** 処理済み位置を保存しないと、同じ値が毎晩再保存され、有効期間1日の履歴行が増え続ける。 */
 test("見たところまで進み、次の回はその先だけを見る", async () => {
   await withHarness(
     async (h) => {
@@ -131,12 +121,12 @@ test("材料の見出しに、1回ぶんではないと書いてある", async (
       await h.run(seed.pipe(Effect.andThen(dream({ at: AT }))))
       const prompt = h.calls[0]?.prompt ?? ""
       assert.match(prompt, /1回ぶんではない/)
-      // 対象期間を広げたぶんの判定は system 側に足す。keeper の本文は書き換えない。
+      // 期間を広げた分の判定は system に足す。
       const system = h.calls[0]?.systemPrompt ?? ""
       assert.match(system, /別々の機会/)
-      // 足すだけで、keeper の本文は残っている(判定を2本に割らない)。
+      // 判定を2本に分けないため、keeper の本文は書き換えない。
       assert.match(system, /写せないなら保存しません/)
-      // 繰り返しから保存する値の名前空間を固定する(割れると片方しか引けない)。
+      // 名前空間が分かれると片方しか引けない。
       assert.match(system, /`interest\.` で始めます/)
     },
     [{ text: "", structured: { looked: "見た", values: [] } }],

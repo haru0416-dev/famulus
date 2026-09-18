@@ -1,15 +1,6 @@
 /**
- * 受信箱を DB に移す。cycle と poll の両方から呼ばれる。
- *
- * 読む先は Discord だけ。ntfy を併用していたときは、片方の cursor が
- * ずれても気付けなかった。
- *
- * source は owner。書き手の判定は author id で見るので、チャンネルに他人が入っても
- * owner にはならない。
- *
- * 添付画像はここで取得して media へ保存し、event には参照(sha256)だけ置く。
- * 取得に失敗した画像は落として本文だけ記録する — 画像の都合でメッセージを失わない。
- * 画像の記述(モデル呼び出し)はここではやらない。poll はモデルを呼ばない決め。
+ * 受信箱を DB に移す(cycle と poll から呼ぶ)。owner の判定は author id で行う。
+ * 取得に失敗した画像は落として本文だけ記録する。画像の記述はしない(poll はモデルを呼ばない)。
  */
 import * as Effect from "effect/Effect"
 import { type ConnectorFailed, causeReason, type DbFailed } from "./core/errors.ts"
@@ -34,7 +25,6 @@ const fetchImage = async (url: string, mediaType: string, name?: string): Promis
   }
 }
 
-/** この呼び出しで DB へ移した件数。 */
 export const drainInbox: Effect.Effect<
   number,
   DbFailed | ConnectorFailed,
@@ -47,8 +37,7 @@ export const drainInbox: Effect.Effect<
   const batch = yield* discord.pollInbound()
   for (const m of batch.items) {
     if (m.draft) yield* drafts.applyDecision(m.draft.id, m.draft.decision, m.id)
-    // 押した時点で期限切れや決定済みになっていることがある。受信全体を失敗させると、同じ回に
-    // 読んだ他の発言まで DB へ入らない。適用できなかったことだけ system の記録に残す。
+    // 受信時点で期限切れ・決定済みのことがある。失敗にすると同じ回の他の発言まで DB へ入らない。
     if (m.proposal) {
       const target = m.proposal
       const decided = yield* Effect.result(
@@ -76,7 +65,7 @@ export const drainInbox: Effect.Effect<
     }
     yield* mem.remember({
       source: "owner",
-      // 参照は content に置き、検索テキストは本文だけにする(sha を FTS に混ぜない)
+      // sha を FTS に混ぜないため、参照は content に置く
       content: saved.length > 0 ? { said: m.text, images: saved } : m.text,
       ...(saved.length > 0 ? { text: m.text } : {}),
       at: nowIso(),
@@ -84,8 +73,8 @@ export const drainInbox: Effect.Effect<
       ...(location ? { provenance: [{ kind: "discord", ref: location }] } : {}),
     })
   }
-  // 記録してから cursor を進める。逆順だと `remember` が失敗した回の項目が cursor より前に
-  // 残って二度と読まれない。この順なら最悪でも二重に記録するだけ。
+  // 記録してから cursor を進める。逆順だと記録に失敗した項目が二度と読まれない。
+  // この順なら最悪でも二重記録で済む。
   yield* discord.commitInboundBatch(batch)
   return batch.items.length
 })

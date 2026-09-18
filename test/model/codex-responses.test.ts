@@ -1,9 +1,3 @@
-/**
- * GPT(codex)経路の検査。ネットワークは withFetch で全部止める。
- * 固定するのは3点: 送信契約(Bearer / account-id / originator / store:false / json_schema)、
- * クォータヘッダの読み(使用率の高い窓を選ぶ・0m 窓は読まない)、429 → 枯渇シグナル。
- */
-
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -16,7 +10,6 @@ import { withFetch } from "../helpers.ts"
 
 const roots: string[] = []
 
-/** 合成 auth.json を置き、既定パス(FAMULUS_CODEX_AUTH)をそこへ向ける。 */
 const authFile = (tokens: Record<string, unknown>): void => {
   const dir = mkdtempSync(join(tmpdir(), "codex-test-"))
   roots.push(dir)
@@ -57,7 +50,7 @@ test("クォータは使用率の高い窓を選び、0m 窓は読まない", ()
     resetsAtMs: 1_000_000 + 600_000,
     exhausted: false,
   })
-  // 0m 窓は契約で使われていない。読むと使用率 0% として選ばれてしまう。
+  // 0m 窓は契約で使われていないので、読むと使用率 0% として選ばれる。
   const only = quotaFromHeaders(
     {
       "x-codex-primary-window-minutes": "0",
@@ -75,7 +68,7 @@ test("クォータは使用率の高い窓を選び、0m 窓は読まない", ()
   )
 })
 
-/** Responses の SSE(@ai-sdk/openai 4.x の chunk schema 準拠)。 */
+/** @ai-sdk/openai 4.x の chunk schema に合わせた SSE。 */
 const sse = (...events: unknown[]): Response =>
   new Response(`${events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("")}data: [DONE]\n\n`, {
     status: 200,

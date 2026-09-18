@@ -1,15 +1,5 @@
 #!/usr/bin/env bun
-/**
- * 探索の計器。実DB(読み取り専用)から、探索がどれだけ・どこまで届いているかを数える。
- * モデルは呼ばない。`bun run eval:exploration` で実行。
- *
- * 出す数字:
- *   1. dossier の数と [explore] 比率(fan-out が実際に使われているか)
- *   2. 問いの重複率(同じ問いを繰り返しているか)
- *   3. 出典ドメインの新規到達率 — dossier を時系列に並べ、各回の出典のうち過去に
- *      一度も出ていないドメインの割合。低いほど同じ先を回っている。
- *   4. 空振り・圏外の記録数
- */
+// 実DBを読み取り専用で開く。モデルは呼ばない。
 import { Database } from "bun:sqlite"
 import { configureApp } from "../src/core/config.ts"
 import { loadEnv } from "../src/core/env.ts"
@@ -30,7 +20,6 @@ const dossiers = db
 
 const exploreCount = dossiers.filter((d) => d.question.startsWith("[explore]")).length
 
-// ── 問いの重複。語の集合の Jaccard 係数 0.6 以上を「同じ問い」と数える。
 // 日本語は助詞で切れず1連なりになるので、長い連なりは2文字ずつに割る。
 const tokens = (s: string): Set<string> => {
   const out = new Set<string>()
@@ -58,7 +47,6 @@ for (let i = 0; i < dossiers.length; i++) {
   }
 }
 
-// ── 出典ドメインの新規到達率。source_ref(取得元 URL)のホスト名で数える。
 const artifactRows = db
   .query(
     `SELECT a.dossier_id, a.source_ref FROM research_artifacts a

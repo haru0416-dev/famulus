@@ -1,5 +1,3 @@
-/** SQLite connection and the current schema boundary. */
-
 import { Database } from "bun:sqlite"
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
@@ -41,15 +39,14 @@ const migrationRecordSql = (
 ): string => `INSERT INTO schema_migrations(version,name,checksum,applied_at)
 VALUES (${item.version},${sqlString(item.name)},${sqlString(item.checksum)},strftime('%Y-%m-%dT%H:%M:%fZ','now'));`
 
-/** Fresh databases are still created from one current snapshot. */
+/** 新規 DB は migration を順に当てず、現行 schema から一度に作る。 */
 export const SCHEMA_SQL = [CURRENT_SCHEMA_SQL, ...MIGRATIONS.map(migrationRecordSql)].join("\n")
 
 const LEGACY_V4_SCHEMA_FINGERPRINT = "536dbc2eb1e3b6592b65245fd91361268d1d3decdc5e229dba8b9d64b0e643ad"
 
 export const openDb = (path: string): Sqlite => {
   const db = new Database(path)
-  // events_vec(vec0 仮想テーブル)を持つ schema は、拡張が載っていない接続では
-  // 形の検査すら通らない。開く場所はここ1つなので、必ずここで載せる。
+  // sqlite-vec が載っていない接続では events_vec を含む schema の検査が通らない。
   sqliteVec.load(db)
   db.exec("PRAGMA recursive_triggers = ON;")
   return db
@@ -155,7 +152,7 @@ const appliedMigrationCount = (db: Sqlite, path: string): number => {
   return rows.length
 }
 
-/** Upgrade only a recognized schema state. The caller owns the surrounding transaction. */
+/** トランザクションは呼び出し側が持つ。 */
 export const migrateToCurrentSchema = (db: Sqlite, path: string): void => {
   if (!hasMigrationLedger(db)) {
     assertUnownedMetadata(db, path)
@@ -201,7 +198,6 @@ export const assertUnownedMetadata = (db: Sqlite, path: string): void => {
   }
 }
 
-/** Initialize or migrate one database while holding the schema write lock. */
 export const ensureCurrentSchema = (
   db: Sqlite,
   path: string,
@@ -229,7 +225,7 @@ export const ensureCurrentSchema = (
 
 const sleepSignal = new Int32Array(new SharedArrayBuffer(4))
 
-/** SQLite does not honor busy_timeout while changing journal_mode. */
+/** journal_mode の変更中は busy_timeout が効かないので自前で待つ。 */
 export const enableWalJournalMode = (db: Sqlite, timeoutMs: number = 5_000): void => {
   const deadline = Date.now() + timeoutMs
   while (true) {

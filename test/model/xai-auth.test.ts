@@ -1,8 +1,4 @@
-/**
- * loadXaiAccess の rotation 衝突回復の検査。ネットワークは withFetch で全部止める。
- * 資格情報は週次プールに1組しかないので、refresh の競合で「正当なトークンがあるのに
- * 再ログイン要求で自走が止まる」形にならないことを固定する。
- */
+/** 資格情報は1組しかないので、refresh の競合で再ログイン要求になり自走が止まることを防ぐ。 */
 
 import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
@@ -16,7 +12,6 @@ import { withFetch } from "../helpers.ts"
 const NOW = 10_000_000
 const roots: string[] = []
 
-/** 合成 auth をテンポラリに書き、既定パス(FAMULUS_XAI_AUTH)をそこへ向ける。 */
 const authFile = (auth: XaiAuth): string => {
   const dir = mkdtempSync(join(tmpdir(), "xai-auth-test-"))
   roots.push(dir)
@@ -137,7 +132,7 @@ test("auth ファイルが無ければ grok-login への導線付きで落とす
 test("token endpoint が error 欄の無い非 2xx を返したら status で落とす", async () => {
   authFile(EXPIRED)
   await withFetch(
-    // JSON でない本文 → error 欄が読めない → status を理由にする経路。
+    // JSON でない本文なので error 欄が読めず、status を理由にする。
     async () => new Response("busy", { status: 503 }),
     async () => {
       await assert.rejects(loadXaiAccess(NOW), /auth\.x\.ai\/token が 503 を返した/)
@@ -157,6 +152,5 @@ test("2xx でも欄の揃わないトークン応答は落とす(黙って半端
       await assert.rejects(loadXaiAccess(NOW), /access\/refresh\/expires_in が揃っていない/)
     },
   )
-  // 失敗した応答でファイルを上書きしていないこと。
   assert.equal((JSON.parse(readFileSync(path, "utf8")) as XaiAuth).refresh, "r-old")
 })

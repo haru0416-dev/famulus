@@ -1,10 +1,4 @@
-/**
- * オンライン表示の検査。接続を落とさないことを固定する。
- *
- * ここで見るのは文面ではなく倒れる向き。表示に出す文は DB を読んで作るが、
- * 読めなかったときに接続まで落とすと、症状(ずっとオフライン)がそのまま戻る。
- * だから「DB が無い → 文は無い、けれど presence は組み立てられる」を検査に置く。
- */
+/** 表示の文は DB から作るが、DB が読めなくても接続は落とさない(落とすとずっとオフラインになる)。 */
 
 import { Database } from "bun:sqlite"
 import assert from "node:assert/strict"
@@ -15,7 +9,6 @@ import { test } from "vitest"
 import { SCHEMA_SQL } from "../src/db/sqlite.ts"
 import { carryOver, presence, stateLine } from "../src/presence.ts"
 
-/** 現行schemaのDBを1つ作る。shape境界も含めてpresenceと同じ条件で読む。 */
 const withDb = (fn: (path: string, db: Database) => void): void => {
   const dir = mkdtempSync(join(tmpdir(), "fam-presence-"))
   const path = join(dir, "t.db")
@@ -40,7 +33,7 @@ test("未読が無ければ watch の数だけ出す", () => {
   })
 })
 
-/** 未読は `cycle:cursor` より後ろの owner 行。cursor を持たない状態は 0 として読む。 */
+/** 未読は `cycle:cursor` より後ろの owner 行。cursor が無ければ 0。 */
 test("未読があれば件数を前に出す", () => {
   withDb((path, db) => {
     db.run(`INSERT INTO events
@@ -70,10 +63,7 @@ test("DB が読めなければ文は作らない", () => {
   assert.equal(stateLine(join(tmpdir(), "fam-presence-無い.db")), undefined)
 })
 
-/**
- * 文が作れなくても presence は online。ここが `undefined` を返したり投げたりすると、
- * IDENTIFY に載せる中身が無くなって接続そのものが立たない。
- */
+/** ここが `undefined` や例外になると IDENTIFY に載せる中身が無く、接続できない。 */
 test("文が作れなくても online で組み立てる", () => {
   const p = presence(join(tmpdir(), "fam-presence-無い.db"))
   assert.equal(p.status, "online")
@@ -87,15 +77,12 @@ test("文が作れたら活動として載る", () => {
       VALUES ('a','a','2026-08-14T00:00:00Z','2026-08-14T00:00:00Z','human','open',24)`)
     const p = presence(path)
     assert.equal(p.status, "online")
-    // type 4 は前置きの付かない表示。観測(別セッションの GUILD_CREATE)で state がそのまま返る。
+    // type 4 は前置きの付かない表示で、state がそのまま出る。
     assert.deepEqual(p.activities, [{ type: 4, name: "Custom Status", state: "watch 1" }])
   })
 })
 
-/**
- * 再接続の持ち越し。セッションが残る回だけ seq を渡す。
- * 捨てたセッションの番号を持ち越すと、新しいセッションで同じところから切られ続ける。
- */
+/** 捨てたセッションの seq を持ち越すと、新しいセッションが同じところで切られ続ける。 */
 test("セッションごと捨てる終わり方では番号も捨てる", () => {
   const s = { id: "s1", url: "wss://x" }
   assert.deepEqual(carryOver(4007, s, 42), { session: undefined, seq: null })

@@ -1,9 +1,6 @@
 /**
- * 構造化処理用の推論入口。precheck → 実行 → クォータ状態の更新 → 会計をまとめる。
- * AI SDK Agent 経路は src/model/governed.ts が同じ順序を middleware で実装する。
- * Layer が差し替え点なので、テストは `RunnerStub` を積むだけでOAuth資格情報は要らない。
- *
- * 役割→モデルは静的表。LLM にモデル選択と課金経路を開かない。
+ * 構造化処理用の推論入口。precheck → 実行 → クォータ状態の更新 → 会計。AI SDK Agent 経路は
+ * src/model/governed.ts が同じ順序を middleware で実装する。役割→モデルは静的表で、LLM にモデル選択と課金経路を開かない。
  */
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
@@ -38,26 +35,16 @@ const PROVIDER_CALL = { xai: callXai, codex: callCodex } satisfies Record<ModelP
 export type Role = "structurer" | "scout" | "reviewer" | "looker"
 
 /**
- * 役割→モデル。基本は SuperGrok OAuth の Grok、精査役だけ ChatGPT(codex)枠の GPT。
- *
- * 対話と cycle 本体のモデルは createAssistant() に渡す model id で決まる。
- *
- * `structurer` と `scout` は引用を原文のまま写す仕事を持つ。引けなかった項目はコードが落とし、
- * 後から復元できないため、モデルを替えるときは引用の原文一致率を検証する。
- * grok への切り替え(2026-08-17、GPT 解約)後の原文一致率はまだ検証していない。
+ * `structurer` と `scout` は引用を原文のまま写す。写せなかった項目はコードが落として復元できないので、
+ * モデルを替えるときは引用の原文一致率を検証する。
  */
 export const ROLE_MODEL: Record<Role, string> = {
-  // 締めの keeper。ユーザーの発言から引用を写す仕事で、写せなかったものはコードが落とす
-  // (keepGrounded)。scout と同じ性質で対話ごとに通るため、処理量を抑えたmodelに置く。
+  // 写せなかった引用は keepGrounded が落とす。対話ごとに通るので処理量を抑えた model に置く。
   structurer: "grok-4.3",
-  // 下書きの精査(assistant の draft)。外に出る前の最後の検査。「書いた側と別の系列」(ADR 0031)
-  // — 書き手は grok なので、精査は GPT(ChatGPT Pro x5 の chatgpt-oauth 枠)。
-  // 最後の関門は強い側(sol)に置く(Haru の判断。grok 時代の「精度は高いほうがいい」と同じ)。
-  // 精査は1日1〜数回・出力2k tok 程度なので、単価差の窓への影響は絶対量として小さい。
-  // luna は同一入力の実測で同判定・引用全一致(25〜45秒)— 枠が逼迫したときの交代先。
+  // 外に出る前の最後の検査なので、書き手(grok)と別系列で強いモデルに置く。枠が逼迫したときの交代先は luna。
   reviewer: "gpt-5.6-sol",
-  scout: "grok-4.3", // 取り込みの構造化。引用を写す役(Intake.ingest)
-  // 受け取った画像の記述(src/agent/vision.ts)。記述は言い換えなので確定値には昇格させない。
+  scout: "grok-4.3", // 引用を写す役(Intake.ingest)
+  // 記述は言い換えなので確定値には昇格させない。
   looker: "grok-4.3",
 }
 
@@ -71,13 +58,12 @@ export interface RunnerRequest {
   readonly role: Role | (string & {})
   readonly prompt: string
   readonly systemPrompt?: string
-  /** 与えるとResponsesのjson_schemaによる構造化応答を要求する。 */
   readonly schema?: RuntimeSchema<unknown>
   readonly onText?: (delta: string) => void
   /** 画像入力。512ピクセル未満は API が拒否する。 */
   readonly images?: readonly { readonly data: Uint8Array; readonly mediaType: string }[]
   readonly signal?: AbortSignal
-  /** 呼び出し1回の締切。未指定だと xai 経路の既定 180 秒で切られる — それを超えて待つ呼び出しだけ渡す。 */
+  /** 未指定だと xai 経路の既定 180 秒で切られる。 */
   readonly timeoutMs?: number
   readonly kind: string
   readonly execution?: KernelLoopContext
@@ -91,16 +77,14 @@ export interface RunnerResult {
     inTok: number
     outTok: number
     cacheRead: number
-    /** 初回にキャッシュへ書いた入力。system とスキーマ定義はここに入るので、落とすと入力の大半が消える。 */
+    /** system とスキーマ定義はここに入るので、落とすと入力の大半が消える。 */
     cacheWrite: number
     notionalUsd: number
   }
   readonly quota?: QuotaSignal
 }
 
-/**
- * run の型付き失敗チャネル。クールダウン、halt、日次上限などを文字列へ潰さず呼び出し側へ渡す。
- */
+/** クールダウン・halt・日次上限を文字列へ潰さず呼び出し側へ渡す。 */
 export type RunError = RunnerFailed | Halt | QuotaCooldown | DailyRunLimit | DbFailed
 
 export interface RunnerApi {
@@ -110,10 +94,7 @@ export interface RunnerApi {
 
 export class Runner extends Context.Service<Runner, RunnerApi>()("Runner") {}
 
-/**
- * precheck → run → クォータ状態の更新 → 会計 の共通処理。実行本体だけ差し替えられるようにしてある
- * (これが本番層とStub層の唯一の違い)。
- */
+/** 本番層と Stub 層の違いは実行本体だけ。 */
 const makeRunner = (
   exec: (req: RunnerRequest, plan: RunPlan) => Effect.Effect<Omit<RunnerResult, "model">, RunnerFailed>,
   plan: (role: string) => RunPlan,
@@ -154,7 +135,7 @@ const makeRunner = (
           prompt: req.prompt,
           systemPrompt: req.systemPrompt ?? RUNTIME_PROMPT,
           schema: req.schema?.jsonSchema ?? null,
-          // 画像は中身まで digest に入れない — 同じ prompt でも画像が違えば別リクエストと分かる程度でよい
+          // 画像は中身まで digest に入れない。画像が違えば別リクエストと分かる程度でよい
           images: req.images?.map((i) => `${i.mediaType}:${i.data.byteLength}`) ?? null,
         })
         const replay = req.execution
@@ -180,7 +161,7 @@ const makeRunner = (
         if (replayed) {
           out = replayed
         } else {
-          // ゲート。失敗チャネルに拒否が載るので、ここを通らずに下へは行けない。
+          // 失敗チャネルに拒否が載るので、ここを通らずに下へは行けない。
           yield* gov.precheck({ pool: p.pool, at, nowMs: Date.now(), lane })
           at = yield* gov.claimRun({ lane })
 
@@ -190,8 +171,7 @@ const makeRunner = (
                 .pipe(Effect.tapError(() => gov.releaseRunClaim({ at, lane })))
             : undefined
           out = yield* exec(req, p).pipe(
-            // 失敗でもクォータシグナルが取れていれば必ず再実行を抑止する。
-            // 抑止しないとリセット前のクォータへ毎 run 再試行する。
+            // 失敗でもクォータシグナルが取れていれば再実行を抑止する。抑止しないとリセット前のクォータへ毎 run 再試行する。
             Effect.tapError((e) =>
               e.exhausted === true
                 ? gov.noteQuota({ pool: p.pool, window: "unknown", exhausted: true }, at, Date.now())
@@ -299,8 +279,7 @@ const makeRunner = (
   })
 
 const testPlan = (role: string): RunPlan => {
-  // 既知の role でなければモデル id そのものとして読む。ただし知らない id は受け付けない —
-  // 通すと上流の4xxで、実行開始後に失敗する。
+  // 知らない id は受け付けない。通すと実行開始後に上流の 4xx で失敗する。
   const model = assertKnownModel(ROLE_MODEL[role as Role] ?? role)
   return {
     model,
@@ -314,9 +293,7 @@ const productionPlan = (role: string): RunPlan => {
   return { model, pool: poolForModel(model) }
 }
 
-/**
- * 本番の層。SuperGrok の定額クォータを xAI Responses で使う。
- */
+/** SuperGrok の定額クォータを xAI Responses で使う。 */
 export const RunnerLive = Layer.effect(
   Runner,
   makeRunner(
@@ -355,16 +332,12 @@ export interface StubReply {
   readonly text: string
   readonly structured?: unknown
   readonly quota?: QuotaSignal
-  /** 立てるとこの応答で失敗する(クォータ枯渇経路の検査用)。 */
+  /** クォータ枯渇経路の検査用。 */
   readonly fail?: string
   readonly usage?: RunnerResult["usage"]
 }
 
-/**
- * テスト用の層。OAuth資格情報は要らない。
- * 台本を順に返し、尽きたら最後を繰り返す。precheck・記録・クォータ抑止は本番と同じ処理を通るので、
- * 「ゲートが実際に判定するか」をモデルを呼ばずに端から端まで確かめられる。
- */
+/** 台本を順に返し、尽きたら最後を繰り返す。precheck・記録・クォータ抑止は本番と同じ処理を通る。 */
 export const RunnerStub = (script: readonly StubReply[]) => {
   let i = 0
   const calls: RunnerRequest[] = []

@@ -1,10 +1,4 @@
-/**
- * テスト用の配線。API キーも `claude` バイナリも要らない。
- *
- * DB は `:memory:` だが本物の SQLite で、schema.sql をそのまま適用している
- * (append-only トリガも FTS5 trigram も本物)。Runner だけ Stub 層に差し替える。
- * つまり「ゲートが実際にモデル呼び出しを止めるか」を、モデルを呼ばずに端から端まで検査できる。
- */
+/** DB は `:memory:` の本物の SQLite に schema.sql を適用する。差し替えるのは Runner だけ。 */
 import * as Effect from "effect/Effect"
 import * as ManagedRuntime from "effect/ManagedRuntime"
 import { configureApp } from "../src/core/config.ts"
@@ -43,7 +37,6 @@ export const withHarness = async (
   }
 }
 
-/** `globalThis.fetch` を差し替えて本文を回し、終わりに必ず戻す。 */
 export const withFetch = async <T>(impl: unknown, fn: () => Promise<T>): Promise<T> => {
   const original = globalThis.fetch
   globalThis.fetch = impl as typeof fetch
@@ -55,9 +48,8 @@ export const withFetch = async <T>(impl: unknown, fn: () => Promise<T>): Promise
 }
 
 /**
- * migration 台帳より前(v4)の schema SQL。現行 schema から、以後の migration が加えた差を
- * 文字列の段階で戻す — LEGACY_V4_SCHEMA_FINGERPRINT と一致させるため。
- * migration を足したら、その差をここでも戻すこと。
+ * migration 記録より前(v4)の schema SQL。LEGACY_V4_SCHEMA_FINGERPRINT と一致させるため、
+ * migration を足したらその差をここでも戻す。
  */
 export const legacyV4Sql = (schemaSql: string): string =>
   schemaSql

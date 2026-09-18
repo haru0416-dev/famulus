@@ -1,8 +1,3 @@
-/**
- * 承認の検査。「承認したのに承認記録が無い」状態を作れないことが主眼。
- * 実行の仕組みはまだ無いので、ここで守るのは「実行の前提条件が揃っているか」だけ。
- */
-
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
@@ -55,7 +50,7 @@ test("approve は action 行と status 遷移を必ず一緒に残す", async ()
     assert.equal(out.row.status, "approved")
     assert.equal(out.action?.actor, "owner")
     assert.equal(out.action?.action, "approve")
-    // 承認時に見ていた payload の指紋が残る = 後から中身が変わったら実行ゲートで弾ける。
+    // 承認時の payload の指紋を残すので、後から中身が変わったら実行前に検出できる。
     assert.equal(out.action?.payload_hash, payloadHash(out.row.payload))
     assert.equal(out.r.payloadHash, out.action?.payload_hash)
   })
@@ -129,7 +124,7 @@ test("id は前方一致で引ける。曖昧なら選ばずに失敗する", as
     )
     assert.equal(row.id, id)
 
-    // 空文字は全件に当たる。曖昧なまま承認に進ませない。
+    // 空文字は全件に当たるので、曖昧なまま承認させない。
     await h.run(
       Effect.gen(function* () {
         const p = yield* Proposals

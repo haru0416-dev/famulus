@@ -1,7 +1,4 @@
-/**
- * DB の検査。append-only が SQL 側で強制されていることを、アプリを経由せずに直接実行して確かめる。
- * (アプリが行儀よく書いているだけなら、別経路が一つ増えた時点で不変条件は消える)
- */
+// append-only は SQL のトリガで強制する。アプリを経由せず SQL を直接実行して確かめる。
 
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
@@ -298,7 +295,6 @@ test("events の UPDATE は content := NULL(抹消)だけ通る", async () => {
       }),
     )
 
-    // 内容の差し替えは拒否。
     const e = await h.fail(
       Effect.gen(function* () {
         const db = yield* Db
@@ -316,7 +312,6 @@ test("events の UPDATE は content := NULL(抹消)だけ通る", async () => {
     )
     assert.equal((e2 as { _tag: string })._tag, "DbFailed")
 
-    // 内容は見えなくできても、監査履歴は残る。
     const after = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
@@ -367,11 +362,8 @@ test("recall は trigram で部分一致する(日本語が分かち書きなし
   })
 })
 
-/**
- * 入力はモデルを呼ぶ前に DB へ落ちる。除外しないと自分が今言われたことを過去の記録として読む
- * — 「最近疲れてる」の 49 秒後に「それ昨日も言ってる」と返す事故が実際に起きた。
- * 索引に入れない手(自走側の `text: ""`)は対話の入力には使えないので、検索の側で外す。
- */
+// 入力はモデルを呼ぶ前に DB へ書かれるので、除外しないと今言われたことを過去の記録として返す。
+// 自走側の `text: ""`(索引に入れない行)は対話の入力には使えないので、recall で除外する。
 test("recall は今のターンの入力を過去の記録として返さない", async () => {
   await withHarness(async (h) => {
     const { withSelf, withoutSelf } = await h.run(
@@ -379,7 +371,6 @@ test("recall は今のターンの入力を過去の記録として返さない"
         const mem = yield* Memory
         // 本当に過去にある記録。同じ本文だと dedupe がまとめるので、別の言い方にする。
         yield* mem.remember({ kind: "observe", content: { said: "先週から疲れが抜けない" } })
-        // 今このターンで受け取った入力。DB には残るが、検索の根拠にしてはいけない。
         const now = yield* mem.remember({
           kind: "observe",
           content: { said: "最近ちょっと疲れてるんだよね" },
@@ -451,12 +442,7 @@ test("抹消したイベントは recall に出てこない", async () => {
   })
 })
 
-// ── 置き方(何が上位に来るか)の検査。
-//
-// 検索が「一致するか」だけを見ていた頃は、並びが `at DESC` = 一致した中の新着順だった。
-// cycle は起きるたびに長い自己言及を書くので、新しさだけでシステム記録が上位を占め、
-// 探している事実を押し下げていた(`recall 予約` の上位10件のうち5件がシステム記録)。
-// 引けるかどうかと同じくらい、何が先に見えるかが記憶の質を決める。
+// cycle は長い自己言及を書くので、新着順だとシステム記録が上位を占める。
 
 test("recall は関連度と層で並ぶ — 新しいだけのシステム記録が確定した事実を押し下げない", async () => {
   await withHarness(async (h) => {
@@ -508,7 +494,6 @@ test("上書きした belief の旧版は『確定』として前に出ない", 
     assert.equal(rows[0]?.is_current, 1, "今の値が先頭")
     assert.match(String(rows[0]?.text), /8月13日/)
     assert.equal(rows[1]?.is_current, 0)
-    // 読む側が古い値を今の値と取り違えないよう、ラベルで分ける。
     assert.match(renderRecall(rows), /確定\(旧版\)/)
   })
 })
@@ -608,13 +593,6 @@ test("belief は上書きされるが、履歴は events に残る", async () =>
   })
 })
 
-/**
- * 事実が変わったとき、古い値は消えず、区間として閉じる。
- *
- * ここが上書きだった頃は「転職活動中だった時期」そのものが DB から消えていた。
- * 今の値しか持たない DB は現在形の問いにしか答えられず、
- * 「去年の今ごろ何をしていたか」を聞かれると何も言えない。
- */
 test("値が変わっても古い区間は残る — 今の値と、あの時点の値が両方引ける", async () => {
   await withHarness(async (h) => {
     const out = await h.run(
@@ -638,7 +616,6 @@ test("値が変わっても古い区間は残る — 今の値と、あの時点
     assert.equal(out.now?.validUntil, null, "今の値は区間が開いている")
     assert.equal(out.now?.validFrom, "2026-09-01T00:00:00Z")
 
-    // 過去形の問いに答えられる。上書きしていたらここは今の値を返してしまう。
     assert.match(String(out.past?.value), /転職活動中/)
     assert.equal(out.past?.validUntil, "2026-09-01T00:00:00Z", "古い区間はそこで閉じている")
     assert.equal(out.past?.invalidatedReason, "ユーザーが転職の終了を明言した", "なぜ閉じたかが残る")
@@ -734,7 +711,6 @@ test("閉じた区間の belief は検索で『確定』として前に出ない
     const current = rows.filter((r) => r.is_current === 1)
     assert.equal(current.length, 1, "今の値は1本だけ")
     assert.match(String(current[0]?.text), /もう終わった/)
-    // 古い値も履歴に残すが、現在の確定値としては表示しない。
     assert.match(renderRecall(rows), /確定\(旧版\)/)
   })
 })
@@ -746,7 +722,7 @@ test("確かめてから時間が経った事実だけを拾える(陳腐化の�
         const mem = yield* Memory
         yield* mem.recordBelief("work.job_search", "転職活動中", { validFrom: "2026-01-01T00:00:00Z" })
         yield* mem.recordBelief("home.city", "東京", { validFrom: "2026-08-01T00:00:00Z" })
-        // 閉じた区間は「古い」ではなく「終わった」。聞き直す対象ではない。
+        // 閉じた区間は古いのではなく終わった値で、聞き直す対象ではない。
         yield* mem.recordBelief("phone.model", "旧機種", { validFrom: "2026-01-01T00:00:00Z" })
         yield* mem.recordBelief("phone.model", "新機種", { validFrom: "2026-08-05T00:00:00Z" })
         return yield* mem.staleBeliefs("2026-06-01T00:00:00Z")
@@ -794,7 +770,6 @@ test("空白で区切った複数語は AND で絞る(フレーズ一致にし�
         }
       }),
     )
-    // 語の間に空白を挟んだだけで 0 件になっていた。絞り込みたいときに使えないのが致命的だった。
     assert.equal(out.both.length, 1, "両方の語を含む行だけが残る")
     assert.match(String(out.both[0]?.text), /メモリの設計/)
     assert.equal(out.one.length, 2)
@@ -816,10 +791,6 @@ test("3文字未満の語も、索引で引ける語と重ねて絞れる", asyn
   })
 })
 
-/**
- * 盛りすぎた問いの緩め直し。AND で0件なら語ごとに引き直す(1回だけ)。
- * 実測(eval:recall)で and-overspecify が合成 0/2・実DBの唯一の miss も同型だったための機構。
- */
 test("語を盛りすぎた recall は絞りを外して引き直す", async () => {
   await withHarness(async (h) => {
     await h.run(
@@ -833,7 +804,7 @@ test("語を盛りすぎた recall は絞りを外して引き直す", async () 
         }),
       ),
     )
-    // IDENTIFY は記録に無い語 — AND では0件になる形
+    // IDENTIFY は記録に無い語で、AND では0件になる。
     const rows = await h.run(Effect.flatMap(Memory, (mem) => mem.recall("presence 再接続 IDENTIFY", 10)))
     assert.ok(
       rows.some((r) => String((r as { text?: string }).text ?? "").includes("再接続")),
@@ -871,7 +842,6 @@ test("remember は埋め込みを同じ tx で書き、redact が両方消す", 
     assert.equal(Number(meta?.dim), 256)
     assert.equal(String(meta?.content_sha).length, 64)
     assert.equal(Number(vecCount?.n), 1)
-    // 原文を消したら埋め込みも消える — 埋め込みは原文から作られる
     assert.equal(Number(afterRedact?.v), 0)
     assert.equal(Number(afterRedact?.m), 0)
   })
@@ -890,7 +860,6 @@ test("embedMissing は埋め込みの無い行だけを埋める", async () => {
           m.remember({ content: "off の間に書かれた記録", at: "2026-08-08T09:00:00Z" }),
         ),
       )
-      // stub に戻すと embedMissing が埋め、二度目は 0 件
       process.env.FAMULUS_EMBEDDING = "stub"
       configureApp()
       const { first, second, has } = await h.run(
@@ -923,7 +892,7 @@ test("recall は FTS が外した言い換えを意味検索で拾う(stub の 2
         const mem = yield* Memory
         yield* mem.remember({ content: "問題空間の誤定義仮説を検証した", at: "2026-08-08T09:00:00Z" })
         yield* mem.remember({ content: "ポケカ販売サイトのデザイン方向を決めた", at: "2026-08-08T09:01:00Z" })
-        // FTS: 「誤前提」「定義問題」はどちらも本文の連続部分文字列ではない → 索引では 0 件
+        // 「誤前提」「定義問題」は本文の連続部分文字列ではないので、FTS では 0 件になる。
         return yield* mem.recall("誤前提 定義問題")
       }),
     )
@@ -938,7 +907,6 @@ test("rrfMerge は両方に出た行を上へ、片方だけの行を順位で�
   const merged = rrfMerge([row("a"), row("b"), row("c")], [row("b"), row("d")])
   assert.equal(merged[0]?.id, "b")
   assert.deepEqual(merged.map((r) => r.id).sort(), ["a", "b", "c", "d"])
-  // 片方が空ならもう片方の順序がそのまま残る
   assert.deepEqual(
     rrfMerge([row("x"), row("y")], []).map((r) => r.id),
     ["x", "y"],

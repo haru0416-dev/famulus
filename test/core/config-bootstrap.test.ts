@@ -10,7 +10,7 @@ let configRoot = ""
 
 beforeAll(() => {
   callerCwd = mkdtempSync(join(tmpdir(), "fam-caller-cwd-"))
-  // 相対 FAMULUS_DB が「設定 root 基準」で絶対化されることを見る検査なので、repo 内に要る。
+  // 相対 FAMULUS_DB を設定 root 基準で絶対化するかを見るので、repo 内に置く。
   const scratchParent = join(PROJECT_ROOT, "node_modules/.cache")
   mkdirSync(scratchParent, { recursive: true })
   configRoot = mkdtempSync(join(scratchParent, "fam-config-bootstrap-"))

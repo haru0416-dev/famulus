@@ -1,57 +1,41 @@
 #!/usr/bin/env bun
 /**
- * Discord の Gateway に接続を張り続ける。オンライン表示を出すためだけに在る。
- *
- * ボットが「オンライン」と出るかどうかは、Gateway の WebSocket セッションを持っているか
- * だけで決まる。REST でメッセージを出しても表示は動かない — だから `src/poll.ts` が
- * 30秒ごとに `pollInbound()` を呼んでいる間も、ユーザーの画面ではずっとオフラインだった。
- *
- * メッセージの経路はここに移さない。受け取りは今まで通り poll(REST)が持つ。
- * 分ける理由は障害時の影響が違うこと — この接続が切れても届いたものは30秒後に読まれるが、
- * 受け取りを常駐に寄せると、常駐プロセスが通知なしに停止した間は誰も読まない。
- * このプロセスが停止して失われるのは表示だけ。
- *
- * intents は 0 で、何も受け取らない。特権 intent が要らず、guild が増えても
- * 流れてくる量が変わらない。受け取らないので replay も要らないが、RESUME は実装する —
- * 再接続のたびに IDENTIFY を消費すると、回線が揺れた日に日次の上限に当たる。
- *
- * 状態(未読と watch の数)を出すのは、緑の丸だけでは「繋がっている」以上のことを言えないから。
- * DB が読めなくても接続は落とさない。表示のために接続を切らない。
+ * Discord の Gateway に接続を張り続け、オンライン表示を出す。REST だけでは表示はオフラインのまま。
+ * 受け取りは poll(REST)に残す。この接続が止まっても失うのが表示だけになるように。
+ * intents は 0。RESUME は実装する(再接続のたびに IDENTIFY すると日次の上限に当たる)。
+ * DB が読めなくても接続は落とさない。
  */
 import { Database } from "bun:sqlite"
 import { appConfig, configureApp } from "./core/config.ts"
 import { loadEnv } from "./core/env.ts"
 import { nowIso } from "./core/time.ts"
 
-/** 既定の入口。READY が `resume_gateway_url` を寄越したら、次はそちらへ繋ぐ。 */
+/** READY が `resume_gateway_url` を返したら、次はそちらへ繋ぐ。 */
 const ENTRY = "wss://gateway.discord.gg/?v=10&encoding=json"
 
-/** 表示を書き換える間隔。Gateway の presence 更新は 20秒に5回まで — 60秒なら当たらない。 */
+/** Gateway の presence 更新は 20秒に5回まで。 */
 const REFRESH_MS = 60_000
 
-/**
- * 再接続の待ちの上限。IDENTIFY は日に 1000 回まで。
- * 120秒で頭打ちにすると、繋がらない状態が丸1日続いても 720 回で収まる。
- */
+/** IDENTIFY は日に 1000 回まで。120秒で頭打ちなら、繋がらない状態が1日続いても 720 回で収まる。 */
 const BACKOFF_MAX_MS = 120_000
 
-/** 戻ってこられない終わり方。トークンか intents が違うので、待っても直らない。 */
+/** トークンか intents が違う。待っても直らない。 */
 const FATAL = new Set([4004, 4010, 4011, 4012, 4013, 4014])
 
-/** セッションごと捨てる終わり方。RESUME を投げても 9 が返るだけなので、作り直す。 */
+/** RESUME しても op 9 が返るだけなので、セッションを作り直す。 */
 const STALE = new Set([4007, 4009])
 
 const log = (m: string): void => console.log(`${nowIso()} ${m}`)
 
 /**
- * 表示に出す文。読み取り専用で開く — 常駐が書き込みの錠を持つと、cycle が待たされる。
- * 読めなければ `undefined`(掃除の最中や、まだ DB が無い状態は普通にある)。
+ * 読み取り専用で開く(書き込みの錠を持つと cycle が待たされる)。
+ * 掃除の最中や DB が無いときは `undefined`。
  */
 export function stateLine(path: string = appConfig().paths.db): string | undefined {
   try {
     const db = new Database(path, { readonly: true })
     try {
-      // 最初に置く。これより前に読むと、他が WAL を開き直している間は locked で表示が消える。
+      // 最初に置く。先に読むと、他が WAL を開き直している間は locked で表示が消える。
       db.exec("PRAGMA busy_timeout = 2000;")
       const cursor = Number(
         (db.query("SELECT value v FROM schema_meta WHERE key='cycle:cursor'").get() as { v?: string } | null)
@@ -78,12 +62,11 @@ export function stateLine(path: string = appConfig().paths.db): string | undefin
   }
 }
 
-/** presence の中身。`op 2` の中でも `op 3` 単体でも同じ形で渡す。 */
 export const presence = (path?: string) => {
   const line = stateLine(path)
   return {
     since: 0,
-    // type 4 は前置きの付かない表示。文が出せないときは活動を空にする(緑の丸だけになる)。
+    // type 4 は前置きの付かない表示。
     activities: line ? [{ type: 4, name: "Custom Status", state: line }] : [],
     status: "online",
     afk: false,
@@ -96,9 +79,8 @@ interface Session {
 }
 
 /**
- * 閉じたあとに次の回へ持ち越すもの。セッションを捨てた回は番号も捨てる —
- * 4007/4009 や op 9 で受け取った seq を次の IDENTIFY へ持ち越すと、新しいセッションに
- * 無い番号で heartbeat を送ることになり、同じところで切られ続ける。
+ * セッションを捨てた回は seq も捨てる。持ち越すと新しいセッションに無い番号で heartbeat を送り、
+ * 同じところで切られ続ける。
  */
 export function carryOver(
   code: number,
@@ -109,10 +91,7 @@ export function carryOver(
   return { session: keep, seq: keep ? seq : null }
 }
 
-/**
- * 1回ぶんの接続。閉じた理由を返す — 呼ぶ側が次に RESUME するか IDENTIFY するかを決める。
- * 例外にしないのは、切れることが異常ではないから(Discord 側から定期的に張り直させられる)。
- */
+/** 切れるのは異常ではない(Discord から定期的に再接続を求められる)ので、閉じた理由を例外にせず返す。 */
 function once(
   prev: Session | undefined,
   seqIn: number | null,
@@ -127,14 +106,14 @@ function once(
     let acked = true
     let fatal: number | undefined
     let settled = false
-    /** READY か RESUMED まで行ったか。行っていない回だけ待つ — 回線が落ちている間に毎秒叩かない。 */
+    /** READY か RESUMED まで行っていない回だけ待つ。回線が落ちている間に毎秒再接続しない。 */
     let connected = false
 
     const stop = () => {
       clearInterval(beat)
       clearInterval(refresh)
     }
-    /** 張り直させる。4000 番台で閉じると Discord はセッションを残す — 1000 で閉じると消える。 */
+    /** 4000 番台で閉じると Discord はセッションを残す。1000 で閉じると消える。 */
     const again = () => {
       stop()
       try {
@@ -155,13 +134,13 @@ function once(
 
       if (m.op === 10) {
         const ms = (m.d as { heartbeat_interval: number }).heartbeat_interval
-        // 最初の1回だけずらす。全接続が同時に送ると、Discord 側へ heartbeat が集中する。
+        // 最初の1回だけずらす。全接続が同時に送ると heartbeat が集中する。
         setTimeout(() => {
           if (ws.readyState !== WebSocket.OPEN) return
           ws.send(JSON.stringify({ op: 1, d: seq }))
           acked = false
           beat = setInterval(() => {
-            // ACK が返らないまま次の番が来たら、繋がって見えて届いていない。張り直す。
+            // ACK が返らないまま次の番が来たら届いていない。再接続する。
             if (!acked) return again()
             ws.send(JSON.stringify({ op: 1, d: seq }))
             acked = false
@@ -188,9 +167,9 @@ function once(
         acked = true
         return
       }
-      // 張り直せと言われた。セッションは残っているので RESUME で戻る。
+      // セッションは残っているので RESUME で戻る。
       if (m.op === 7) return again()
-      // セッションが無効。`d` が false なら作り直し。
+      // `d` が false ならセッションを作り直す。
       if (m.op === 9) {
         if (m.d === false) session = undefined
         return again()
@@ -203,7 +182,6 @@ function once(
           session = { id: d.session_id, url: d.resume_gateway_url }
         }
         log(`${m.t} — 接続中(${stateLine() ?? "状態は読めていない"})`)
-        // 表示だけを更新する。切らずに書き換えられる。
         refresh = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op: 3, d: presence() }))
         }, REFRESH_MS)
@@ -215,7 +193,7 @@ function once(
       if (settled) return
       settled = true
       if (FATAL.has(e.code)) fatal = e.code
-      // 4000 は自分で閉じた回。それ以外は理由を残す — 通知なしの停止を診断するための唯一の記録。
+      // 4000 は自分で閉じた回。それ以外は理由を残す(通知なしの停止を診断する唯一の記録)。
       if (e.code !== 4000) log(`切れた: ${e.code} ${e.reason || ""}`)
       done({ ...carryOver(e.code, session, seq), connected, ...(fatal === undefined ? {} : { fatal }) })
     }
@@ -229,11 +207,11 @@ async function main(): Promise<void> {
   const config = appConfig()
   const token = config.discord.token
   if (!token) {
-    // 設定が無いのは異常ではない(Discord と同じ契約)。走り続ける理由も無い。
+    // 設定が無いのは異常ではない(Discord と同じ契約)。
     log("FAMULUS_DISCORD_TOKEN が無い — 接続しない")
     return
   }
-  // 出せる先が実在するかを1回だけ確かめる。トークンが無効だと 4004 で無限に張り直すことになる。
+  // トークンが無効だと 4004 で再接続し続けるので、先に1回確かめる。
   const me = await fetch(`${config.discord.api}/users/@me`, { headers: { authorization: `Bot ${token}` } })
   if (!me.ok) {
     log(`トークンが通らない: ${me.status} — 接続しない`)
@@ -255,8 +233,7 @@ async function main(): Promise<void> {
     }
     session = r.session
     seq = r.seq
-    // 一度でも繋がった回は待たない。待つのは繋がらなかった回だけ — そちらは相手か回線の側で、
-    // 間を詰めても直らない。繋がった回で待つと、Discord から張り直させられるたびに表示が消える。
+    // 一度でも繋がった回は待たない。繋がった回で待つと、Discord から再接続を求められるたびに表示が消える。
     if (r.connected) {
       wait = 1_000
       await Bun.sleep(1_000)
@@ -267,8 +244,8 @@ async function main(): Promise<void> {
   }
 }
 
-// systemd から止められたら黙って降りる。落ちたことにすると Restart が数える。
-// 入口として走ったときだけ。検査から import したときに接続を張らせない。
+// systemd から止められたら正常終了する(異常終了だと Restart が数える)。
+// 検査から import したときは接続しない。
 if (import.meta.main) {
   loadEnv()
   configureApp()

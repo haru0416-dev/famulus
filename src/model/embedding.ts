@@ -1,11 +1,6 @@
 /**
- * recall の意味検索に使うローカル埋め込み。推論は完全にこの箱の中で行う —
- * 私的データを外に出さないという制約が先にあり、API 埋め込みは選択肢にない。
- * モデルは ruri-v3-30m(q8 ONNX・256次元)。実ロードの詳細は embedding-ruri.ts。
- * プレフィックスは ruri v3 の規約(検索クエリ: / 検索文書:)。
- *
- * 失敗はすべて undefined に落とす。埋め込みが無くても recall は FTS で動く —
- * 意味検索は上乗せであって、記憶の書き込みや検索を埋め込みの都合で止めない。
+ * 私的データを外に出さないので API 埋め込みは使わない(ruri-v3-30m をローカルで推論する)。
+ * プレフィックスは ruri v3 の規約。失敗は undefined にする(recall は埋め込みが無くても FTS で動く)。
  */
 import { appConfig } from "../core/config.ts"
 import type { Embedder } from "./embedding-ruri.ts"
@@ -29,10 +24,7 @@ const loadReal = async (): Promise<Embedder | undefined> => {
   }
 }
 
-/**
- * 検査用の決定的埋め込み。文字2-gram の出現を 256 次元に畳んで正規化する。
- * 意味は持たないが、共有 2-gram が多い文ほど近くなるので、機構の検査には足りる。
- */
+/** 意味は持たないが、共有 2-gram が多い文ほど近くなるので機構の検査には足りる。 */
 export const stubEmbed = (text: string): Float32Array => {
   const v = new Float32Array(EMBEDDING_DIM)
   for (let i = 0; i < text.length - 1; i++) {

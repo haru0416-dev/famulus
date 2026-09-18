@@ -1,6 +1,5 @@
 /**
- * redirect の `http://localhost:1/` は listen されない port。ブラウザが即失敗して code 付き URL が
- * アドレスバーに残るので、それを貼って交換する(headless で完結させるため)。
+ * headless で完結させるため、redirect は listen されない `http://localhost:1/` にして、失敗ページの URL を貼らせる。
  * refresh token は rotation しないので、並行 refresh の競合対策は要らない。
  */
 import { createHash, randomBytes } from "node:crypto"
@@ -12,22 +11,19 @@ const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 const REDIRECT_URI = "http://localhost:1/"
 /**
- * 予定の読み書きと、メールの読み取りのみ。送信・変更のスコープは持たない —
- * 外へ出る操作は famulus の承認機構の外に置かない。スコープを変えたら再ログインが要る
- * (既存トークンは旧スコープのまま。API は 403 insufficient scopes を返す)。
+ * 外へ出る操作を承認機構の外に置かないため、送信・変更のスコープは持たない。
+ * スコープを変えたら再ログインが要る(既存トークンは 403 insufficient scopes になる)。
  */
 const SCOPE = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/gmail.readonly",
 ].join(" ")
 
-/** access の期限のこの手前で更新する。access は1時間有効なので5分の余裕で足りる。 */
 const REFRESH_SKEW_MS = 5 * 60 * 1000
 
 export interface GoogleAuth {
   readonly access: string
   readonly refresh: string
-  /** access の期限(epoch ms)。 */
   readonly expires: number
 }
 
@@ -67,7 +63,7 @@ export const googleConfigured = (): boolean =>
 
 export const googleLoggedIn = (path: string = authPath()): boolean => existsSync(path)
 
-/** 一時ファイル + rename。書き込み途中のプロセス停止で資格情報を半分だけ残さない。 */
+/** 書き込み途中で止まっても資格情報を半分だけ残さないよう rename で置き換える。 */
 function save600(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.tmp-${process.pid}`
@@ -84,10 +80,7 @@ export function readGoogleAuth(path: string = authPath()): GoogleAuth {
 
 const b64url = (buf: Buffer): string => buf.toString("base64url")
 
-/**
- * ログインの前半。PKCE の verifier と state を pending に置き、承認 URL を返す。
- * 後半(`googleLoginFinish`)は別プロセスでよい — CLI は1回ごとに終わるため。
- */
+/** CLI は1回ごとに終わるので、後半の `googleLoginFinish` が別プロセスから読めるよう verifier を pending に置く。 */
 export function googleLoginStart(path: string = authPath()): string {
   const { id } = client()
   const verifier = b64url(randomBytes(32))
@@ -99,7 +92,7 @@ export function googleLoginStart(path: string = authPath()): string {
     response_type: "code",
     scope: SCOPE,
     access_type: "offline",
-    // consent を毎回出す — 出さないと2回目以降の承認で refresh_token が返らない。
+    // 毎回出さないと2回目以降の承認で refresh_token が返らない。
     prompt: "consent",
     code_challenge: b64url(createHash("sha256").update(verifier).digest()),
     code_challenge_method: "S256",
@@ -130,7 +123,6 @@ async function requestToken(fields: Record<string, string>): Promise<TokenRespon
   return body
 }
 
-/** 貼られたもの(失敗ページの URL 全体・クエリ・素の code のどれでも)から code と state を取る。 */
 export function parsePasted(pasted: string): { code: string; state?: string } {
   const text = pasted.trim()
   if (!text.includes("code=")) return { code: text }
@@ -142,9 +134,6 @@ export function parsePasted(pasted: string): { code: string; state?: string } {
   return { code, ...(state ? { state } : {}) }
 }
 
-/**
- * ログインの後半。ブラウザの失敗ページから貼られた URL(または code)を交換して保存する。
- */
 export async function googleLoginFinish(
   pasted: string,
   nowMs: number = Date.now(),
@@ -182,7 +171,6 @@ export async function googleLoginFinish(
   return auth
 }
 
-/** 有効な access token を返す。期限が近ければ refresh して保存する。 */
 export async function loadGoogleAccess(
   nowMs: number = Date.now(),
   path: string = authPath(),
@@ -201,7 +189,7 @@ export async function loadGoogleAccess(
   }
   const next: GoogleAuth = {
     access: body.access_token,
-    // Google は refresh を返し直さないことが多い。返らなければ今のを使い続ける。
+    // Google は refresh を返し直さないことが多い。
     refresh: body.refresh_token ?? auth.refresh,
     expires: nowMs + body.expires_in * 1000,
   }

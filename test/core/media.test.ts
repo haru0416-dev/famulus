@@ -1,8 +1,3 @@
-/**
- * media 置き場の検査。内容ハッシュで1つに落ちること、参照だけ残った状態を読む側で
- * 区別できることを見る。置き場は FAMULUS_DATA で一時ディレクトリに逃がす。
- */
-
 import assert from "node:assert/strict"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"

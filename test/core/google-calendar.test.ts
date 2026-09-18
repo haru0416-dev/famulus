@@ -1,8 +1,3 @@
-/**
- * Calendar の読みと挿入。ネットワークは withFetch で止め、送信契約(クエリ・本文の形)と
- * 応答の写像だけを固定する。終日/時刻・end 省略の分岐は純関数(buildEventBody)で踏む。
- */
-
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -24,7 +19,7 @@ const authed = (): void => {
   const dir = mkdtempSync(join(tmpdir(), "google-cal-test-"))
   roots.push(dir)
   const path = join(dir, "google-auth.json")
-  // 期限は実時計基準で先に置く。loadGoogleAccess は Date.now() で判定する — 固定時刻だと日付を跨いだ瞬間に refresh へ落ちる。
+  // loadGoogleAccess は Date.now() で判定するので、期限も実時計から作る。固定時刻だと refresh 経路に入る。
   writeFileSync(path, JSON.stringify({ access: "a-live", refresh: "r", expires: Date.now() + 3_600_000 }))
   process.env.FAMULUS_GOOGLE_AUTH = path
   process.env.FAMULUS_GOOGLE_CLIENT_ID = "cid-1"
@@ -112,7 +107,6 @@ test("描画は終日と時刻ありを言い分け、0件は「予定なし」"
   ])
   assert.match(text, /- \[.*10:00〜.*11:00\] 病院 @駅前/)
   assert.match(text, /- \[2026-08-25 終日\] 終日の用/)
-  // 場所なしの時刻あり(@ が付かない側)
   assert.match(text, /09:30\] \(無題\)$/m)
 })
 

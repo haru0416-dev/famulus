@@ -92,7 +92,7 @@ export interface OpenSingleLoopInput {
   readonly budget: BudgetVector
   readonly modelTokenAllowance: number
   readonly modelCostAllowanceMicrousd: number
-  /** 合成済み SkillPlan(canonical JSON と hash)。省略時は空計画(ZERO_SKILL_PLAN)。 */
+  /** 省略時は ZERO_SKILL_PLAN。 */
   readonly skillPlan?: { readonly json: string; readonly hash: string }
 }
 
@@ -568,7 +568,7 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
         )
       })
 
-    /** 旧版が succeeded 保存した契約不適合responseをreplay対象から外す。利用量とledgerは消さない。 */
+    /** succeeded で保存された契約不適合の response を replay 対象から外す。利用量と ledger は消さない。 */
     const invalidateModelResult = (context: KernelLoopContext, requestDigest: string) =>
       db.withImmediateTransaction("invalidate model result", (tx) => {
         assertCurrent(tx, context, false)

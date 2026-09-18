@@ -1,18 +1,6 @@
 /**
- * モデル呼び出しに利用制限と会計を適用する層。モデルの実体とは別に置く。
- *
- * 掛けるのは3つ:
- *   1. 呼ぶ前の検査(halt / クォータ抑止 / 日次 run 数)
- *   2. クォータ状態の更新(リセット前に再試行しないため)
- *   3. 会計(ledger。日次 run 数の上限がこれを数える)
- *
- * フックではなく middleware に置く。道具ループは1回の submission で何度も
- * モデルを呼ぶので、「開始時に1回」の位置に置くと検査は最初の1回きりになる。
- * クォータを実際に消費するのは1回1回の呼び出しなので、事前検査を通さずにモデルへ届く経路を作らないには
- * `wrapGenerate` の位置しかない。
- *
- * src/model/Runner.ts が同じ順序(precheck → 実行 → クォータ状態更新 → 会計)を Effect で持っている。
- * こちらは AI SDK の道具ループから呼ばれる側で、同じ DB の同じ表に載る。
+ * モデル呼び出しに利用制限と会計を適用する middleware。道具ループは1回の submission で何度もモデルを呼ぶので、
+ * 全呼び出しが事前検査を通る位置は `wrapGenerate` しかない。src/model/Runner.ts と同じ順序で、同じ DB の表に載る。
  */
 
 import type { LanguageModelV4, LanguageModelV4Middleware } from "@ai-sdk/provider"
@@ -27,7 +15,7 @@ import { assertKnownModel, ModelCallError, poolForModel, providerForModel } from
 import { traceOf } from "./trace.ts"
 import { XAI_PROVIDER_META, type XaiModelOptions, xaiResponsesModel } from "./xai-responses.ts"
 
-/** 呼ぶ前の検査。拒否は Error にして投げる — 道具ループの外まで理由付きで出る。 */
+/** 拒否は理由付きの Error にして、道具ループの外まで出す。 */
 async function gate(model: string): Promise<{ readonly at: string; readonly lane: Lane }> {
   try {
     return await run(
@@ -35,7 +23,7 @@ async function gate(model: string): Promise<{ readonly at: string; readonly lane
         const gov = yield* Governance
         const lane = currentLane()
         yield* gov.precheck({
-          // production modelは全て同じ永続クォータ集計単位に載る。
+          // production model は全て同じ永続クォータ集計単位に載る。
           pool: poolForModel(model),
           at: nowIso(),
           nowMs: Date.now(),
@@ -53,9 +41,8 @@ async function gate(model: string): Promise<{ readonly at: string; readonly lane
 }
 
 /**
- * 会計とクォータ状態の更新。この経路と Runner 経路が同じ DB に載るようにしてある。
- * ここを飛ばすと ledger が空のままになり、日次 run 数の上限(ledger を数える)を適用できない。
- * 記録できない応答を成功扱いにすると上限と監査が欠けるため、記録失敗は呼び出し失敗にする。
+ * 飛ばすと ledger が空になり、日次 run 数の上限を適用できない。記録できない応答を成功扱いにすると
+ * 上限と監査が欠けるので、記録失敗は呼び出し失敗にする。
  */
 async function account(
   model: string,
@@ -101,15 +88,12 @@ async function noteFailure(model: string, e: unknown, at: string, lane: Lane): P
   )
 }
 
-/** AI SDK Agent 経路で、モデル呼び出しごとに事前検査 → 実行 → クォータ状態更新 → 会計を行う。 */
 export function governance(): LanguageModelV4Middleware {
   return {
     specificationVersion: "v4",
     /**
-     * 流し込み経路は塞ぐ。統治を掛けてあるのは `wrapGenerate` だけなので、ここを素通しにすると
-     * 事前検査も会計も通らないままモデルへ届く(xai の `doStream` は実 HTTP でクォータが減る)。
-     * エージェント経路は generate しか使わない(実走で確認済み)。使う側が要るようになったら、
-     * ここに gate → 実行 → account を書いてから開ける。
+     * 検査と会計は `wrapGenerate` にしか無いので、ストリーム経路は拒否する(通すと検査も会計も無しにクォータが減る)。
+     * 開けるときは先に gate → 実行 → account を書く。
      */
     async wrapStream() {
       throw new Error("stream 経路は統治(事前検査・会計)を通らない。generate を使う")
@@ -143,18 +127,10 @@ export function governance(): LanguageModelV4Middleware {
   }
 }
 
-/**
- * 統治つきのモデル。エージェントに差すのはこれだけ。
- * 素の `xaiResponsesModel` を直接使う経路を作らない —
- * 事前検査を通らずにクォータが減る。
- *
- * 知らない id はここで失敗させる。呼ばれるのはエージェントを生成するときなので、env の打ち間違いは
- * 起動時に読める理由で止まる(実行を開始してから上流の 4xx で失敗しない)。
- */
+/** 素の `xaiResponsesModel` を直接使う経路を作らない。知らない id はエージェント生成時にここで失敗させる。 */
 export function governedModel(modelId: string, xaiOpts?: XaiModelOptions): LanguageModelV4 {
   assertKnownModel(modelId)
-  // 道具ループ(対話・委譲)は xai 経路のみ。GPT(chatgpt-oauth)は Runner の精査役専用 —
-  // ここを通すと xai の実装で GPT を呼ぶ誤配線になるので、組み立ての時点で止める。
+  // 道具ループは xai 経路のみ。GPT を通すと xai の実装で GPT を呼ぶ誤配線になる。
   if (providerForModel(modelId) !== "xai") {
     throw new ModelCallError(`対話経路で使えるのは xai 系のみ: ${modelId}`)
   }

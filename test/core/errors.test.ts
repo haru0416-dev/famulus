@@ -1,7 +1,3 @@
-/**
- * 拒否を人へ見せる一行(describeRefusal)の検査。承認ボード・CLI に出る唯一の文言。
- */
-
 import assert from "node:assert/strict"
 import { test } from "vitest"
 import {
@@ -21,7 +17,6 @@ test("4種の拒否がそれぞれ理由の載った一行になる", () => {
     describeRefusal(new QuotaCooldown({ pool: "p", window: "week", untilMs: Date.now() + 90_000 })),
     /p\/week.*あと約2分/,
   )
-  // 期限を過ぎた値は負の分にしない
   assert.match(
     describeRefusal(new QuotaCooldown({ pool: "p", window: "5h", untilMs: Date.now() - 60_000 })),
     /あと約0分/,

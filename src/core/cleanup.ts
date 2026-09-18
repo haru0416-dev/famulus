@@ -1,31 +1,6 @@
 /**
- * 状態の置き場(`~/.famulus/data`・`~/.famulus/runs`)で放っておくと増え続けるものを、1日1回だけ削除する。
- *
- * 対象ごとに増え方と寿命が異なる。
- *
- * - `events`(`famulus.db`)は append-only で、増えるのが正しい。ここは触らない。
- *   トリガが DELETE を拒否するので、間違って書いても通らない。
- * - `~/.famulus/runs/<名前>` はコンテナの workspace。中身は依存の取得物とビルドの残骸で、
- *   測定した workspace では 9.8MB のうち 8.7MB が npm のキャッシュだった。結果は DB に書く規律なので、
- *   ここに残っているものは次回再開用の作業データでしかない。ただし
- *   「長い作業は同じ workspace に置いて次回続ける」(src/services/Sandbox.ts)ので、
- *   触られたばかりのものは消せない。最後に触った時刻で切る。
- *   ただし時刻では決まらないものが1つある — 自分のソースのように、何日か触らなくても
- *   在り続けなければならない場所。そこは `keep` で外す(src/core/workspaces.ts)。
- * - `~/.famulus/data/run-cache` は workspace をまたいで共有するパッケージの置き場。古さでは切らない —
- *   使い回すために置いてあるので、触られていないことは消してよい理由にならない。上限で切る。
- *   消えても次の走行が取得し直すだけなので、部分的に選ばずまるごと削除する。
- *
- * 増えるものはもう1つあって、こちらはファイルではない。対応するホストプロセスが存在しないコンテナ
- * (`fam-run-*`)は cycle 自身が停止した回に残る。`sweepOrphans` が pid で判定して削除する。
- *
- * 3つ目だった `flue-tick.db` の掃除は廃止した。tick の会話を日ごとに溜めていたのは
- * Flue ランタイム側で、道具ループを AI SDK に載せ替えたときに書き手がいなくなった。
- * 書かれない DB を削除する処理だけが残っていても、次に誰かが読むときに「まだ使っている」と読める。
- * 残っているファイルそのもの(`~/.famulus/data/flue-tick.db`)は消していない — 中身は過去の会話で、
- * 消すかどうかはユーザーが決める。
- *
- * モデルは呼ばない。DB、ファイルの時刻・容量、Docker コンテナの主プロセス生存判定だけで決める。
+ * `~/.famulus/runs` の workspace は最後に触った時刻で、`run-cache` は容量上限で、1日1回削除する。
+ * `events` は append-only なので対象外。
  */
 
 import { existsSync, readdirSync, rmSync } from "node:fs"
@@ -37,10 +12,9 @@ import { appConfig } from "./config.ts"
 import { localDayRange, localHour, nowIso } from "./time.ts"
 import { forgetWorkspaces, keptNames, mb, scanTree } from "./workspaces.ts"
 
-/** その日ぶんを済ませたかどうかを置く場所。 */
 export const CLEANUP_DAILY = "daily:cleanup"
 
-/** この cycle で回すかどうか。1日1回。印を付けるのは呼び出し側(src/cycle.ts)。 */
+/** 済みの印を付けるのは呼び出し側(src/cycle.ts)。 */
 export const cleanupDue = (atIso: string) =>
   Effect.gen(function* () {
     if (localHour(atIso) < appConfig().schedule.cleanupHour) return false
@@ -48,13 +22,7 @@ export const cleanupDue = (atIso: string) =>
     return (yield* db.meta(CLEANUP_DAILY)) !== localDayRange(atIso).key
   })
 
-/**
- * workspace のうち、しばらく触られていないものを削除する。
- *
- * `kept` は時刻を見ずに残す名前(src/core/workspaces.ts の `keep`)。自分のソースを置いた
- * `selfdev` のように、何日か触らなくても在り続けなければならない場所がある。
- * 時刻だけで切ると、直したい日に限って消えている。
- */
+/** `kept`(`selfdev` など)は何日触られなくても残す必要があるので時刻を見ない。 */
 const sweepRuns = (
   cutoffMs: number,
   dry: boolean,
@@ -76,10 +44,7 @@ const sweepRuns = (
   return { names, bytes }
 }
 
-/**
- * 共有キャッシュが上限を超えていたら削除する。古さは見ない(使い回すために置いてある)。
- * 返すのは削除した量で、超えていなければ 0。
- */
+/** 共有キャッシュは使い回すために置くので古さでは切らない。消えても次の走行が取得し直す。 */
 const sweepCache = (dry: boolean, maxMb: number): number => {
   const root = cacheRoot()
   if (!existsSync(root)) return 0
@@ -89,18 +54,11 @@ const sweepCache = (dry: boolean, maxMb: number): number => {
   return t.bytes
 }
 
-/**
- * 1回通す。戻り値は DB に残す1行。
- *
- * `dry` は数えるだけで消さない。消すほうは取り消せないので、既定の確認手段はこちら。
- */
 export const cleanup = (opts?: {
   at?: string
   days?: number
   dry?: boolean
-  /** 共有キャッシュの上限(MB)。既定は CACHE_MAX_MB。 */
   cacheMaxMb?: number
-  /** コンテナ列挙処理。ここだけホストの docker に触るので、検査では差し替える。 */
   orphans?: (dry: boolean) => Promise<{ removed: string[]; kept: string[] }>
 }) =>
   Effect.gen(function* () {
@@ -111,17 +69,15 @@ export const cleanup = (opts?: {
     const maxMb = opts?.cacheMaxMb ?? appConfig().cleanup.cacheMaxMb
 
     const runs = sweepRuns(cutoffMs, dry, yield* keptNames)
-    // 実体を消したら説明も削除する。順はこちらが後 — 先に消すと、rmSync が失敗した回に
-    // 「消さない指定」だけが消えて、次の掃除で本体が持っていかれる。
+    // 実体より先に記録を消すと、rmSync が失敗した回に keep 指定だけが消えて次回本体が消される。
     if (!dry) yield* forgetWorkspaces(runs.names)
 
     const cacheBytes = sweepCache(dry, maxMb)
-    // docker が動いていない回もここへ来る。コンテナ掃除の失敗で他の掃除まで失敗させない。
+    // docker が止まっていても他の掃除は失敗させない。
     const sweep = opts?.orphans ?? sweepOrphans
     const orphans = yield* Effect.promise(() => sweep(dry).catch(() => ({ removed: [], kept: [] })))
 
-    // 削除理由を場所ごとに書く。3つとも条件が異なる(古さ / 上限 / 起動元プロセスの有無)ので、
-    // 「14 日より古いもの」を全体に掛けると、キャッシュとコンテナの削除条件を読み違える。
+    // 削除条件は場所ごとに異なる(古さ / 上限 / 起動元プロセスの有無)ので、理由も場所ごとに書く。
     const parts: string[] = []
     if (runs.names.length > 0)
       parts.push(`workspace ${runs.names.length} 件(${mb(runs.bytes)}、${days} 日より古い)`)

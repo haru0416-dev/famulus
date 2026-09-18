@@ -1,14 +1,7 @@
 #!/usr/bin/env bun
 /**
- * 対話の入口。人が打って動かす側(自走は src/cycle.ts)。
- * 1行読んで1ターン答え、既読位置を進める。それだけ。
- *
- *   bun run agent         … 対話を始める
- *   /reset                … 会話を捨てて次から新しく始める
- *   /q(または Ctrl-D)   … 終わる
- *
- * 枠は対話側。自走とは日次 run 数の内訳が分かれる。
- * 締切は付けない — 待っているのは人で、切る判断はその人がする(Ctrl-C)。
+ * 対話の入口(自走は src/cycle.ts)。run 数は対話の枠で計上する。
+ * 締切は付けない。止める判断は待っている人がする(Ctrl-C)。
  */
 import { createInterface } from "node:readline/promises"
 import * as Effect from "effect/Effect"
@@ -28,11 +21,8 @@ const assistant = createAssistant({ inputOriginKind: "chat" })
 const rl = createInterface({ input: process.stdin, output: process.stdout })
 
 /**
- * 入力の終わり(Ctrl-D / パイプの尽き)を2通りとも受ける。
- *
- * 待っている最中に閉じると `question` の約束は解決も棄却もされず、そのまま止まる。
- * 閉じた後に呼ぶと同期で投げる(`ERR_USE_AFTER_CLOSE`)ので `.catch()` では捕まらない。
- * 前者を signal で棄却に変え、後者を try で受ける。どちらも「終わる」1本に落とす。
+ * 入力の終わり(Ctrl-D / パイプの尽き)を2通りとも受ける。待機中に閉じると `question` は解決も棄却も
+ * されずに止まるので signal で棄却にする。閉じた後に呼ぶと同期で例外になるので try で受ける。
  */
 const closed = new AbortController()
 rl.on("close", () => closed.abort())
@@ -56,7 +46,7 @@ try {
       continue
     }
 
-    // 切るのは人。Ctrl-C を1回押したらこのターンだけ止め、REPL は残す。
+    // Ctrl-C 1回ではこのターンだけ止め、REPL は残す。
     const stop = new AbortController()
     const onSigint = () => stop.abort(new Error("Ctrl-C で止めた"))
     process.on("SIGINT", onSigint)
@@ -70,8 +60,8 @@ try {
     if (turn.text) console.log(`\n${turn.text}\n`)
     if (turn.cutOff) console.log(`(止まった: ${turn.cutOff})\n`)
 
-    // 対話の入口でも締めの keeper を通す。cycle だけに置くと、REPL で明言された値が
-    // 確定記憶へ上がらない。返信は先に表示し、keeper が終わってから次の入力を受ける。
+    // cycle だけで keeper を通すと、REPL で明言された値が確定記憶へ上がらない。
+    // 返信は先に表示し、keeper の完了後に次の入力を受ける。
     if (!turn.cutOff) {
       const kept = await run(
         keep({

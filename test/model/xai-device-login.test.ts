@@ -1,9 +1,3 @@
-/**
- * xaiDeviceLogin(RFC 8628 device-code flow)の検査。auth.x.ai へは一切出ない —
- * fetch は withFetch で全部差し替え、ポーリング間隔は fake timers で進める(実時間で待たない)。
- * 資格情報はテスト内で作る一時ファイルにだけ書く。
- */
-
 import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -65,7 +59,6 @@ test("pending/slow_down を経て承認され、600 で保存して返す", asyn
       assert.deepEqual(polls, ["dev-1", "dev-1", "dev-1"])
     },
   )
-  // 案内は complete な URI を優先する。
   assert.deepEqual(prompts, [["https://auth.x.ai/activate?user_code=USER-1", "USER-1"]])
   assert.equal((JSON.parse(readFileSync(path, "utf8")) as { refresh: string }).refresh, "r-dev")
   assert.equal(statSync(path).mode & 0o777, 0o600)
@@ -107,7 +100,7 @@ test("pending/slow_down 以外のエラーはログイン拒否として落と�
   await withFetch(
     async (input: unknown) => {
       if (isDeviceEndpoint(input)) {
-        // URI が両方無いときの案内は auth.x.ai へ倒す。
+        // URI が両方無いので案内は auth.x.ai になる。
         return json({ device_code: "d", user_code: "U", interval: 1, expires_in: 600 })
       }
       return json({ error: "access_denied", error_description: "user denied" }, 400)

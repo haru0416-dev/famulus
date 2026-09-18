@@ -1,4 +1,4 @@
--- famulus base schema. Execution-kernel tables are appended from kernel.sql.
+-- kernel.sql の表は sqlite.ts がこの後ろに連結する。
 
 CREATE TABLE schema_meta (
   key TEXT PRIMARY KEY,
@@ -473,7 +473,7 @@ BEGIN
   SELECT RAISE(ABORT, 'cycle lease owner change requires a higher fence');
 END;
 
--- Memory source of truth. seq is the explicit cursor used by tick and dream.
+-- seq は tick と dream が読み進める位置に使う。
 CREATE TABLE events (
   seq                 INTEGER PRIMARY KEY,
   id                  TEXT NOT NULL UNIQUE,
@@ -559,12 +559,11 @@ CREATE VIRTUAL TABLE events_fts USING fts5(
   tokenize = 'trigram'
 );
 
--- 意味検索の索引。events の search_text を ruri-v3-30m(256次元)で埋め込む。
--- events 本体は触らない(append-only)。行の対応は events.rowid。
--- 原文を redact したら、この2表の行も同じ tx で消す — 埋め込みは原文から作られる。
+-- 意味検索の索引。行の対応は events.rowid。test/helpers.ts の legacyV4Sql がこの行を目印にする。
+-- 埋め込みは原文から作るので、redact したら events_vec と events_embedding の行も同じ tx で消す。
 CREATE VIRTUAL TABLE events_vec USING vec0(embedding float[256] distance_metric=cosine);
 
--- 埋め込みの由来。モデルや次元を替えたとき、再埋め込みの対象をここで判別する。
+-- モデルや次元を替えたとき、再埋め込みの対象をここで判別する。
 CREATE TABLE events_embedding (
   rowid       INTEGER PRIMARY KEY,
   model       TEXT NOT NULL,
@@ -573,7 +572,7 @@ CREATE TABLE events_embedding (
   embedded_at TEXT NOT NULL
 ) STRICT;
 
--- Belief history is derived from immutable belief events. The next claim closes the previous interval.
+-- 次の claim が前の区間を閉じる。
 CREATE VIEW belief_slots AS
 WITH timeline AS (
   SELECT

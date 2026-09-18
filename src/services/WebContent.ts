@@ -1,15 +1,9 @@
-/** 取得済みのHTML・XML・feed・バイト列を、読める文字列へ変換する。 */
+/** 取得済みの HTML・XML・feed・バイト列を読める文字列へ変換する。 */
 
-/**
- * `class`/`id` が本文らしい塊。Readability の `okMaybeItsACandidate` から採った。
- * サイト固有の語(`hotentry` など)は入れない — 一般語だけで同じだけ手前に来る。
- */
+/** 本文を含む要素の class/id。サイト固有の語は入れない。 */
 const LOOKS_LIKE_BODY = /\b(?:content|article|main|body|entry|post|story)\b/i
 
-/**
- * 開始タグの直後から、対応する終了タグまでを返す。正規表現では入れ子を追えないので深さを数える。
- * `div`/`section`/`ul`/`ol` は自己終了しないので、開きと閉じを数えれば足りる。
- */
+/** 正規表現では入れ子を追えないので、開きと閉じの深さを数える。 */
 function blockAfter(html: string, from: number, tag: string): string {
   const open = new RegExp(`<${tag}\\b`, "gi")
   const close = new RegExp(`</${tag}>`, "gi")
@@ -20,7 +14,7 @@ function blockAfter(html: string, from: number, tag: string): string {
     close.lastIndex = i
     const o = open.exec(html)
     const c = close.exec(html)
-    if (!c) return html.slice(from) // 閉じないまま終わるページがある。そこまでを本文とみなす。
+    if (!c) return html.slice(from) // 閉じないまま終わるページがある。
     if (o && o.index < c.index) {
       depth++
       i = o.index + 1
@@ -33,22 +27,15 @@ function blockAfter(html: string, from: number, tag: string): string {
   return html.slice(from)
 }
 
-/**
- * 本文の周りを落とす。削らないと取得側の文字数上限をナビゲーションが食う。
- * 塊を選ぶ順は `<main>`/`<article>` → `class`/`id` → ページごと。
- */
+/** 本文の周りを落とす。削らないと取得の文字数上限をナビゲーションが使い切る。 */
 function trimChrome(html: string): string {
-  // 最初の `<main>`/`<article>` を採ると外す。GitHub や Qiita は先頭の article が
-  // 読み込みエラーの差し込みで、本文はその後ろにある。長いほうを採る。
+  // 先頭の article が読み込みエラーの差し込みで本文が後ろにあるページがあるので、最初ではなく最長を採る。
   let best = ""
   for (const m of html.matchAll(/<(?:main|article)\b[^>]*>([\s\S]*?)<\/(?:main|article)>/gi)) {
     if ((m[1]?.length ?? 0) > best.length) best = m[1] ?? ""
   }
-  // 本文らしさの目安。全体の 15% にも満たない塊は「本文」ではなく部品。
   if (best.length < html.length * 0.15) {
-    // `<main>`/`<article>` が無いページのほうが多い(はてブ・価格.com は1つも持たない)。
-    // ページごと使うと窓の頭が絞り込みメニューで尽きるので、Readability が本文を選ぶときの
-    // class/id の入口だけ借りる。
+    // main/article が無いページ。ページごと使うと窓の先頭が絞り込みメニューで埋まる。
     let byName = ""
     for (const m of html.matchAll(/<(div|section|ul|ol)\b([^>]*)>/gi)) {
       if (!LOOKS_LIKE_BODY.test(m[2] ?? "")) continue
@@ -58,8 +45,7 @@ function trimChrome(html: string): string {
     if (byName.length > best.length) best = byName
   }
   const body = best.length >= html.length * 0.15 ? best : html
-  // 常に落とす飾り。`object|embed|button|select|textarea` は Readability の常時削除リストから。
-  // `figure` は入れない — 論文のページで `Figure 1` ごと本文が消える。
+  // figure は入れない。論文のページで図の説明ごと本文が消える。
   return body
     .replace(
       /<(nav|header|footer|aside|form|svg|noscript|template|iframe|object|embed|button|select|textarea)\b[\s\S]*?<\/\1>/gi,
@@ -68,11 +54,7 @@ function trimChrome(html: string): string {
     .replace(/<[^>]*\b(?:hidden|aria-hidden="true")[^>]*>[\s\S]{0,400}?<\/[^>]+>/gi, " ")
 }
 
-/**
- * 名前付きの実体のうち、実際に本文へ出てくるもの。全部は載せない(HTML5 の表は 2,000 以上ある)。
- * 数値の実体は下で一括して戻すので、ここに要るのは名前のものだけ。
- * 日本語のページで整形に使われる約物を足してある。
- */
+/** 本文に実際に出る名前付き実体だけ。数値の実体は decodeEntities が戻す。 */
 const NAMED: Readonly<Record<string, string>> = {
   nbsp: " ",
   lt: "<",
@@ -110,8 +92,7 @@ const NAMED: Readonly<Record<string, string>> = {
 }
 
 /**
- * 実体参照を戻す。タグを剥がすより先にやると `&lt;script&gt;` が復活するので、必ず後。
- * 数値の実体を戻さないと本文に `&#x27;` が生で残り、引用すると壊れた綴りのまま DB に載る。
+ * タグを剥がした後に呼ぶ。先だと `&lt;script&gt;` がタグとして復活する。
  * `&amp;` は最後。先に戻すと `&amp;lt;` が `<` まで戻る。
  */
 const decodeEntities = (s: string): string =>
@@ -121,7 +102,7 @@ const decodeEntities = (s: string): string =>
     .replace(/&([a-zA-Z][a-zA-Z0-9]{1,9});/g, (m, name: string) => NAMED[name.toLowerCase()] ?? m)
     .replace(/&amp;/g, "&")
 
-/** 範囲外・サロゲート単独・制御文字は戻さない(`String.fromCodePoint` が投げるか、壊れた1字になる)。 */
+/** 範囲外・サロゲート単独・制御文字は戻さない。 */
 function codePoint(n: number): string | undefined {
   if (!Number.isInteger(n) || n > 0x10_ff_ff) return undefined
   if (n === 9 || n === 10) return String.fromCodePoint(n)
@@ -130,7 +111,6 @@ function codePoint(n: number): string | undefined {
   return String.fromCodePoint(n)
 }
 
-/** 要素の中身を1つ取る。属性は無視する(欲しいのは本文だけ)。 */
 function pick(xml: string, tag: string): string | undefined {
   const m = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "i").exec(xml)
   if (!m?.[1]) return undefined
@@ -140,15 +120,11 @@ function pick(xml: string, tag: string): string | undefined {
   return text || undefined
 }
 
-/**
- * RSS / Atom は1件ずつに割って返す。そのままタグを剥がすと見出し・日付・本文が1本に繋がり、
- * どの日付がどの記事のものか消える。
- * 判定に使うのは形だけ — `<item>` か `<entry>` があれば feed 扱いにする。無ければ `undefined`。
- */
+/** RSS / Atom を1件ずつに分ける。まとめて剥がすと、どの日付がどの記事のものか分からなくなる。 */
 export function renderFeed(xml: string): string | undefined {
   const items = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)]
   if (items.length === 0) return undefined
-  // channel のヘッダは最初の item より前にある。item の中の同名タグを拾わないよう先頭で切る。
+  // item の中の同名タグを拾わないよう、最初の item より前だけを見る。
   const head = xml.slice(0, items[0]?.index ?? 0)
   const lines: string[] = []
   const title = pick(head, "title")
@@ -159,11 +135,9 @@ export function renderFeed(xml: string): string | undefined {
   for (const [, , body = ""] of items) {
     const t = pick(body, "title") ?? "(見出し無し)"
     const at = pick(body, "pubDate") ?? pick(body, "updated") ?? pick(body, "published")
-    // Atom の link は href 属性。RSS は要素の中身。
     const link = pick(body, "link") ?? /<link\b[^>]*href=["']([^"']+)/i.exec(body)?.[1]
     const desc = pick(body, "description") ?? pick(body, "summary")
-    // 書き手を拾わないと、読み手は書き手が無いものと見て記事ページを余計に開く。
-    // RSS は `<dc:creator>`、Atom は `<author><name>`。pick はタグを剥がすので同じ形で拾える。
+    // 書き手が無いと、読み手が確かめに記事ページを余計に開く。
     const by = pick(body, "dc:creator") ?? pick(body, "author") ?? pick(body, "creator")
     lines.push("")
     lines.push(`- ${t}`)
@@ -176,56 +150,40 @@ export function renderFeed(xml: string): string | undefined {
 }
 
 /**
- * HTML を読める文にする。整形ではなく量を減らすのが目的。
- *
- * ここで止めているのは、これ以上削ると中身を消すから:
- * 重複 DOM の繰り返しを落とすには窓付きの除去が要り、正当に並ぶ表の行まで巻き込む。
- * 短い行の連続はナビの残骸ではなく、リンク集や分類一覧というページの中身であることが多い。
- * どちらもコンテキスト容量を使うだけで、間違った中身を渡す欠陥ではない。
- * JS で後から入る値(`読込中...` のまま届く値段など)は、この道からは取れない。
+ * HTML を読める文にする。重複 DOM や短い行の連続は削らない — 表の行やリンク集まで消える。
  */
 export function toText(raw: string, contentType: string): string {
   if (!/html|xml/i.test(contentType)) return raw
-  // 改行と空白の種類を先に揃える。CRLF のページは行末に `\r` が残り、それだけの行が
-  // 「空白だけの行」の畳み込みに当たらない。全角空白・NBSP・ゼロ幅も同じ理由で潰す
-  // — 日本語のページでは整形にこれらが使われる。
+  // `\r`・全角空白・NBSP・ゼロ幅が残ると、空白だけの行が下の除去に当たらない。
   const html = raw.replace(/\r\n?/g, "\n").replace(/[ 　​﻿]/g, " ")
-  // feed かどうかは根の要素で決める。`xml` を含む種別なら何でも、にすると
-  // XHTML のページに `<item>` が1つあるだけで新着一覧として組み直してしまう。
+  // 根の要素で決める。`xml` を含む種別で判定すると、`<item>` を1つ持つ XHTML まで feed 扱いになる。
   if (/rss|atom/i.test(contentType) || /<(rss|feed)\b/i.test(html.slice(0, 1_000))) {
     const feed = renderFeed(html)
     if (feed) return feed
   }
   const body = decodeEntities(
     trimChrome(html)
-      // 閉じが無ければ末尾まで落とす。`Web.ts` の取得上限で切ると最後の `<script>` が
-      // 閉じないまま終わり、その中身が丸ごと本文になる。
-      // 上限を上げても、それを超えるページでは同じことが起きる。
+      // 閉じが無ければ末尾まで落とす。取得上限で切れると最後の `<script>` が閉じない。
       .replace(/<script[\s\S]*?(?:<\/script>|$)/gi, " ")
       .replace(/<style[\s\S]*?(?:<\/style>|$)/gi, " ")
       .replace(/<!--[\s\S]*?(?:-->|$)/g, " ")
       .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
       .replace(/<br\s*\/?>/gi, "\n")
-      // 属性値の中の `>` をタグの終わりと取り違えない。Wikipedia の infobox のように
-      // 属性に生の JSON を持つページでは、単純な `<[^>]+>` が属性の途中で閉じたと見なして
-      // その JSON が本文に混ざる。引用符で囲まれた塊を1つの単位として飛ばす。
+      // 属性値の中の `>` をタグの終わりと取り違えないよう、引用符で囲まれた範囲を1単位として飛ばす。
       .replace(/<\/?[a-zA-Z][a-zA-Z0-9:-]*(?:"[^"]*"|'[^']*'|[^>"'])*>/g, " ")
-      // 引用符が閉じていない壊れたタグは上で剥がれない。取りこぼしをここで掃除する。
+      // 引用符が閉じていない壊れたタグの取りこぼし。
       .replace(/<[^>]+>/g, " "),
   )
     .replace(/[ \t]+/g, " ")
-    // 行頭・行末の空白を先に落とす。これが無いと、タグを剥がした跡が空白1つだけの行として残り、
-    // `\n{3,}` の畳み込みに当たらない。取得側の文字数枠がその空白で埋まる。
+    // 先に落とさないと、空白1つだけの行が `\n{3,}` に当たらない。
     .replace(/[ \t]*\n[ \t]*/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-  // `trimChrome` が塊を選ぶとページの題は本文の外なので落ちる。読み手は複数のページを並べて
-  // 読むので、見出しが無いとどれの話か取り違える。頭に戻す。
+  // trimChrome が本文の要素を選ぶと題が落ちる。複数ページを並べて読むとき取り違えないよう頭に戻す。
   const title = pick(html, "title")
   const headed = title && !body.slice(0, 200).includes(title) ? `${title}\n\n${body}` : body
-  // 本文が組み上がらないページでも `<meta>` には題と説明が入っている(YouTube・ニコニコ・
-  // note・Bluesky は `<title>` すら JS が後から入れるので、ここが無いと返る文字が 0 になる)。
-  // 本文が取れているページでは触らない — 拾った説明は本文の要約で、並べると同じ話が二重になる。
+  // `<title>` まで JS で入るページは `<meta>` にしか題と説明が無い。
+  // 本文が取れていれば足さない — 同じ話が二重になる。
   return headed.length >= 300 ? headed : [metaSummary(html), headed].filter(Boolean).join("\n\n").trim()
 }
 
@@ -250,13 +208,13 @@ function metaSummary(html: string): string {
     "twitter:description",
   ]) {
     const v = found.get(k)
-    // 同じ文が og: と twitter: に両方入っているページが多い。先に採ったものと重なるなら足さない。
+    // og: と twitter: に同じ文が入っていることが多い。
     if (v && !out.some((o) => o.includes(v) || v.includes(o))) out.push(v)
   }
   return out.join("\n\n")
 }
 
-/** 読める形式か。PDF や画像を文字として渡さない — 中身は何も伝わらないのに文脈だけ食う。 */
+/** PDF や画像は文字として渡さない。中身が伝わらず文脈だけ使う。 */
 export function isReadableType(contentType: string): boolean {
   const t = contentType.toLowerCase().split(";")[0]?.trim() ?? ""
   if (t.startsWith("text/")) return true
@@ -264,27 +222,21 @@ export function isReadableType(contentType: string): boolean {
 }
 
 /**
- * バイト列を文字にする。日本語のページは utf-8 とは限らない(Shift_JIS のページを utf-8 で読むと
- * 本文の大半が置換文字になる)。優先順は Content-Type の charset → HTML の meta 宣言 → utf-8。
- *
- * 末尾が文字の途中で切れていたら、その分は捨てる。取得上限の打ち切りはバイト数で入るので、
- * 日本語のページでは 3 バイト文字の途中で終わることがある。`stream: true` で復号すると、
- * 復号コンテナは不完全な列を出力せずに持ち越すので、そのまま捨てられる。
+ * charset は Content-Type → meta 宣言 → utf-8 の順。取得上限はバイト数で切るので、
+ * 末尾の途中で切れた文字は `stream: true` で出力させずに捨てる。
  */
 export function decodeBody(buf: Uint8Array, contentType: string): string {
   const fromHeader = /charset=["']?([\w-]+)/i.exec(contentType)?.[1]
-  // meta の宣言は先頭にあるので、探すのは頭の 2KB だけでいい(全部 latin1 に起こす必要は無い)。
   const head = Buffer.from(buf.slice(0, 2048)).toString("latin1")
   const fromMeta =
     /<meta[^>]+charset=["']?([\w-]+)/i.exec(head)?.[1] ?? /<\?xml[^>]+encoding=["']([\w-]+)/i.exec(head)?.[1]
   for (const enc of [fromHeader, fromMeta, "utf-8"]) {
     if (!enc) continue
     try {
-      // 名前はページから拾った文字列で、既知の一覧に入っているとは限らない。
-      // 型は既知の名前しか許さないので、投げさせて下の catch で落とすために外す。
+      // 名前はページ由来で未知のことがある。例外を catch で受けるため型を外す。
       return new TextDecoder(enc as never, { fatal: false }).decode(buf, { stream: true })
     } catch {
-      // 知らない名前の charset。次の候補へ落とす。
+      // 知らない charset。次の候補へ。
     }
   }
   return Buffer.from(buf).toString("utf8")

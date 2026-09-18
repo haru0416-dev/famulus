@@ -1,54 +1,41 @@
 /**
- * 1回ごとの進み具合を、外から確かめられる形にする。
- *
- * cycle は自分で起きて自分で終わる。人が見ているのは締めの1文だけで、その文は自分で書いた報告
- * なので、やったと書いてあることとやったことがずれても外からは分からない。
- * ここが読むのは3つの別々の記録で、どれも報告文とは独立に残っている:
- *
- *   1. 呼ばれた道具の並び(`content.tools`)…AI SDK の `onStepFinish` が数えた実際の呼び出し
- *   2. その回に帰属する行…提案・下書き・通知・コンテナ実行・確定した事実
- *   3. モデル使用量(`ledger`)…role を持つ run 数、出力トークン数
- *
- * 実行IDで結び付ける。時刻の窓では、同時に動いた対話や別の回を区別できない。
- * 実行IDを記録する前の履歴は帰属不明のまま読み、時刻から成果や使用量を推測しない。
- *
- * 1と2はずれてよい。一致させるためではなく、ずれ方を読むために並べている
- * (道具を呼んでも中身が残らない回はある。propose せずに終えた回、shell が失敗した回)。
+ * 1回ごとの進み具合を、cycle の報告文とは独立な記録から読む(道具の呼び出し・その回に帰属する行・モデル使用量)。
+ * 実行IDで結び付ける。時刻の窓では同時に動いた対話や別の回を区別できない。実行IDの無い旧履歴は帰属不明のまま読む。
+ * 道具の呼び出しと残った行はずれてよい。ずれ方を読むために並べている。
  */
 import * as Effect from "effect/Effect"
 import type { DbFailed } from "./core/errors.ts"
 import { localDayRange, localStamp } from "./core/time.ts"
 import { Db } from "./services/Db.ts"
 
-/** 1回ぶん。`said` と、それ以外を混ぜない。 */
+/** `said` とそれ以外を混ぜない。 */
 export interface Entry {
   /** digest を取った時刻(この回の起点)。 */
   readonly at: string
-  /** 実行ごとのID。旧記録は未帰属で、数量も不明として返す。 */
+  /** 旧記録は未帰属で、数量も不明として返す。 */
   readonly cycleId: string | undefined
-  /** 起きた理由。digest が付けた文言そのまま。 */
+  /** digest が付けた文言そのまま。 */
   readonly reasons: readonly string[]
-  /** 呼ばれた道具の並び。古い回は記録が無いので undefined。 */
+  /** 古い回は記録が無いので undefined。 */
   readonly tools?: readonly string[]
-  /** 道具ごとの対象(最初の1回ぶん)。回数だけでは「同じ語を引き直したか」が読めない。 */
+  /** 最初の1回ぶん。回数だけでは同じ語を引き直したかが読めない。 */
   readonly toolTargets?: Readonly<Record<string, string>>
   readonly steps?: number
   readonly ms?: number
-  /** 止まった理由。最後まで書けていれば undefined。 */
   readonly cutOff?: string
-  /** 自分で書いた締めの文。報告であって記録ではない。 */
+  /** 自己申告。記録ではない。 */
   readonly said: string
-  /** 指示や仕組みへの戸惑い(自己申告)。fam journal でだけ出す — Discord のログには出さない。 */
+  /** 自己申告。fam journal でだけ出し、Discord のログには出さない。 */
   readonly confusion?: string
-  /** この回に帰属する行数。報告文とは関係が無く、未帰属の回は undefined。 */
+  /** 報告文とは無関係。未帰属の回は undefined。 */
   readonly left: Left | undefined
-  /** role を持つモデル呼び出しの回数。未帰属の回は undefined。 */
+  /** role を持つモデル呼び出しの回数。 */
   readonly runs: number | undefined
-  /** 出力側だけを取る。未帰属の回は undefined。 */
+  /** 出力トークンだけ。 */
   readonly outTok: number | undefined
 }
 
-/** 実行IDが一致する行。0 と未帰属を混ぜない。 */
+/** 0 と未帰属を混ぜない。 */
 export interface Left {
   readonly proposals: number
   readonly drafts: number
@@ -58,13 +45,13 @@ export interface Left {
   readonly watchRuns: number
 }
 
-/** content から取り出す用。DB の JSON は何でも入りうるので、形が違えば黙って落とす。 */
+/** DB の JSON は何でも入りうるので、形が違えば黙って落とす。 */
 const arr = (v: unknown): string[] | undefined =>
   Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined)
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined)
 
-/** 道具名→対象の表。値が文字列でないものは落とす(DB の JSON は何でも入りうる)。 */
+/** 値が文字列でないものは落とす。 */
 const strMap = (v: unknown): Record<string, string> | undefined => {
   if (v === null || typeof v !== "object") return undefined
   const out: Record<string, string> = {}
@@ -74,12 +61,7 @@ const strMap = (v: unknown): Record<string, string> | undefined => {
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-/**
- * 直近 n 回。実際に動いた回だけ返す(idle の回は cycle の記録を書かない)。
- *
- * 回ごとに数える問い合わせを投げるので、n を大きくすると SQL の本数がそのぶん増える。
- * 読むのは人なので、既定は画面に収まる程度にしてある。
- */
+/** idle の回は cycle の記録を書かないので返らない。回ごとに SQL を発行するので n に比例して増える。 */
 export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, Db> =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -94,10 +76,7 @@ export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, D
     return yield* entriesOf(rows)
   })
 
-/**
- * 記録を書いた時刻が [fromIso, toIso) の回。1日ぶんの Discord まとめが読む。
- * 窓の鍵は書いた時刻 — 日付を跨いで書き終えた回は、書き終えた日の側に入る。
- */
+/** 記録を書いた時刻が [fromIso, toIso) の回。日付を跨いで書き終えた回は書き終えた日に入る。 */
 export const readJournalRange = (
   fromIso: string,
   toIso: string,
@@ -129,7 +108,7 @@ const entriesOf = (rows: readonly Record<string, unknown>[]): Effect.Effect<read
       } catch {
         continue
       }
-      // 旧イベントの tick は履歴データとして読む。新しい記録は cycle だけを書く。
+      // 旧イベントの tick は履歴データとして読む。
       const at = str(c.cycle) ?? str(c.tick) ?? wroteAt
       const cycleId = str(c.cycleId)
       const left = cycleId === undefined ? undefined : yield* countLeft(cycleId)
@@ -166,11 +145,7 @@ const entriesOf = (rows: readonly Record<string, unknown>[]): Effect.Effect<read
     return out
   })
 
-/**
- * 同じ実行IDの行を数える。cycle の報告は読まない。
- *
- * watch実行はwatch_runsへ追記されるため、後の実行で古い回から消えない。
- */
+/** watch 実行は watch_runs へ追記されるので、後の実行で古い回から消えない。 */
 const countLeft = (cycleId: string): Effect.Effect<Left, DbFailed, Db> =>
   Effect.gen(function* () {
     const db = yield* Db
@@ -198,12 +173,8 @@ const countLeft = (cycleId: string): Effect.Effect<Left, DbFailed, Db> =>
   })
 
 /**
- * `shell shell ran shell` → `shell×2 · ran`。並びを捨てて数だけにする。
- *
- * Discord に出す側で使う。幅が狭い場所では並びを持たせられない — 15手ぶんの並びは
- * 92桁になり、スマホの幅で3行に折れて、折り返した先は何の行だったか読めなくなる。
- * 「10回呼んで0本残っていない」というずれは数だけでも見えるので、そちらを取った。
- * 順番は `runs()` が持っていて、`fam journal` から読める。
+ * `shell shell ran shell` → `shell×2 · ran`。スマホの幅では並びが折り返して読めないので、
+ * Discord 向けは数だけにする。順番は `runs()` が持つ。
  */
 export const tally = (
   tools: readonly string[],
@@ -212,20 +183,20 @@ export const tally = (
 ): string => {
   const seen = new Map<string, number>()
   for (const t of tools) seen.set(t, (seen.get(t) ?? 0) + 1)
-  const sorted = [...seen].sort((a, b) => b[1] - a[1]) // 同数なら先に呼んだ順(Map が挿入順を持っている)
+  const sorted = [...seen].sort((a, b) => b[1] - a[1]) // 同数なら先に呼んだ順(Map の挿入順)
   const head = sorted
     .slice(0, top)
     .map(([name, n]) => `${label(name, targets)}${n > 1 ? `×${n}` : ""}`)
     .join(" · ")
-  // 1日ぶんを畳むと種類が多くて幅を超えるので、上位だけ出して残りは数にする。
+  // 1日ぶんは種類が多く幅を超えるので、上位だけ出して残りは数にする。
   return sorted.length > top ? `${head} · 他${sorted.length - top}種` : head
 }
 
-/** 道具名に対象を1つ添える。何に対して呼んだかは、名前と回数だけでは残らない。 */
+/** 何に対して呼んだかは、名前と回数だけでは残らない。 */
 const label = (name: string, targets: Readonly<Record<string, string>>): string =>
   targets[name] ? `${name}(${targets[name]})` : name
 
-/** `shell shell ran shell` → `shell×2 → ran → shell`。並びは崩さない — 何の後に何を呼んだかが読める。 */
+/** `shell shell ran shell` → `shell×2 → ran → shell`。何の後に何を呼んだかを読むため並びを保つ。 */
 export const runs = (tools: readonly string[], targets: Readonly<Record<string, string>> = {}): string =>
   tools
     .reduce<{ name: string; n: number }[]>((acc, t) => {
@@ -237,10 +208,7 @@ export const runs = (tools: readonly string[], targets: Readonly<Record<string, 
     .map((r) => `${label(r.name, targets)}${r.n > 1 ? `×${r.n}` : ""}`)
     .join(" → ")
 
-/**
- * 残ったものを言葉にする。0 の欄は並べない — 0 を並べると「何も残らなかった」という
- * 一番読ませたい状態が数の列に埋もれる。無ければ無いと文で書き、あるものだけを書く。
- */
+/** 0 の欄は並べない。「何も残らなかった」状態が数の列に埋もれる。 */
 const leftLine = (l: Left, none = "何も残らなかった"): string => {
   const parts = [
     [l.proposals, "提案", "件"],
@@ -254,16 +222,14 @@ const leftLine = (l: Left, none = "何も残らなかった"): string => {
   return got.length === 0 ? none : got.join(" / ")
 }
 
-/** 桁が見えれば足りるので k で丸める。 */
 const tok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
 
-/** 秒だけだと 554 秒が長いのか短いのか読めない。1分を超えたら分に繰り上げる。 */
 const took = (ms: number): string => {
   const s = Math.round(ms / 1000)
   return s < 60 ? `${s}秒` : `${Math.floor(s / 60)}分${String(s % 60).padStart(2, "0")}秒`
 }
 
-/** 実働の数。手数と時間は記録が無い回がある(記録を足す前の回)ので、0 とは書かない。 */
+/** 手数と時間は記録が無い回があるので、0 とは書かない。 */
 const workLine = (e: Entry): string =>
   [
     e.steps === undefined ? "手数の記録なし" : `${e.steps}手`,
@@ -274,7 +240,7 @@ const workLine = (e: Entry): string =>
     ...(e.cutOff ? [`止まった: ${e.cutOff}`] : []),
   ].join(" / ")
 
-/** 報告文を1行にまとめる。文の途中では切らない — 途中で切れた文は、言っていないことを言わせる。 */
+/** 文の途中では切らない。途中で切れた文は、言っていないことを言わせる。 */
 const saidLine = (said: string, max = 140): string => {
   const flat = said.replace(/\s+/g, " ").trim()
   if (flat === "") return "(何も書かなかった)"
@@ -285,14 +251,8 @@ const saidLine = (said: string, max = 140): string => {
 }
 
 /**
- * 1日ぶんを Discord に1通で出す形。回ごとには出さない — 動くたびに出る行は
- * そのうち読まれなくなる。回ごとの並びと報告文は `fam journal` に残っている。
- *
- * 幅の規律は従来どおり: 読むのはたいてい携帯で、本文に使える幅はおよそ 40 桁
- * (全角20文字)しかない。空白で桁を揃える形は1行折り返した時点で崩れるので、
- * `- ` のリスト項目にしている。道具は1日ぶんを畳むと種類が増えるので上位6種まで。
- *
- * 自己申告(`said`)と対象(`toolTargets`)は載せない — 数えた記録だけを出す。
+ * 1日ぶんを Discord に1通で出す。回ごとに出す行は読まれなくなる。
+ * 携帯の幅(約40桁)で折り返しても崩れないよう `- ` のリスト項目にする。自己申告と対象は載せない。
  */
 export const dailyPost = (entries: readonly Entry[], label: string, pending = 0): string => {
   const cut = entries.filter((e) => e.cutOff !== undefined)
@@ -315,7 +275,7 @@ export const dailyPost = (entries: readonly Entry[], label: string, pending = 0)
   )
   return [
     `### ${label} のまとめ`,
-    // 止まった回はここに出す。下に置くと、上だけ読んで全部走り切った日と見分けが付かない。
+    // 止まった回は上に出す。下に置くと、上だけ読んで完走した日と見分けが付かない。
     ...(cut.length > 0 ? [`- **止まった ${cut.length}回** ${tally(cut.map((c) => c.cutOff ?? ""))}`] : []),
     `- 動いた ${entries.length}回${ms > 0 ? ` / 計${took(ms)}` : ""}`,
     ...(unknown > 0 ? [`- 未帰属 ${unknown}回: 数量不明`] : []),
@@ -323,17 +283,14 @@ export const dailyPost = (entries: readonly Entry[], label: string, pending = 0)
     `- 推論 ${attributed.length > 0 || unknown === 0 ? `${runCount}run / 出力${tok(outTok)}` : "不明(未帰属)"}`,
     `- 道具 ${tools.length > 0 ? tally(tools, {}, 6) : "記録なし"}`,
     `- 残った ${attributed.length > 0 || unknown === 0 ? leftLine(left, "なし") : "不明(未帰属)"}`,
-    // 他の行は前の日ぶんの集計だが、これだけは出す時点の残数。混ぜて読まれないよう明示する。
+    // これだけは出す時点の残数。前日の集計と混ぜて読まれないよう明示する。
     ...(pending > 0 ? [`- 承認待ち ${pending}件(現在)`] : []),
   ].join("\n")
 }
 
 /**
- * 1日1回の出しどきの判定。meta には「ここより前の日は出した」の境界(ISO)を置く。
- *
- * 初回は境界を今日の頭に置くだけで出さない — 導入した日に過去ぶんをまとめて流さない。
- * 境界が今日の頭より前なら、そこから今日の頭までを1通ぶんの窓として返す。
- * 空白日を跨いだときは窓が複数日になり、ラベルが「開始日〜終了日」になる。
+ * 1日1回の出しどきの判定。meta には「ここより前の日は出した」境界(ISO)を置く。
+ * 初回は境界を今日の頭に置くだけで出さない(導入日に過去ぶんを流さない)。空白日を跨ぐと窓は複数日になる。
  */
 export const dailyLogWindow = (
   upto: string | undefined,
@@ -360,10 +317,7 @@ export const dailyLogWindow = (
   }
 }
 
-/**
- * 人が読む形に。自己申告(`言った`)を最後に置く。
- * 上に置くと、そこだけ読んで「やった」と受け取れてしまう。数えた欄より先には来させない。
- */
+/** 自己申告(`言った`)を最後に置く。上に置くと、そこだけ読んで「やった」と受け取れる。 */
 export const renderJournal = (entries: readonly Entry[]): string => {
   if (entries.length === 0) return "実働の記録がまだ無い(自動処理が一度も動いていないか、記録より前)"
   const body = entries.map((e) =>

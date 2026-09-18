@@ -1,11 +1,4 @@
-/**
- * 下書きの一生の検査。materialize(1日1枚)→ 差し戻し → 配送の付け合わせ → 承認の順で、
- * 状態遷移が schema の CHECK・トリガと矛盾なく進むことを見る。
- *
- * outbound 行はここでは直接 INSERT する。drafts_sync_delivery トリガは discord_outbound の
- * UPDATE でしか発火しないので、こうすると attachOutbound / applyDecision 自身の判定だけを
- * 切り出して検査できる(トリガ経由の同期は discord.test.ts が見る)。
- */
+// outbound 行は直接 INSERT する。drafts_sync_delivery トリガは discord_outbound の UPDATE でしか発火しないので、attachOutbound / applyDecision 自身の判定だけを検査できる。
 
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
@@ -109,7 +102,6 @@ test("差し戻し後の materialize は同じ行を書き換える — 同一�
         const drafts = yield* Drafts
         const first = yield* materialized("draft-rev")
         yield* drafts.requestRevision(first.id, "題が硬い", AT)
-        // 同一内容: revision_needed のまま返る(review_pending に戻さない)
         const unchanged = yield* drafts.materialize(
           { title: "題", body: "本文", dossierId: first.dossier_id },
           AT,
@@ -214,14 +206,12 @@ test("attachOutbound: sent+receipt は delivered、receipt 無しの sent は de
     )
     assert.equal(pending.attached.state, "delivery_pending")
     assert.equal(pending.attached.delivered_at, null)
-    // delivery_pending は配送待ちとして pending() に残る
     assert.equal(pending.pending?.id, pending.attached.id)
   })
 })
 
 test("applyDecision は配送実績を要求する — receipt があれば delivered を遡って埋めてから決める", async () => {
   await withHarness(async (h) => {
-    // 配送実績なし: 決定できない
     const { refused, draft } = await h.run(
       Effect.gen(function* () {
         const drafts = yield* Drafts
@@ -232,7 +222,6 @@ test("applyDecision は配送実績を要求する — receipt があれば deli
     )
     assert.equal(refused, false)
 
-    // sent+receipt の outbound を置くと、attachOutbound を経ていなくても決定が通る
     const { decided, row, again, unknown } = await h.run(
       Effect.gen(function* () {
         const drafts = yield* Drafts
@@ -247,7 +236,6 @@ test("applyDecision は配送実績を要求する — receipt があれば deli
     assert.equal(row?.state, "accepted")
     assert.equal(row?.delivered_at, AT_SENT)
     assert.equal(row?.decision_origin_id, "origin-1")
-    // 決定は一度だけ。未知の id も false
     assert.equal(again, false)
     assert.equal(unknown, false)
   })
@@ -263,7 +251,6 @@ test("✏️ は差し戻し — 改稿版の再配送で新しい決定を受�
         const revised = yield* drafts.applyDecision(draft.id, "revise", "origin-r1", AT_SENT)
         const afterRevise = yield* drafts.forDay(AT)
         const pendingAgain = yield* drafts.pending()
-        // 指摘に沿って本文を差し替えると、同じ行が review_pending に戻る
         const v2 = yield* drafts.materialize(
           { title: "題", body: "直した本文", dossierId: draft.dossier_id },
           AT_SENT,
@@ -275,13 +262,12 @@ test("✏️ は差し戻し — 改稿版の再配送で新しい決定を受�
       }),
     )
     assert.equal(out.revised, true)
-    // 差し戻しは配送前の状態へ戻る — pending() と draftDue が拾える位置
+    // 差し戻しは配送前の状態へ戻し、pending() と draftDue が拾えるようにする。
     assert.equal(out.afterRevise?.state, "revision_needed")
     assert.equal(out.afterRevise?.delivered_at, null)
     assert.match(String(out.afterRevise?.review_feedback), /直す/)
     assert.equal(out.pendingAgain?.id, out.afterRevise?.id)
     assert.equal(out.attached.state, "delivered")
-    // 再配送は決定欄を空に戻す — 新しい版にもう一度リアクションできる
     assert.equal(out.attached.decision_origin_id, null)
     assert.equal(out.second, true)
     assert.equal(out.final?.state, "accepted")

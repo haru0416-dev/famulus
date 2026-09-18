@@ -1,9 +1,3 @@
-/**
- * x_search の検査。ネットワークは呼ばない — 要求 body の組み立て・応答の解析と、
- * 失敗時の統治(ledger 記録と枯渇→cooldown の伝播)を見る。
- * 実疎通は 2026-08-17 に実測済み(grok-4.3 + handle filter で 200 / 約10秒)。
- */
-
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -30,7 +24,7 @@ test("要求 body は filter を検証してから組む", () => {
   ) as { model: string; tools: Record<string, unknown>[]; store: boolean }
   assert.equal(body.model, "grok-4.3")
   assert.equal(body.store, false)
-  // @ と空白は正規化してから渡す。上流での 400 は持ち時間を使った後の失敗になる。
+  // 上流の 400 は持ち時間を使った後の失敗になるので、@ と空白は送る前に正規化する。
   assert.deepEqual(body.tools[0], {
     type: "x_search",
     allowed_x_handles: ["karpathy", "simonw"],
@@ -58,10 +52,7 @@ test("要求 body は filter を検証してから組む", () => {
   )
 })
 
-/**
- * 応答の解析。実測した応答(2026-08-17)の形をそのまま縮めた fixture。
- * 本文に混ざる引用の描画マーカーは落とし、引用は annotation から別に取る。
- */
+/** 実際の応答の形を縮めた fixture。 */
 test("応答から回答・引用・使用量を取り出し、描画マーカーを落とす", () => {
   const r = parseXSearchResponse({
     output: [
@@ -96,7 +87,7 @@ test("応答から回答・引用・使用量を取り出し、描画マーカ�
     { url: "https://x.com/i/status/2" },
   ])
   assert.equal(r.searches, 3)
-  // 入力は「キャッシュに載らなかった分」と cacheRead に割る。足すと桁が合う(Ledger の読み方と同じ)。
+  // 入力は cache 以外と cacheRead に分ける(Ledger と同じ読み方)。
   assert.deepEqual(r.usage, { inTok: 8601, outTok: 915, cacheRead: 1024, cacheWrite: 0 })
 })
 

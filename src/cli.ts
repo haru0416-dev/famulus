@@ -1,13 +1,9 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path"
 /**
- * ユーザー向け管理 CLI。提案の承認・却下、停止、状態確認、記憶や watch の操作をまとめる。
- * 提案の承認を記録する入口はこの CLI だけ。
- *
- * コマンドの一覧と説明は下の USAGE が正。
- *
- * 承認そのものは実行しない。Sandboxの公開通信だけは、承認後の同一コマンド・workspaceの
- * 再呼び出しで単回の許可を消費する。一般の提案は承認記録で止まる。
+ * 管理 CLI。コマンドの一覧は USAGE が正。提案の承認を記録する入口はこの CLI だけ。
+ * 承認は実行しない。Sandbox の公開通信だけは、承認後の同一コマンド・workspace の再呼び出しで
+ * 単回の許可を消費する。
  */
 import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
@@ -38,11 +34,10 @@ import { Research } from "./services/Research.ts"
 import { runsRoot } from "./services/Sandbox.ts"
 
 const short = (id: string) => id.slice(0, 8)
-/** 桁が見えれば足りるので k で丸める。1000 未満は素の数。 */
 const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
 const kb = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`)
 
-/** Discord の出し先。DM かチャンネルかを言い分ける — 読む側が探しに行く場所が違う。 */
+/** DM かチャンネルかを言い分ける。探しに行く場所が違う。 */
 const place = (ch: string | undefined, dm: string | undefined) =>
   ch === undefined ? "出せない" : ch === dm ? "DM" : `チャンネル ${ch}`
 
@@ -97,10 +92,8 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 /**
- * `<id> <自由文>` を取る命令の引数(deny / answer / drop が同じ形)。
- * シェルは自由文を空白で刻んで渡してくるので、繋ぎ直してから空を弾く。
- * 足りないときは `null` を返し、呼んだ側がその命令の使い方を出す — 文言が一つに揃うと、
- * どれが足りなかったのか読めなくなる。
+ * `<id> <自由文>` の引数(deny / answer / drop)。空白で分かれた自由文を繋ぎ直す。
+ * 足りなければ `null` を返し、呼んだ側がその命令の使い方を出す(文言を1つにするとどれが足りないか読めない)。
  */
 const idAndText = (rest: readonly string[]): { id: string; text: string } | null => {
   const [id, ...words] = rest
@@ -108,19 +101,13 @@ const idAndText = (rest: readonly string[]): { id: string; text: string } | null
   return id && text ? { id, text } : null
 }
 
-/** `fam watch` で次に動く相手を指定するフラグ。無指定は famulus。 */
+/** 無指定は famulus。 */
 const NEXT_MOVE_FLAG: Readonly<Record<string, NextMove>> = {
   "--famulus": "famulus",
   "--human": "human",
 }
 
-/**
- * `fam watch <やること> [--human]` の引数を割る。
- *
- * 知らないフラグは読み飛ばさずに弾く。読み飛ばすと、打ち間違えたフラグが watch の本文から
- * 一語消えたまま登録され、宛先も既定のままになる — 二重に化けたうえ、
- * 登録は成功して見えるので気づく機会が無い。
- */
+/** 知らないフラグは弾く。読み飛ばすと、打ち間違いが本文から一語消えたまま登録が成功して見える。 */
 const parseWatch = (rest: readonly string[]) =>
   Effect.gen(function* () {
     let owner: NextMove = "famulus"
@@ -149,8 +136,7 @@ const card = (p: ProposalRow) =>
     `id        : ${p.id}`,
     `状態      : ${STATUS_LABEL[p.status] ?? p.status}${p.deny_reason ? ` — ${p.deny_reason}` : ""}`,
     `作成      : ${p.created_at}   期限: ${p.expires_at}`,
-    // 自動処理側の結論。承認の代わりではない — 「自分の側では進まない」と書いただけで、
-    // 提案はまだユーザーの判断を待っている。
+    // 承認の代わりではない。提案はまだユーザーの判断を待っている。
     ...(p.settled_note ? [`自動処理の結論: ${p.settled_note}(${p.settled_at})`] : []),
     "",
     `見出し    : ${p.summary}`,
@@ -195,7 +181,7 @@ const program = (argv: readonly string[]) =>
         const ledger = yield* Ledger
         const db = yield* Db
         const halt = yield* gov.readHalt
-        // production modelは全て同じSuperGrokクォータを使う。
+        // production model は全て同じ SuperGrok クォータを使う。
         const cd = yield* gov.quotaCooldown(XAI_POOL, Date.now())
         const poolLine = cd
           ? `クォータ ${XAI_POOL}/${cd.window}: クールダウン中(${new Date(cd.untilMs).toISOString()} まで)`
@@ -203,7 +189,7 @@ const program = (argv: readonly string[]) =>
         const t = yield* ledger.today()
         const pending = yield* proposals.list("proposed", 100)
         const day = localDayRange(nowIso())
-        // 自走が今日どれだけ使ったか。全体の内訳として出す(区分が分かれているか人が見る唯一の場所)。
+        // 自走の今日の使用量。区分が分かれているかを人が見る唯一の場所。
         const a = yield* db.get(
           "SELECT COUNT(*)n FROM ledger WHERE role = ?AND at >= ?AND at < ?",
           AUTONOMOUS_ROLE,
@@ -220,12 +206,11 @@ const program = (argv: readonly string[]) =>
         const restorePath = yield* db.meta("restore:last_verified_path")
         const inboundOk = yield* db.meta("health:inbound:last_success")
         const inboundFailed = yield* db.meta("health:inbound:last_failure")
-        // 配送成功は drafts の実データから導く。成功時にだけ書く別台帳は、書き忘れがそのまま「まだ無い」表示になる。
+        // 配送成功は drafts の実データから導く。成功時にだけ書く別の記録は、書き忘れが「まだ無い」表示になる。
         const draftOk = yield* db.get("SELECT MAX(delivered_at)d FROM drafts WHERE delivered_at IS NOT NULL")
         const draftFailed = yield* db.meta("health:draft:last_failure")
         const lease = yield* (yield* CycleLease).status()
-        // 記録が溜まっているか。仕組みがあることと中身があることは別で、
-        // ここを出さないと「静かなのは用が無いからか、何も知らないからか」がユーザーに分からない。
+        // 出さないと、静かなのが用が無いからか記録が無いからかが分からない。
         const mem = yield* db.get(
           `SELECT COUNT(*)n,
                   SUM(kind = 'import' AND content IS NOT NULL)imported
@@ -236,8 +221,7 @@ const program = (argv: readonly string[]) =>
           poolLine,
           `${t.day}: run ${t.runs} 回(うち自走 ${Number(a?.n ?? 0)}/${appConfig().governance.autonomousRuns})` +
             ` / 入力 ${fmtTok(t.inTok)} 出力 ${fmtTok(t.outTok)}`,
-          // 自動処理は通知なしに停止しうる。最後に呼ばれた時刻を出しておかないと、
-          // 「静かなのは用が無いからか、止まっているからか」がユーザーに区別できない。
+          // 自動処理は通知なしに停止しうる。最後に呼ばれた時刻が無いと、停止と用が無いのを区別できない。
           last
             ? `自動処理: 最終 ${last}(最後に実際に動いたのは ${lastActive ?? "まだ無い"})`
             : "自動処理: まだ一度も回っていない — systemctl --user status famulus-cycle.timer",
@@ -254,13 +238,11 @@ const program = (argv: readonly string[]) =>
             ? `cycle lease: held fence=${lease.fence} ${lease.owner_hostname ?? "host不明"}:${lease.owner_pid ?? "pid不明"} expires=${new Date(lease.expires_at_ms as number).toISOString()}`
             : `cycle lease: ${lease.state} fence=${lease.fence}`,
           `承認待ち: ${pending.length} 件`,
-          // 宛先が無いことは実行時に何も起こさない(黙って何もしない)ので、ここで出さないと
-          // 「静かなのは用が無いからか、宛先が空だからか」が分からない。行き来はこの1本だけ。
+          // 宛先が無くても実行時は何も起きないので、ここで出す。
           discord.configured()
             ? `Discord: 会話 ${place(dc.talk, dc.dm)} / 下書き ${place(dc.draft, dc.dm)} — リアクションも自由文も受けられる`
             : "Discord: 宛先が無い(.env の FAMULUS_DISCORD_TOKEN が空)",
-          // 進み具合は落とす先を持たない。指していなければ出ないので、
-          // ここで言わないと「動いていないのか、出す先が無いのか」が分からない。
+          // 進み具合の出力先が未設定なら何も出ないので、ここで出す。
           dc.log
             ? `進み具合: チャンネル ${dc.log} に1回1行(呼びかけなし)`
             : "進み具合: 出さない(.env の FAMULUS_DISCORD_CH_LOG が空)— fam journal で見る",
@@ -304,28 +286,20 @@ const program = (argv: readonly string[]) =>
         ].join("\n")
       }
 
-      /**
-       * `attention` が「これから何を見るか」で、こちらは「実際に何をしたか」。
-       * 自分で書いた報告(`言った`)だけでは進み具合を確かめられないので、
-       * 呼んだ道具の並びと、窓の中に増えた行数を別の欄に置く。
-       */
       case "journal": {
         const n = Number(rest.find((a) => /^\d+$/.test(a)) ?? 10)
         return renderJournal(yield* readJournal(n))
       }
 
       /**
-       * cycle が見ているものを、ユーザーの側から置く/やめる4本。
-       *
-       * 問いも watch も、増やす経路はエージェントの道具にしかなく、減らす経路は答えるときしか無かった。
-       * 片方向しかない置き場は必ず溜まる。溜まった側は `openQuestions` の上限を埋めて、
-       * 新しく立った問いを cycle の一覧から外す(実測: open 38 件のうち cycle が見ていたのは 20 件)。
+       * 問いと watch をユーザーから置く/やめる経路。無いと溜まって `openQuestions` の上限を埋め、
+       * 新しい問いが cycle の一覧から外れる。
        */
       case "answer": {
         const a = idAndText(rest)
         if (!a) return yield* Effect.fail(new Error("id と答えが要る: fam answer <id> <答え>"))
         const att = yield* Attention
-        // ユーザーが打った答えは一次情報。この経路だけは確認済みとして入れてよい。
+        // ユーザーが打った答えは一次情報なので、この経路だけ確認済みとして入れる。
         const q = yield* att.answer(a.id, a.text, { confirmed: true })
         return `答えた: ${short(q.id)} ${q.question}\n  → ${q.answer}`
       }
@@ -409,12 +383,7 @@ const program = (argv: readonly string[]) =>
         return renderRecall(yield* mem.recall(q, 20))
       }
 
-      /**
-       * 事実の変遷を見る/書き換える。上書きではなく区間を継ぐので、
-       * 「今なんなのか」と「あのとき何だったか」が両方残る。
-       *   fam belief <slot>                    … 今の値と変遷
-       *   fam belief <slot> <値> [--from ISO]  … 新しい値を確定(前の区間はそこで閉じる)
-       */
+      /** 上書きではなく区間を継ぐので、今の値と過去の値が両方残る。 */
       case "belief": {
         const mem = yield* Memory
         const slot = rest[0]
@@ -444,7 +413,6 @@ const program = (argv: readonly string[]) =>
           `  ${localStamp(now.validFrom)} から(DB が知ったのは ${localStamp(now.updatedAt, false)})`,
           "",
           `変遷(${hist.length} 件)`,
-          // 閉じた区間も消さずに出す。「あのとき何だったか」に答えられるのがこの形の要点。
           ...hist.map((h) => {
             const span = h.validUntil === null ? "いまも" : `〜 ${localStamp(h.validUntil, false)}`
             const why = h.invalidatedReason === null ? "" : `  ← ${h.invalidatedReason}`
@@ -454,7 +422,7 @@ const program = (argv: readonly string[]) =>
       }
 
       case "dream": {
-        // 何日ぶんかをまとめて見直す。--dry は枠を使わないので、既定の確認手段はこちら。
+        // --dry は枠を使わないので、既定の確認手段はこちら。
         const dry = rest.includes("--dry")
         const days = Number(rest.find((a) => /^\d+$/.test(a)) ?? DREAM_DAYS)
         return yield* dream({ days, ...(dry ? { dry: true } : {}) })
@@ -490,8 +458,7 @@ const program = (argv: readonly string[]) =>
       }
 
       case "selfdev": {
-        // 中でゲートが通るところまでやる。clone を置いただけの状態を「できた」と出すと、
-        // 次の cycle が依存の取得で持ち時間を全部使って、そこで切られる。
+        // ゲートが通るところまでやる。clone だけで完了にすると、次の cycle が依存の取得で持ち時間を使い切る。
         return yield* selfdev(rest.includes("--fresh") ? { fresh: true } : {})
       }
 
@@ -501,7 +468,7 @@ const program = (argv: readonly string[]) =>
         const n = Number(rest.find((a) => /^\d+$/.test(a)) ?? (dry ? 100 : 10))
         const refs = yield* intake.scan(n)
 
-        // 選別だけ。クォータを1回も使わずに結果が測れるので、既定の確認手段はこちら。
+        // 選別だけならクォータを使わないので、既定の確認手段はこちら。
         if (dry) {
           if (refs.length === 0) return "取り込むものは無い(全部済んでいる)"
           let raw = 0
@@ -525,7 +492,7 @@ const program = (argv: readonly string[]) =>
           ].join("\n")
         }
 
-        // 記憶ファイルはモデルを呼ばない。枠が閉じていても入るので、会話より先に済ませる。
+        // 記憶ファイルはモデルを呼ばず枠が閉じていても入るので、会話より先に済ませる。
         const memo = yield* intake.ingestMemories
         const head = memo.added > 0 ? [`記憶ファイル: ${memo.added} 件取り込んだ`] : []
         if (refs.length === 0) {
@@ -535,8 +502,7 @@ const program = (argv: readonly string[]) =>
         const done: string[] = []
         let stopped = ""
         for (const ref of refs) {
-          // 途中で枠が閉じたら、そこで止めて済んだぶんは残す。
-          // 全体を1トランザクションにすると、最後の1件のクォータ枯渇でそれまで取り込んだぶんまで消える。
+          // 1トランザクションにすると、最後の1件の枯渇でそれまで取り込んだぶんまで消える。
           const r = yield* intake.ingest(ref).pipe(
             Effect.catch((e) => {
               stopped = isRefusal(e) ? describeRefusal(e) : describe(e)
@@ -559,13 +525,12 @@ const program = (argv: readonly string[]) =>
     }
   })
 
-/** 失敗を人に読める1行にする。CLI にスタックトレースを出さない(読む相手はユーザー)。 */
+/** CLI にスタックトレースを出さない。 */
 function describe(e: unknown): string {
   if (isRefusal(e)) return describeRefusal(e)
   const err = e as { _tag?: string; message?: string; reason?: string; id?: string; what?: string }
   switch (err?._tag) {
-    // 何を引いて外したかは失敗側が持っている。ここで「提案」と決め打つと、
-    // 問いや watch を引いたときに、当たらなかった相手を偽って報せることになる。
+    // 何を引いて外したかは失敗側が持つ。「提案」と決め打つと、問いや watch のときに対象を偽る。
     case "NotFound":
       return `そんな${err.what}は無い: ${err.id}`
     case "Conflict":
@@ -620,7 +585,7 @@ const main = async (): Promise<void> => {
       return
     }
     if (command === "grok-login") {
-      // device flow。URL とコードを出して、手元のブラウザでの承認を待つ。
+      // device flow。URL とコードを出し、ブラウザでの承認を待つ。
       if (args.length !== 0) throw new Error("引数は取らない: fam grok-login")
       const auth = await xaiDeviceLogin((uri, code) => {
         console.log(`ブラウザで開いて承認する: ${uri}`)
@@ -630,8 +595,7 @@ const main = async (): Promise<void> => {
       return
     }
     if (command === "google-login") {
-      // 2段: 引数なしで URL を出し、貼られた URL(または code)で交換する。
-      // redirect は listen しない localhost:1 — ブラウザは失敗するが、アドレスバーに code が残る。
+      // redirect は listen しない localhost:1。ブラウザは失敗するが、アドレスバーに code が残る。
       const { googleLoginFinish, googleLoginStart } = await import("./core/google-auth.ts")
       if (args.length === 0) {
         console.log("ブラウザで開いて承認する:")
@@ -647,8 +611,7 @@ const main = async (): Promise<void> => {
       return
     }
     if (command === "cursor-hook") {
-      // Cursor のフックランタイムから直接起動される(coder の workspace の guard.sh 経由)。
-      // ここは famulus の runtime も DB も使わない — 判定と stdout だけ。
+      // Cursor のフックから直接起動される。famulus の runtime も DB も使わない。
       const { runGuardHook } = await import("./core/guard-hook.ts")
       await runGuardHook(args[0], () => Bun.stdin.text())
       return
@@ -661,8 +624,7 @@ const main = async (): Promise<void> => {
       return
     }
     if (command === "code") {
-      // 委譲の入口はここだけ。自走(cycle)からは呼べない — 従量課金のコスト上限が
-      // governance に入るまでこの境界は動かさない。
+      // 委譲の入口はここだけ。従量課金のコスト上限が governance に入るまで cycle からは呼ばせない。
       const plan = args.includes("--plan")
       const cwdAt = args.indexOf("--cwd")
       const modelAt = args.indexOf("--model")
@@ -687,7 +649,7 @@ const main = async (): Promise<void> => {
         ...(plan ? { plan: true } : {}),
         ...(model ? { model } : {}),
       })
-      // 記帳: 枠の消費としてではなく実費として残す(SuperGrok の pool とは別の kind)。
+      // 実費として記録する(SuperGrok の pool とは別の kind)。
       const rt = runtime()
       try {
         await rt.runPromise(
@@ -774,8 +736,7 @@ const main = async (): Promise<void> => {
 
   const rt = runtime()
   try {
-    // runPromise は失敗を FiberFailure で包んで投げてくる(message が "An error has occurred" になる)。
-    // Exit で受けて cause を外し、元の失敗値そのものを見て文言を選ぶ。
+    // runPromise は失敗を FiberFailure に入れて返すので、Exit で受けて元の失敗値を見る。
     const exit = await rt.runPromise(Effect.exit(program(process.argv.slice(2))))
     if (Exit.isSuccess(exit)) {
       console.log(exit.value)

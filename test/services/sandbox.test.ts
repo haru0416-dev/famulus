@@ -1,11 +1,4 @@
-/**
- * 走らせる手段の検査。通ることではなく、境界が外れないことを見る。
- *
- * 実際にコンテナが動くかどうかは docker を立てて確かめた(そちらはここでは回さない —
- * 検査に docker の生死を持ち込むと、境界の壊れとホストの都合が同じ赤で出る)。
- * ここに残すのは、モデルが書いた文字列がそのまま境界を広げうる2か所:
- * workspace の名前と、docker に渡す引数。
- */
+// 実 docker は使わない。docker の生死を持ち込むと、境界の破損とホストの事情が同じ失敗として出る。
 
 import assert from "node:assert/strict"
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -47,8 +40,7 @@ test("workspace の名前は置き場の外に出られない", () => {
     const root = runsRoot()
     for (const name of ["../../etc", "/etc/passwd", "a/../../b", "~/.ssh"]) {
       const dir = runDir(name)
-      // `..` が字として残っていても構わない — 区切りを消してあるので `a-..-..-b` は
-      // 1つのディレクトリ名で、親には上がらない。見るべきは字面ではなく解決した先。
+      // 区切りを消してあるので `a-..-..-b` は1つのディレクトリ名で、親には上がらない。字面ではなく解決した先を見る。
       assert.equal(resolve(dir), dir, `${name} → ${dir} が正規化されていない`)
       assert.ok(dir.startsWith(`${root}/`), `${name} → ${dir} が置き場の下に無い`)
       assert.equal(relative(root, dir).split("/").length, 1, `${name} → ${dir} が置き場の直下に無い`)
@@ -58,8 +50,7 @@ test("workspace の名前は置き場の外に出られない", () => {
 
 test("名前が全部落ちるものは弾く(空の workspace を作らない)", () => {
   withRoot(() => {
-    // 全部が使えない字なら、削った結果は空になる。空を許すと置き場そのものが workspace になり、
-    // 過去の走行が全部書ける場所に混ざる。
+    // 空を許すと置き場そのものが workspace になり、過去の走行と混ざる。
     assert.throws(() => runDir(".."), /走行名として使えない/)
     assert.throws(() => runDir("!!!"), /走行名として使えない/)
   })
@@ -96,8 +87,7 @@ test("ホストへマウントするのは workspace と共有キャッシュだ
 })
 
 test("中の時計の帯はホストと同じ", () => {
-  // 帯を渡さないとコンテナは UTC で走る。同じコマンドが違う日付を出す環境になり、
-  // コンテナ内で失敗した検査を読む側が、コードの不具合とタイムゾーン差を見分けられない。
+  // TZ を渡さないとコンテナは UTC で走り、失敗した検査がコードの不具合かタイムゾーン差か見分けられない。
   const args = dockerArgs("date", { workDir: "/tmp/w", name: "fam-run-test" })
   const env = args.filter((_, i) => args[i - 1] === "-e")
   assert.ok(env.includes(`TZ=${timeZone()}`), `帯が渡っていない: ${env.join(" ")}`)
@@ -109,14 +99,11 @@ test("パッケージキャッシュは workspace の外で共有する", () => 
   for (const k of ["npm_config_cache=/cache/npm", "PIP_CACHE_DIR=/cache/pip", "UV_CACHE_DIR=/cache/uv"]) {
     assert.ok(env.includes(k), `${k} が渡っていない: ${env.join(" ")}`)
   }
-  // 置き場が `.data/runs` の下にあると、cleanup が workspace として数えて 14 日で削除する。
+  // 置き場が `.data/runs` の下にあると、cleanup が workspace として数えて削除する。
   assert.ok(!cacheRoot().startsWith(`${runsRoot()}/`), "キャッシュが workspace の置き場の中にある")
 })
 
-/**
- * 時間切れ時の削除が実行されなかった回を後から処理する。名前の末尾の pid だけで決める。
- * 起動元プロセスが存在するものを消すと、実行中の走行が理由不明で停止する。
- */
+// 起動元プロセスが生きているものを消すと、実行中の走行が止まる。名前の末尾の pid だけで決める。
 test("起動元のホストPIDが存在しないコンテナだけ消す", () => {
   const mine = process.pid
   const out = orphanNames(
@@ -124,7 +111,7 @@ test("起動元のホストPIDが存在しないコンテナだけ消す", () =>
     (pid) => pid === mine,
   )
   assert.deepEqual(out.removed, ["fam-run-abc-999999"])
-  // pid が読めない名前(手で立てたもの・名前の付け方を変える前のもの)は残す側に倒す。
+  // pid が読めない名前(手で立てたもの・古い命名のもの)は残す。
   assert.deepEqual(out.kept, [`fam-run-abc-${mine}`, "fam-run-abc-notapid", "fam-run-abc-0"])
 })
 
@@ -220,12 +207,7 @@ test("イメージは opts → config → 既定の順で決める", () => {
   }
 })
 
-/**
- * ここから下は docker を PATH 上の代替スクリプトに差し替えて、走らせ方の側
- * (出力の混合と切り詰め・時間切れ・docker 不在時の 127)を見る。実 docker にも daemon にも
- * 触れない。イメージ名も不正な参照にしてあるので、万一差し替えが外れて実物へ届けば
- * その場でエラーになり、静かに実コンテナが立つことはない。
- */
+// 以下は docker を PATH 上の代替スクリプトに差し替える。イメージ名を不正な参照にしてあるので、差し替えが外れて実 docker へ届いてもコンテナは立たない。
 
 const FAKE_IMAGE = "fam-test-invalid::"
 
@@ -238,11 +220,9 @@ const fakeDockerScript = [
   "  image|build) exit 1 ;;",
   "  run)",
   '    case "$FAKE_RUN_MODE" in',
-  // big は 30,000 字 — 取り込みの刻み境界(MAX_OUTPUT_CHARS の2倍 = 24,000)を超えないと、
-  // 末尾を捨てる実装でも TAIL-END が残ってしまい検査にならない。
+  // 30,000 字は MAX_OUTPUT_CHARS の2倍を超える長さ。超えないと末尾を捨てる実装でも TAIL-END が残る。
   '      big) for _ in $(seq 300); do printf "%0100d" 0; done; printf "\\nTAIL-END\\n"; exit 0 ;;',
-  // sleep の stdio は pipe から切り離す。繋いだままだと SIGKILL で bash が死んでも
-  // 孫の sleep が pipe を握り続け、close が sleep の満了まで遅れる。
+  // sleep の stdio を pipe から外す。繋いだままだと SIGKILL 後も孫の sleep が pipe を開いたままで、close が遅れる。
   "      slow) sleep 3 >/dev/null 2>&1; exit 0 ;;",
   '      fail) printf "boom\\n"; exit 3 ;;',
   '      *) printf "FAKE-OK\\n"; exit 0 ;;',
@@ -273,8 +253,7 @@ const withFakeDocker = async (
     cache: process.env.FAMULUS_RUN_CACHE,
     image: process.env.FAMULUS_RUN_IMAGE,
   }
-  // noDocker では PATH を空の bin だけにする(実 docker を確実に見えなくする)。
-  // 代替を置く側では bin を先頭に足す — 代替スクリプト自身が bash や seq を引くため。
+  // noDocker では PATH を空の bin だけにする。代替を置くときは先頭に足す(代替スクリプトが bash や seq を使う)。
   process.env.PATH = opts?.noDocker === true ? bin : `${bin}:${prev.path ?? ""}`
   process.env.FAMULUS_RUNS = join(dir, "runs")
   process.env.FAMULUS_RUN_CACHE = join(dir, "cache")
@@ -318,7 +297,6 @@ test("長い出力は頭を省いて末尾を残す", async () => {
     const r = await runInSandbox("build", { workDir, image: FAKE_IMAGE })
     assert.equal(r.truncated, true)
     assert.ok(r.output.startsWith("…(頭を"), r.output.slice(0, 40))
-    // 落ちた理由は最後に出る。切り詰めで末尾側が消えると読む意味が無くなる。
     assert.ok(r.output.includes("TAIL-END"))
   })
 })
@@ -329,7 +307,7 @@ test("時間切れはコンテナを名前で外から消し、timedOut を立�
     const r = await runInSandbox("sleep", { workDir, image: FAKE_IMAGE, timeoutMs: 300 })
     assert.equal(r.timedOut, true)
     assert.ok(r.elapsedMs < 2_500, `切られていない: ${r.elapsedMs}ms`)
-    // rm は投げっぱなしで返るので、書かれるまで少しだけ待つ。
+    // rm は完了を待たずに返るので、ログに書かれるまで待つ。
     const deadline = Date.now() + 3_000
     let seen = ""
     while (Date.now() < deadline) {
@@ -339,7 +317,7 @@ test("時間切れはコンテナを名前で外から消し、timedOut を立�
     }
     assert.ok(seen.includes("rm -f fam-run-"), `rm が飛んでいない: ${seen}`)
   })
-  // 既定の 5 秒だと、退行時に vitest がここを打ち切って PATH の後始末が次の検査へ食い込む。
+  // 既定の 5 秒だと退行時に vitest が打ち切り、PATH の復元が次の検査に漏れる。
 }, 10_000)
 
 test("走行中の abort は止めて例外で返す", async () => {
@@ -366,8 +344,7 @@ test("docker が無ければ 127 と理由を返す(例外にしない)", async 
 })
 
 test("イメージを組めなければ素のイメージへ落とし、そのことを先頭に書く", async () => {
-  // ensureImage はプロセスに1回だけ試して答えを持ち続ける。inspect も build も失敗する
-  // 状態で呼ぶのでフォールバックが確定する(他の検査は image を明示していて影響を受けない)。
+  // ensureImage は結果をプロセス内で使い回す。他の検査は image を明示しているので影響しない。
   await withFakeDocker(async ({ workDir }) => {
     const r = await runInSandbox("echo hi", { workDir })
     assert.equal(r.exitCode, 0)
@@ -378,7 +355,7 @@ test("イメージを組めなければ素のイメージへ落とし、その�
 
 test("sweepOrphans: 起動元 pid の無いコンテナだけ rm する。dry は数えるだけ", async () => {
   await withFakeDocker(async ({ log }) => {
-    const dead = 1_073_741_824 // pid_max(既定 4,194,304)より大きい = 存在し得ない
+    const dead = 1_073_741_824 // pid_max より大きく、存在し得ない pid
     process.env.FAKE_PS_NAMES = `fam-run-a-${dead} fam-run-b-${process.pid} fam-run-c-notapid`
     const dry = await sweepOrphans(true)
     assert.deepEqual(dry.removed, [`fam-run-a-${dead}`])

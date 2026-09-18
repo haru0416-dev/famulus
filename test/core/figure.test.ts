@@ -1,9 +1,3 @@
-/**
- * 図の作成の検査。描画ライブラリは実物(ローカル・ネットワーク不要)。
- * 見るのは「spec から決定的に画像が出ること」と「spec の誤りが読める文で返ること」。
- * 見た目の質はここでは判定しない — それは実運用と Haru の目が担う。
- */
-
 import assert from "node:assert/strict"
 import { test } from "vitest"
 import { FigureError, renderCard, renderChart, renderDiagram } from "../../src/core/figure.ts"

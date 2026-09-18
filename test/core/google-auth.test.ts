@@ -1,9 +1,3 @@
-/**
- * Google OAuth(installed app + PKCE)の検査。ネットワークは withFetch で全部止める。
- * 固定するのは3点: 交換の送信契約(PKCE verifier / secret / redirect)、state の照合、
- * refresh が rotation しない前提(返らなければ今の refresh を使い続ける)。
- */
-
 import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -25,7 +19,6 @@ import { withFetch } from "../helpers.ts"
 const NOW = 10_000_000
 const roots: string[] = []
 
-/** client を設定し、auth の既定パスをテンポラリへ向ける。 */
 const configured = (): string => {
   const dir = mkdtempSync(join(tmpdir(), "google-auth-test-"))
   roots.push(dir)
@@ -49,7 +42,7 @@ const token = (body: Record<string, unknown>): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })
 
 test("未設定なら configured が false で、start は設定を要求する", () => {
-  // bun は repo の .env を自動で読むので、本物の client が入っていても密閉されるよう明示で消す。
+  // bun は repo の .env を自動で読むので、本物の client を明示的に消す。
   delete process.env.FAMULUS_GOOGLE_CLIENT_ID
   delete process.env.FAMULUS_GOOGLE_CLIENT_SECRET
   configureApp()

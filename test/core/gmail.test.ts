@@ -1,9 +1,3 @@
-/**
- * Gmail 読み取りの検査。ネットワークは withFetch で止める。
- * 固定するのは3点: 検索の送信契約(q / maxResults / metadata)、multipart の本文抽出
- * (text/plain 優先・HTML はタグ落とし)、本文の切り詰め表示。
- */
-
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -20,7 +14,7 @@ const authed = (): void => {
   const dir = mkdtempSync(join(tmpdir(), "gmail-test-"))
   roots.push(dir)
   const path = join(dir, "google-auth.json")
-  // 期限は実時計基準で先に置く。loadGoogleAccess は Date.now() で判定する — 固定時刻だと日付を跨いだ瞬間に refresh へ落ちる。
+  // loadGoogleAccess は Date.now() で判定するので、期限も実時計から作る。固定時刻だと refresh 経路に入る。
   writeFileSync(path, JSON.stringify({ access: "a-live", refresh: "r", expires: Date.now() + 3_600_000 }))
   process.env.FAMULUS_GOOGLE_AUTH = path
   process.env.FAMULUS_GOOGLE_CLIENT_ID = "cid-1"

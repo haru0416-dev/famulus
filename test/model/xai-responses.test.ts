@@ -1,8 +1,6 @@
 /**
- * xaiResponsesModel / callXai / collect の検査。ネットワークは withFetch で全部止め、
- * 応答は Responses API の SSE をここで合成する(形は @ai-sdk/openai 4.x の chunk schema 準拠)。
- * 固定するのは3点: 送信契約(store:false / Bearer / strict:false)、応答の畳み込みと usage の写し、
- * 失敗→クォータシグナルの変換(統治はこのシグナルだけを頼りに再実行を抑止する)。
+ * SSE は @ai-sdk/openai 4.x の chunk schema に合わせて合成する。
+ * 統治はクォータシグナルだけで再実行を抑止するので、失敗からシグナルへの変換を固定する。
  */
 
 import assert from "node:assert/strict"
@@ -24,7 +22,7 @@ afterEach(() => {
   configureApp()
 })
 
-/** 期限の遠い合成 auth を置き、既定パスをそこへ向ける(refresh 経路は test/model/xai-auth.test.ts)。 */
+/** refresh に行かないよう期限の遠い合成 auth を置く(refresh は xai-auth.test.ts)。 */
 const authFile = (): void => {
   const dir = mkdtempSync(join(tmpdir(), "xai-resp-test-"))
   roots.push(dir)
@@ -93,7 +91,7 @@ test("送信 body に store:false、ヘッダに auth ファイルの Bearer が
       return sse()
     },
     async () => {
-      // 応答は合成の空ストリーム。ここで見るのは送信側の契約だけなので、応答起因の失敗は無視する。
+      // 送信側の契約だけを見るので、応答起因の失敗は無視する。
       try {
         await xaiResponsesModel("grok-4.3").doGenerate(OPTS)
       } catch {
@@ -123,7 +121,6 @@ test("reasoningEffort 指定で body に reasoning.effort が入り、未指定�
   )
   assert.deepEqual(bodies[0]?.reasoning, { effort: "low" })
   assert.equal("reasoning" in (bodies[1] ?? {}), false)
-  // 注入は既存の送信契約を崩さない。
   assert.equal(bodies[0]?.store, false)
 })
 
@@ -246,7 +243,7 @@ test("jsonSchema は strict:false の json_schema として送られ、応答が
       const format = (sent?.text as { format?: Record<string, unknown> } | undefined)?.format
       assert.equal(format?.type, "json_schema")
       assert.equal(format?.name, "reply")
-      // strict は valibot 生成の任意欄スキーマが 400 で拒否されるため false 固定。
+      // valibot 生成の任意欄スキーマは strict だと 400 で拒否される。
       assert.equal(format?.strict, false)
       assert.deepEqual(format?.schema, schema)
       assert.equal(sent?.store, false)
@@ -320,7 +317,7 @@ test("collect は reasoning を畳み、tool/source を透過し、finish 無し
     { type: "reasoning-end", id: "r1" },
     toolCall,
     source,
-    // 畳み込み対象外の part(tool-input-*)は捨てる。
+    // tool-input-* は集約対象外なので捨てる。
     { type: "tool-input-start", id: "t1", toolName: "x" },
   ] as unknown as readonly LanguageModelV4StreamPart[]
   const gen = await collect(streamOf(parts))

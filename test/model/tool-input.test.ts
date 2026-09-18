@@ -1,11 +1,4 @@
-/**
- * 道具の入力が実行の手前で検証されるかを、loop を1回転させて見る。
- *
- * `vs()` に `validate` が無かった間、モデルが返した引数は何の検査も受けずに `execute` へ入っていた。
- * 実測(2026-08-13): `{"hours":"24","extra":"余計な鍵"}` を返させると、`hours` は文字列のまま、
- * 必須の `reason` は `undefined` のまま道具が走り、結果は「成功」として記録された。
- * valibot のスキーマは JSON Schema を作るためだけに使われていた。
- */
+/** モデルが返した引数が検証されずに `execute` へ入る回帰を防ぐ。 */
 
 import assert from "node:assert/strict"
 import type { LanguageModelV4, LanguageModelV4StreamPart } from "@ai-sdk/provider"
@@ -14,7 +7,6 @@ import * as v from "valibot"
 import { test } from "vitest"
 import { vs } from "../../src/model/schema.ts"
 
-/** 1回目に `input` をそのまま返し、2回目で終わる偽モデル。 */
 const fakeModel = (input: string): LanguageModelV4 => {
   let step = 0
   const usage = {
@@ -86,7 +78,6 @@ test("必須が欠けていても道具を走らせない", async () => {
   assert.equal(got, undefined, "execute が呼ばれている")
 })
 
-/** 落ちても turn は止まらない。指摘が次の呼び出しに載るので、同じ turn の中で呼び直せる。 */
 test("落ちた呼び出しは tool-error として積まれ、turn は続く", async () => {
   const { res } = await run(JSON.stringify({ hours: "24", reason: "眠い" }))
   assert.equal(res.text, "終わり")
@@ -96,7 +87,7 @@ test("落ちた呼び出しは tool-error として積まれ、turn は続く", 
   assert.match(String((err as { error?: unknown }).error), /snooze/)
 })
 
-/** スキーマに無い鍵は落とさず捨てる。valibot の `object` は未知の鍵を通さず、値から外す。 */
+/** valibot の `object` は未知の鍵を値から外す。 */
 test("正しい引数は解析済みの値で渡り、余計な鍵は落ちる", async () => {
   const { got } = await run(JSON.stringify({ hours: 24, reason: "眠い", extra: "余計な鍵" }))
   assert.deepEqual(got, { hours: 24, reason: "眠い" })

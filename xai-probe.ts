@@ -1,4 +1,4 @@
-/** 本物の Runner(RunnerLive・実DB・統治込み)で grok を1回呼ぶ e2e。 */
+// 実DB に書き込み、実クォータを使う。
 import * as Effect from "effect/Effect"
 import * as v from "valibot"
 import { configureApp } from "./src/core/config.ts"

@@ -1,16 +1,9 @@
-/**
- * Gmail の読み取り。REST 直・**読み取り専用**(scope は gmail.readonly のみ)。
- *
- * 取り込みはしない — コードは DB に書かない。メール本文は外部の未検証データで、
- * 返すのは道具の返り値(フェンス内)だけ。覚えるかはモデルの remember(taint 付き)の判断で、
- * 確定値(belief)への昇格は従来どおり発言か承認を通す。出口側は下書きの連絡先検査が受ける。
- */
+/** scope は gmail.readonly のみ。本文は未検証の外部データなので DB に書かず、道具の返り値だけで返す。 */
 import { loadGoogleAccess } from "./google-auth.ts"
 import { localStamp } from "./time.ts"
 
 const BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
-/** 1通の本文をモデルへ返す上限。メールは長いが、要るのはたいてい冒頭 — 全文は要求されたときに id で読み直せる。 */
 const BODY_MAX = 4_000
 
 export interface MailHead {
@@ -62,7 +55,6 @@ const toHead = (m: ApiMessage): MailHead | undefined =>
       }
     : undefined
 
-/** Gmail の検索式(`is:unread` `from:` `newer_than:7d` など)で探し、新しい順の頭書きを返す。 */
 export async function searchMail(query: string, max: number): Promise<MailHead[]> {
   const q = new URLSearchParams({ q: query, maxResults: String(max) })
   const list = (await call(`/messages?${q.toString()}`)) as { messages?: { id?: string }[] }
@@ -88,7 +80,6 @@ export const renderMailHeads = (heads: readonly MailHead[]): string =>
         )
         .join("\n")
 
-/** multipart を text/plain 優先で辿る。HTML しか無ければタグを落として返す。 */
 export function extractBody(part: ApiPart | undefined): string {
   if (!part) return ""
   const decode = (data: string): string => Buffer.from(data, "base64url").toString("utf8")
@@ -111,7 +102,6 @@ export function extractBody(part: ApiPart | undefined): string {
     .trim()
 }
 
-/** 1通を読む。本文は BODY_MAX 字で切る(それ以上は読む側の判断で再要求)。 */
 export async function readMail(id: string): Promise<{ head: MailHead; body: string }> {
   const m = (await call(`/messages/${encodeURIComponent(id)}?format=full`)) as ApiMessage
   const head = toHead(m)

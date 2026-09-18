@@ -20,9 +20,8 @@ import { legacyV4Sql } from "../helpers.ts"
 
 let root = ""
 /**
- * migration 台帳より前の DB を作る。現行 schema から作り、以後の migration が加えた差を
- * 文字列の段階で戻す — v4 の指紋(LEGACY_V4_SCHEMA_FINGERPRINT)と一致させるため。
- * migration を足したら、その差をここでも戻すこと。
+ * migration 記録より前の DB。LEGACY_V4_SCHEMA_FINGERPRINT と一致させるため、
+ * migration を足したらその差をここでも戻す。
  */
 const makeLegacyV4 = (db: ReturnType<typeof openDb>): void => {
   db.exec(legacyV4Sql(SCHEMA_SQL))

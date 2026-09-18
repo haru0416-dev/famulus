@@ -1,11 +1,4 @@
-/**
- * DB の入口の検査。
- *
- * ここで一番壊れやすいのは選別のほう(モデルを呼ばない前段)で、
- * しかも壊れても静かに壊れる — 道具の出力が混ざっても、ユーザーの発話が半分落ちても、
- * 出来上がった要約はそれらしく読める。だから「何を捨て、何を1文字も削らないか」を
- * 素材の段階で直接確かめる。要約の中身ではなく素材の境界が検査対象。
- */
+// 選別(モデルを呼ばない前段)は壊れても要約がそれらしく読めるので、何を捨て何を削らないかを素材の段階で確かめる。
 
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -130,11 +123,11 @@ beforeAll(() => {
             text: "",
             content: [{ type: "text", text: "婚姻の平等をめぐる judicial な流れから。" }],
           },
-          // 思考は応答ですらない。地の文だけを拾う。
+          // 思考ブロックは応答ではないので拾わない。
           { sender: "assistant", text: "", content: [{ type: "thinking", thinking: "内部の独り言" }] },
         ],
       },
-      // 本文フィールドが空の会話レコード。uuid と日時だけ残る(書き出し側の都合)。
+      // 本文フィールドが空で uuid と日時だけの会話レコード。書き出しにこの形がある。
       {
         uuid: "w2",
         name: "",
@@ -186,7 +179,7 @@ beforeAll(() => {
     ]),
   )
 
-  // 英語だけの覚え書き。索引は trigram なので、このままでは日本語のクエリに一生当たらない。
+  // 英語だけの覚え書き。索引は trigram なので、そのままでは日本語のクエリに当たらない。
   EXPORT_EN = join(ROOT, "export-en")
   mkdirSync(EXPORT_EN, { recursive: true })
   writeFileSync(
@@ -215,10 +208,7 @@ afterAll(() => {
   if (ROOT) rmSync(ROOT, { recursive: true, force: true })
 })
 
-/**
- * transcript 入力を無効化し、書き出し側だけを有効にする。
- * 取り込み元が2つあるので、両方を有効にすると「候補に出た1件がどちらの入口から来たか」が言えない。
- */
+// 両方の取り込み元を有効にすると候補の1件がどちらから来たか分からないので、書き出し側だけを有効にする。
 async function onlyExport<T>(dir: string, fn: () => Promise<T>): Promise<T> {
   process.env.FAMULUS_TRANSCRIPT_ROOT = join(ROOT, "no-logs")
   process.env.FAMULUS_EXPORT_ROOT = dir
@@ -303,9 +293,8 @@ test("記憶ファイルはモデルを呼ばずに DB へ入る — 二度目�
       assert.equal(out.first.added, 2)
       assert.equal(out.second.added, 0, "二度目は入らない")
       assert.equal(out.second.skipped, 2)
-      // 枠を1回も使っていない。既に要約済みのものを要約し直さないのが要点。
       assert.equal(h.calls.length, 0, "モデルを呼ばない")
-      // 記憶ファイルと散文の節、どちらも配色に触れている。両方出るのが正しい。
+      // 記憶ファイルと散文の節の両方が配色に触れている。
       assert.equal(out.hit.length, 2)
       assert.ok(
         out.hit.every((r) => r.taint === 1),
@@ -436,7 +425,6 @@ test("owner から引けない好み・訂正は DB に入らない — 印象�
           const intake = yield* Intake
           const db = yield* Db
           const r = yield* intake.ingest(only(yield* intake.scan(10)))
-          // 索引に載った文字列で見る。引けなかった項目は検索からも消えていることまで確かめる。
           return { r, row: yield* db.get("SELECT text FROM events_fts WHERE event_id = ?", r?.id ?? "") }
         }),
       )
@@ -454,7 +442,7 @@ test("owner から引けない好み・訂正は DB に入らない — 印象�
           decisions: [],
           preferences: [
             { what: "確認メールは送らない", said: "確認メールは要らないって言ったよね" },
-            // モデルが素材から読み取った「印象」。原文に無い文を引用欄へ置いても残さない。
+            // 原文に無い文を引用欄に置いた項目は残さない。
             { what: "丁寧な言い回しを好む", said: "丁寧な言い回しを好むと話した" },
           ],
           corrections: [{ what: "急かされるのを嫌う", said: "急かされるのを嫌うと話した" }],
@@ -548,7 +536,7 @@ test("取り込んだものは検索に出る — 自分の独り言より前、
           const mem = yield* Memory
           const refs = yield* intake.scan(10)
           yield* intake.ingest(only(refs))
-          // 同じ語を含む自分の独り言。新しいだけで、探しものとしては役に立たない。
+          // 同じ語を含む system 記録。
           yield* mem.remember({ source: "system", content: { cycle: "確認メールの件は今は動かない。" } })
           return yield* mem.recall("確認メール")
         }),
@@ -556,7 +544,7 @@ test("取り込んだものは検索に出る — 自分の独り言より前、
       assert.equal(out.length, 2)
       assert.equal(out[0]?.kind, "import", "取り込んだ判断が先に出る")
       assert.equal(out[1]?.source, "system")
-      // 由来を隠さない。ユーザーが直接そう言った1行と、要約の1行を混ぜて読ませない。
+      // ユーザーの発言と要約の1行を区別できるよう、取り込み由来を表示する。
       assert.match(renderRecall(out), /取り込み\]/)
     },
     [
@@ -584,7 +572,6 @@ test("抹消した取り込みは候補に戻る — 要約が的外れだった
           const mem = yield* Memory
           const r = yield* intake.ingest(only(yield* intake.scan(10)))
           assert.ok(r)
-          // 入口の間違いを DB に固定しない。抹消が「無かったことにして取り直せ」の意味になる。
           yield* mem.redact(r.id, "要約が作業報告になっていた")
           return yield* intake.scan(10)
         }),

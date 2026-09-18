@@ -1,9 +1,6 @@
 /**
- * Layer の合成と、Promise を返す呼び出し側から Effect を走らせる `run`。
  * Effect は `ManagedRuntime` の中に閉じ、外へは拒否が例外として出るだけにする。
- *
- * Db が Layer の一番下なので、テストは `makeRuntime(DbLive(":memory:"))` で
- * 同じ配線をそのまま走らせられる(スキーマもトリガも本物)。
+ * Db が Layer の最下層なので、テストは `makeRuntime(DbLive(":memory:"))` で同じ配線を走らせられる。
  */
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -23,7 +20,6 @@ import { Memory } from "./services/Memory.ts"
 import { Proposals } from "./services/Proposals.ts"
 import { Research } from "./services/Research.ts"
 
-/** Db の上に載る素のサービス群。 */
 const services = Layer.mergeAll(
   Governance.layer,
   Memory.layer,
@@ -38,10 +34,7 @@ const services = Layer.mergeAll(
   Research.layer,
 )
 
-/**
- * アプリ全体の Layer。`runner` を差し替えれば `claude` を呼ばない構成にできる
- * (テストは `RunnerStub([...]).layer` を渡す)。
- */
+/** `runner` を差し替えると `claude` を呼ばない構成になる(テストは `RunnerStub([...]).layer`)。 */
 export type DbLayer = Layer.Layer<Db, DbFailed>
 export type RunnerLayer = Layer.Layer<Runner, never, Governance | Ledger | ExecutionKernel>
 
@@ -53,7 +46,7 @@ export const makeRuntime = (db: DbLayer = DbLive(), runner: RunnerLayer = Runner
 
 export type AppRuntime = ReturnType<typeof makeRuntime>
 
-/** 既定のランタイム。プロセスに1つ。差し替えは `run(effect, rt)` の第2引数だけ。 */
+/** プロセスに1つ。差し替えは `run(effect, rt)` の第2引数だけ。 */
 let current: AppRuntime | undefined
 export const runtime = (): AppRuntime => {
   current ??= makeRuntime()
@@ -62,7 +55,6 @@ export const runtime = (): AppRuntime => {
 
 const REFUSAL_TAGS = new Set(["Halt", "QuotaCooldown", "DailyRunLimit", "DeliveryRejected"])
 
-/** 拒否を人間に読める Error にして投げる。 */
 class RefusedError extends Error {
   readonly refusal: Refusal
   constructor(refusal: Refusal) {
@@ -76,7 +68,6 @@ export function isRefusal(e: unknown): e is Refusal {
   return typeof e === "object" && e !== null && "_tag" in e && REFUSAL_TAGS.has(String(e._tag))
 }
 
-/** 既定ランタイムが提供するサービスの集合。 */
 export type AppServices =
   | Db
   | Governance

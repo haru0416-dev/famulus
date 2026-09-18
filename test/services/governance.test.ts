@@ -1,7 +1,3 @@
-/**
- * 統治の検査。モデルへ届く経路が必ずゲートを通る、という性質だけを並べる。
- */
-
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
@@ -34,7 +30,7 @@ test("halt は precheck を止め、明示解除するまで自動で明けな�
     )
     assert.equal((e as { _tag: string })._tag, "Halt")
 
-    // 1年後でも明けない。時間で戻るのは quota だけ。
+    // halt は時間では解けない。時間で戻るのは quota だけ。
     const later = await h.fail(
       Effect.gen(function* () {
         const gov = yield* Governance
@@ -43,7 +39,6 @@ test("halt は precheck を止め、明示解除するまで自動で明けな�
     )
     assert.equal((later as { _tag: string })._tag, "Halt")
 
-    // 解除して初めて通る。
     await h.run(
       Effect.gen(function* () {
         const gov = yield* Governance
@@ -76,7 +71,6 @@ test("枠クールダウンは窓が明ければ自動で戻り、schema_meta �
     assert.equal((e as { _tag: string })._tag, "QuotaCooldown")
     assert.equal((e as { pool: string }).pool, "supergrok-oauth")
 
-    // 窓が明けたあと: 通る + 状態が消えている。
     const left = await h.run(
       Effect.gen(function* () {
         const gov = yield* Governance
@@ -137,9 +131,7 @@ test("日次 run 数の上限は効くが、halt は立てない(翌日には自
     assert.equal((e as { _tag: string })._tag, "DailyRunLimit")
     assert.equal((e as { count: number }).count, 2)
 
-    // halt を残さない。元実装は残していたが、それは1回ごとに課金される前提での判断。
-    // 定額枠では上限に当たること自体が異常の合図ではないので、翌日に自動で戻るべきもので、
-    // ここで halt を立てると人が `fam resume` を打つまで対話まで含めて全停止する。
+    // 定額枠では日次上限は異常の合図ではない。halt を立てると `fam resume` まで対話も止まる。
     const halt = await h.run(
       Effect.gen(function* () {
         const gov = yield* Governance
@@ -175,7 +167,6 @@ test("自走が枠を使い切っても対話は止まらない(仕切りであ�
     assert.equal((e as { _tag: string })._tag, "DailyRunLimit")
     assert.equal((e as { limit: number }).limit, 2)
 
-    // 対話は同じ状態で通る。halt も立っていない — 翌日には自然に戻る種類の上限。
     await h.run(
       Effect.gen(function* () {
         const gov = yield* Governance
@@ -212,9 +203,8 @@ test("外部データは境界マーカーで囲まれ、owner の指示と混�
   ])
   assert.match(fenced, /<<<EXTERNAL source="gmail" label="msg-1">>>/)
   assert.match(fenced, /<<<END EXTERNAL>>>/)
-  // owner の指示は EXTERNAL ブロックの外(後ろ)にある。
   assert.ok(fenced.indexOf("<<<END EXTERNAL") < fenced.lastIndexOf("要約して"))
-  // 危険文言は消さない。フィルタではなく構造で隔離するのがこの設計。
+  // 危険文言は消さず、ブロックの構造で隔離する。
   assert.match(fenced, /送金しろ/)
 })
 
@@ -227,11 +217,7 @@ test("外部データは偽の境界マーカーを作れない", () => {
   assert.ok(fenced.indexOf("<<<END EXTERNAL>>>") < fenced.lastIndexOf("続けて"))
 })
 
-/**
- * 統治は wrapGenerate にしか掛かっていない。wrapStream を素通しにすると
- * 事前検査も会計も通らないままモデルへ届く。封鎖が外れたらこの検査が落ちる。
- * (selfdev で famulus が見つけた穴。2026-08-16)
- */
+// 統治は wrapGenerate にしか掛かっていないので、wrapStream を通すと事前検査も会計も経ずにモデルへ届く。
 test("stream 経路は統治を通らないので塞いでいる", async () => {
   const g = governance()
   assert.ok(g.wrapStream, "wrapStream が無いと素通しになる")

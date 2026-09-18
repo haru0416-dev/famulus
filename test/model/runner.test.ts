@@ -1,7 +1,4 @@
-/**
- * Runner の検査。ゲートを通さずにモデルへ届く道が無いことを、実行本体を差し替えて確かめる。
- * Stub は precheck・枠の計上・会計の主要な経路を本番と共有しているので、ここで通る配線は本番でも同じ。
- */
+/** Stub は precheck・枠の計上・会計の経路を本番と共有する。 */
 
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
@@ -74,7 +71,7 @@ test("halt が立っていると run はモデルに到達しない", async () =
         }),
       )
       assert.equal((e as { _tag: string })._tag, "Halt")
-      // ここが 0 でないなら「ゲートを通さずに走れる道」が残っている。
+      // 0 でなければゲートを通らずにモデルへ届く経路がある。
       assert.equal(h.calls.length, 0)
 
       const t = await h.run(
@@ -105,7 +102,6 @@ test("クォータ枯渇後はリセット時刻まで再実行を抑止する",
           yield* runner.run({ role: "grok-4.6", kind: "run", prompt: "2回目" })
         }),
       )
-      // リセット前のクォータへ毎 run 再試行しない。
       assert.equal((second as { _tag: string })._tag, "QuotaCooldown")
       assert.equal(h.calls.length, 1)
     },
@@ -181,10 +177,6 @@ test("production roleの全modelに固定Profileがある", () => {
   }
 })
 
-/**
- * 混在 routing の要点。経路とクォータはモデルで決まる。
- * 環境変数1つで決めていた頃は、GPT に切り替えると対話まで別経路になった。
- */
 test("全modelの provider と pool は明示表から決まる", () => {
   assert.equal(providerForModel("grok-4.3"), "xai")
   assert.equal(providerForModel("gpt-5.6-sol"), "codex")
@@ -194,17 +186,14 @@ test("全modelの provider と pool は明示表から決まる", () => {
   assert.throws(() => providerForModel("claude-opus-4"), /知らないモデル id/)
 })
 
-/**
- * 知らない id は受け付けない。検査せずに通すと、実行を開始してから上流の「不明なモデル」で失敗する。
- * 入力元は env と役割表だけで、どちらも打ち間違えられる。
- */
+/** 通すと実行開始後に上流の「不明なモデル」で失敗する。env と役割表は打ち間違えられる。 */
 test("知らないモデル id は経路を選ぶ前に失敗させる", async () => {
   assert.equal(assertKnownModel("grok-4.3"), "grok-4.3")
   assert.throws(() => assertKnownModel("grok-9.9"), /知らないモデル id/)
   assert.throws(() => assertKnownModel("claude-opus-4"), /知らないモデル id/)
   assert.throws(() => assertKnownModel(""), /知らないモデル id/)
 
-  // Runner の plan も同じ検査を通る(role 名として解釈できないものは id そのものとして読まれる)。
+  // role 名として解釈できない文字列は id として読まれる。
   await withHarness(async (h) => {
     await h.run(
       Effect.gen(function* () {

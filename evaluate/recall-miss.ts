@@ -1,18 +1,8 @@
 #!/usr/bin/env bun
-/**
- * recall(FTS trigram + 2文字語 LIKE 併用)の miss 率を測る。`bun run eval:recall`。
- * モデルは呼ばない — 検索機構だけの評価。クォータ消費ゼロ。
- *
- * 目的: sqlite-vec + ローカル埋め込みの採否を数字で決める(2026-08-17 の道具調査 #5)。
- * 分類規則はこのファイルに固定 — 結果を見てから変えない:
- *   - mechanics 系(exact / short-cjk / case / and-overspecify)… trigram+LIKE の機構が受け持つ範囲
- *   - semantic 系(paraphrase / cross-lingual / kana-latin)… 埋め込みでしか埋まらない範囲
- * 判定は hit@10(recall の既定 limit)。
- *
- * Part A は合成コーパス(:memory:)。Part B は実DBの複製(読み取りのみ)に対する probe で、
- * 各 probe は ground-truth の LIKE 語を持つ — LIKE で行が実在するのに recall が返さないときだけ
- * miss と数える(実在しなければ true negative として除外。「grok 移行」の誤判定を繰り返さない)。
- */
+// 分類規則は結果を見てから変えない。
+// exact / short-cjk / case / and-overspecify は trigram+LIKE が届く範囲、
+// paraphrase / cross-lingual / kana-latin は埋め込みでしか届かない範囲。
+// 判定は hit@10(recall の既定 limit)。
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -38,7 +28,7 @@ type Category =
   | "cross-lingual"
   | "kana-latin"
 
-/** 合成コーパス。famulus の system 記録の実際の文体に寄せる。 */
+// system 記録の実際の文体に寄せる。
 const CORPUS: readonly string[] = [
   /* 0 */ "cycle が Conflict で落ちた。cycle-log の dedupe key が実行条件由来で衝突していた。",
   /* 1 */ "SuperGrok OAuth の device flow を通した。トークンは xai-auth.json に保存した。",
@@ -60,50 +50,42 @@ interface SyntheticProbe {
   readonly q: string
   readonly expect: number
   readonly category: Category
-  /** 機構上ヒットしないはずの probe(記録して miss 率の分母にも入れる)。 */
+  // miss 率の分母には入れる。
   readonly expectMiss?: boolean
 }
 
 const SYNTHETIC: readonly SyntheticProbe[] = [
-  // exact — 索引語がそのまま入っている
   { q: "dedupe key 衝突", expect: 0, category: "exact" },
   { q: "device flow", expect: 1, category: "exact" },
   { q: "VACUUM INTO", expect: 5, category: "exact" },
   { q: "trigram 索引", expect: 9, category: "exact" },
   { q: "引用照合 失敗", expect: 4, category: "exact" },
-  // short-cjk — 2文字語(LIKE 併用の受け持ち)
   { q: "凍結", expect: 12, category: "short-cjk" },
   { q: "移行", expect: 12, category: "short-cjk" },
   { q: "復元", expect: 5, category: "short-cjk" },
   { q: "衝突", expect: 0, category: "short-cjk" },
   { q: "単価", expect: 11, category: "short-cjk" },
-  // case — ASCII の大文字小文字
   { q: "SUPERGROK", expect: 1, category: "case" },
   { q: "Grok-4.6", expect: 11, category: "case" },
   { q: "conflict", expect: 0, category: "case" },
-  // and-overspecify — 語を盛りすぎた問い(AND 意味論の代償)
   { q: "presence 再接続 seq IDENTIFY", expect: 2, category: "and-overspecify", expectMiss: true },
   { q: "keeper capture 引用照合", expect: 8, category: "and-overspecify", expectMiss: true },
-  // paraphrase — 言い換え(埋め込みの受け持ち)
   { q: "返信が遅い", expect: 7, category: "paraphrase", expectMiss: true },
   { q: "自走が止まった", expect: 0, category: "paraphrase", expectMiss: true },
   { q: "料金", expect: 11, category: "paraphrase", expectMiss: true },
   { q: "記憶の取りこぼし", expect: 8, category: "paraphrase", expectMiss: true },
   { q: "調査の並列実行", expect: 6, category: "paraphrase", expectMiss: true },
-  // cross-lingual — 言語をまたぐ問い
   { q: "週次 上限 プール", expect: 10, category: "cross-lingual", expectMiss: true },
   { q: "shared pool", expect: 10, category: "cross-lingual" },
   { q: "snapshot", expect: 5, category: "cross-lingual", expectMiss: true }, // 本文は「スナップショット」
-  // kana-latin — 表記体系の揺れ
   { q: "バックアップ", expect: 5, category: "kana-latin", expectMiss: true }, // 本文は "backup"
   { q: "フラッシュ", expect: 7, category: "kana-latin", expectMiss: true }, // 本文は "flush"
   { q: "トークン", expect: 1, category: "kana-latin" },
 ]
 
-/** 実DB probe。ground-truth の LIKE 語で実在を確かめてから miss を数える。 */
 interface RealProbe {
   readonly q: string
-  /** この語を含む索引行が実在するときだけ、この probe は分母に入る。 */
+  // この語を含む行が実在しないときは、recall が返さなくても miss と数えない。
   readonly truthLike: string
 }
 
@@ -116,7 +98,7 @@ const REAL_PROBES: readonly RealProbe[] = [
   { q: "web.test", truthLike: "web.test" },
   { q: "再接続", truthLike: "再接続" },
   { q: "dream 見直し", truthLike: "dream" },
-  // 全量取り込みで観測した paraphrase 型の実DB miss。scout が言い換えて要約するため語では届かない。
+  // scout が言い換えて要約するため、語では届かない。
   { q: "誤前提", truthLike: "誤定義" },
   { q: "誤前提シリーズの実験", truthLike: "誤定義" },
   { q: "カードゲームの通販", truthLike: "ポケカ" },
@@ -148,15 +130,14 @@ async function partA() {
 }
 
 async function partB() {
-  // 実DBは複製に対して読む。走行中の cycle と競合しない。
+  // 走行中の cycle と競合しないよう複製を読む。
   const copy = join(mkdtempSync(join(tmpdir(), "recall-eval-")), "recall-eval.db")
   execFileSync("sqlite3", [appConfig().paths.db, `.backup ${copy}`])
   const stub = RunnerStub([{ text: "" }])
   const rt = ManagedRuntime.make(makeAppLayer(DbLive(copy), stub.layer))
   const run = <A, E>(e: Effect.Effect<A, E, AppServices>) => rt.runPromise(e)
   try {
-    // 複製には埋め込みが無い(本番でまだ埋めていない行も含む)。probe の前に埋める —
-    // 意味検索込みの recall を測るのがこの評価の目的。埋め込み off の構成では何もしない。
+    // 本番でまだ埋め込んでいない行があるので、probe の前に埋める。
     let embedded = 0
     for (;;) {
       const batch = await run(Effect.flatMap(Memory, (m) => m.embedMissing(200)))

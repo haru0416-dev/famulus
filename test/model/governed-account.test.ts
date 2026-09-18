@@ -1,9 +1,6 @@
 /**
- * governance middleware の成功経路の検査。モデルは呼ばない。
- * 固定するのは会計: 成功応答が ledger に kind='turn'・role 付きで記帳され、
- * in_tok が noCache(cache 除外)で入ること。ここが切れると日次 run 数の上限
- * (ledger の role 行を数える)が適用されないまま走り続ける。
- * 失敗→cooldown の連鎖は governed.test.ts(別プロセス。cooldown が残るので同居させない)。
+ * 成功応答が ledger に role 付きで記帳されないと、日次 run 数の上限(role 行を数える)が効かない。
+ * 失敗→cooldown は cooldown が残るので別ファイル(governed.test.ts)で見る。
  */
 
 import assert from "node:assert/strict"
@@ -22,7 +19,6 @@ beforeAll(() => {
   configureApp()
 })
 
-/** doGenerate が成功する応答。providerMetadata の有無で notionalUsd の読み分けを見る。 */
 const okModel = (meta: boolean): LanguageModelV4 => ({
   specificationVersion: "v4",
   provider: "test",
@@ -83,7 +79,7 @@ test("providerMetadata の無い応答は notionalUsd 0 で記帳される", asy
 
 test("governedModel は知らない id と、xai 以外の pool を組み立ての時点で拒否する", () => {
   assert.throws(() => governedModel("gpt-5.9"), /知らないモデル id/)
-  // GPT は既知だが chatgpt-oauth 枠(精査役専用)。対話経路へ流すと xai 実装で呼ぶ誤配線になる。
+  // GPT は精査役専用の chatgpt-oauth 枠。対話経路へ流すと xai 実装で呼ぶ誤配線になる。
   assert.throws(() => governedModel("gpt-5.6-sol"), /xai 系のみ/)
   assert.equal(governedModel("grok-4.3").modelId, "grok-4.3")
 })

@@ -12,8 +12,8 @@ type Execute = (file: string, args: readonly string[], options: { timeout: numbe
 const execute = promisify(execFile) as Execute
 
 /**
- * poll / cycle の cgroup から配送を分離する。既に動いている unit への起動失敗は、そのworkerが
- * queue を処理中という意味なので呼び出し側の失敗にはしない。
+ * poll / cycle の cgroup から配送を分離する。unit が既にあるときの起動失敗は、worker が
+ * queue を処理中という意味なので失敗にしない。
  */
 export async function wakeDelivery(enabled: boolean, exec: Execute = execute): Promise<boolean> {
   if (!enabled) return false

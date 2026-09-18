@@ -4,8 +4,7 @@ export default defineConfig({
   test: {
     coverage: {
       include: ["src/**/*.ts"],
-      // ruri の実ロードは初回にネットワークからモデルを取るので、ゲートでは踏めない。
-      // ゲートは stub(test/setup.ts)で機構を検査し、実モデルの検索品質は eval:recall が測る。
+      // 実ロードは初回にネットワークからモデルを取るのでゲートでは通せない。品質は eval:recall が測る。
       exclude: ["src/model/embedding-ruri.ts"],
       provider: "istanbul",
       reporter: ["text"],

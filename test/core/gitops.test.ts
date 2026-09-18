@@ -39,11 +39,11 @@ describe("beginTaskBranch / finishTaskBranch", () => {
     expect(bb.skipped).toBeUndefined()
     assert.ok(bb.branch)
     expect(git(dir, "branch", "--show-current")).toBe("famulus/task-x")
-    writeFileSync(join(dir, "b.txt"), "agent output\n") // エージェントの成果を模擬
+    writeFileSync(join(dir, "b.txt"), "agent output\n")
     const fin = finishTaskBranch(dir, bb.branch, "add b.txt")
     expect(fin.committed).toBe(true)
     expect(git(dir, "branch", "--show-current")).toBe("main")
-    expect(git(dir, "status", "--porcelain")).toBe("") // mainはクリーン
+    expect(git(dir, "status", "--porcelain")).toBe("")
     expect(git(dir, "log", "-1", "--format=%s", "famulus/task-x")).toContain("add b.txt")
   })
 
@@ -63,7 +63,7 @@ describe("beginTaskBranch / finishTaskBranch", () => {
     const bb = beginTaskBranch(dir, "task-y")
     expect(bb.branch).toBeUndefined()
     expect(bb.skipped).toContain("混入防止")
-    expect(git(dir, "branch", "--show-current")).toBe("main") // 何も変えない
+    expect(git(dir, "branch", "--show-current")).toBe("main")
   })
 
   test("同名ブランチが既にあればskip(上書きしない)", () => {
@@ -75,7 +75,6 @@ describe("beginTaskBranch / finishTaskBranch", () => {
   })
 })
 
-/** begin→成果物書き込み→finish で成果ブランチを作るフィクスチャ。 */
 function taskBranchWith(dir: string, label: string, file: string, content: string): string {
   const bb = beginTaskBranch(dir, label)
   assert.ok(bb.branch)
@@ -103,20 +102,19 @@ describe("mergeTaskBranch / discardTaskBranch(成果消費)", () => {
     const op = mergeTaskBranch(dir, branch)
     expect(op.ok).toBe(false)
     expect(op.detail).toContain("混入防止")
-    expect(branchExists(dir, branch)).toBe(true) // 成果は失わない
+    expect(branchExists(dir, branch)).toBe(true)
   })
 
   test("merge: 衝突は自動abortしてクリーンに戻し、ブランチを残す", () => {
     const dir = gitRepo()
     const branch = taskBranchWith(dir, "task-c", "a.txt", "agent version\n")
-    // main側でも同じファイルを変更して衝突を作る
     writeFileSync(join(dir, "a.txt"), "human version\n")
     git(dir, "add", "-A")
     git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "human edit")
     const op = mergeTaskBranch(dir, branch)
     expect(op.ok).toBe(false)
     expect(op.detail).toContain("abort")
-    expect(git(dir, "status", "--porcelain")).toBe("") // abortでクリーン
+    expect(git(dir, "status", "--porcelain")).toBe("")
     expect(branchExists(dir, branch)).toBe(true)
   })
 
@@ -141,10 +139,8 @@ describe("mergeTaskBranch / discardTaskBranch(成果消費)", () => {
 
   test(".agent/はdirty判定から除外(gitignore無しrepoでの恒久skip・merge誤拒否を防ぐ)", () => {
     const dir = gitRepo()
-    // ハーネス内部状態を模擬(gitignoreなし=untrackedとして見える)
     mkdirSync(join(dir, ".agent", "log"), { recursive: true })
     writeFileSync(join(dir, ".agent", "log", "lineage.jsonl"), "{}\n")
-    // begin: .agentのみのdirtyではブランチを切る
     const bb = beginTaskBranch(dir, "task-agent-noise")
     expect(bb.skipped).toBeUndefined()
     assert.ok(bb.branch)
@@ -152,19 +148,16 @@ describe("mergeTaskBranch / discardTaskBranch(成果消費)", () => {
     writeFileSync(join(dir, ".agent", "log", "lineage.jsonl"), '{"more":1}\n')
     const fin = finishTaskBranch(dir, bb.branch, "work")
     expect(fin.committed).toBe(true)
-    // .agentはtask branchにコミットされない(内部状態の混入防止)
     const committed = git(dir, "ls-tree", "-r", "--name-only", "famulus/task-agent-noise")
     expect(committed).toContain("b.txt")
     expect(committed).not.toContain(".agent/log/lineage.jsonl")
-    // merge: .agentのみのdirtyでは拒否しない
     const op = mergeTaskBranch(dir, "famulus/task-agent-noise")
     expect(op.ok).toBe(true)
   })
 
   test(".agentがgitignore済みのrepoでもfinishがコミットできる(excludeパススペック退行の回帰)", () => {
-    // dogfood実測 2026-07-09: `add -A -- ':(exclude).agent'` は .agent がgitignore済みだと
-    // gitが「ignoredなパスのadd要求」と誤判定して exit 1 → コミット・base復帰が丸ごと失敗し、
-    // task branchにstagedのまま取り残される(次タスクはdirty-skipで混入リスク)。
+    // `add -A -- ':(exclude).agent'` は .agent が gitignore 済みだと exit 1 になり、
+    // コミットも base への復帰も失敗する。
     const dir = gitRepo()
     writeFileSync(join(dir, ".gitignore"), ".agent\n")
     git(dir, "add", ".gitignore")
@@ -176,8 +169,8 @@ describe("mergeTaskBranch / discardTaskBranch(成果消費)", () => {
     assert.ok(bb.branch)
     writeFileSync(join(dir, "b.txt"), "work\n")
     const fin = finishTaskBranch(dir, bb.branch, "work")
-    expect(fin.committed).toBe(true) // 退行時はここがfalse(ブランチに取り残し)
-    expect(git(dir, "branch", "--show-current")).toBe("main") // baseへ復帰している
+    expect(fin.committed).toBe(true)
+    expect(git(dir, "branch", "--show-current")).toBe("main")
     const committed = git(dir, "ls-tree", "-r", "--name-only", "famulus/task-ignored-agent")
     expect(committed).toContain("b.txt")
     expect(committed).not.toContain(".agent/log/lineage.jsonl")
@@ -186,7 +179,6 @@ describe("mergeTaskBranch / discardTaskBranch(成果消費)", () => {
 
 test("ハーネス自身が書く .agent/.cursor は dirty 扱いにしない(clean な repo でブランチが切れる)", () => {
   const dir = gitRepo()
-  // タスク実行前にハーネスが必ず書くもの(scaffolding と snapshot store)
   mkdirSync(join(dir, ".cursor", "hooks"), { recursive: true })
   writeFileSync(join(dir, ".cursor", "hooks.json"), "{}")
   writeFileSync(join(dir, ".cursor", "hooks", "guard.sh"), "#!/usr/bin/env bash\n")

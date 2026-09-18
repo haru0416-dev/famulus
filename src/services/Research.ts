@@ -55,10 +55,7 @@ export interface ExperimentResult {
 const cast = <A>(value: Row): A => value as unknown as A
 const sha256 = (content: string): string => createHash("sha256").update(content).digest("hex")
 
-/**
- * 問い同士の近さを語の重なりで見るための分かち。日本語は助詞で切れず1連なりになるので、
- * 長い連なりは2文字ずつに割る。2文字未満は捨てる。
- */
+// 日本語は助詞で切れず1連なりになるので、長い連なりは2文字ずつに割る。
 const missTokens = (s: string): Set<string> => {
   const out = new Set<string>()
   for (const run of s.toLowerCase().split(/[^a-z0-9ぁ-んァ-ヶ一-龠ー]+/)) {
@@ -84,7 +81,7 @@ const INSERT_CLAIM =
 const INSERT_ARTIFACT_EVIDENCE = `INSERT INTO research_claim_evidence
   (id,claim_id,artifact_id,polarity,quote,location,added_at) VALUES (?,?,?,?,?,?,?)`
 
-/** snapshot 1件を dossier に固定する。取得可否の判定(捨てるか投げるか)は呼ぶ側が持つ。 */
+/** 取得可否の判定は呼び出し元が行う。 */
 const insertSnapshot = (
   tx: DbTx,
   dossierId: string,
@@ -109,10 +106,7 @@ const insertSnapshot = (
   return { ...snapshot, id }
 }
 
-/**
- * claim 1件を evidence ごと固定し、support/refute の集計で状態を確定する。
- * quote は取得 snapshot に実在すること — web / explore 共通の不変量。
- */
+/** 不変条件: quote は取得 snapshot に実在する(web / explore 共通)。 */
 const insertClaimWithEvidence = (
   tx: DbTx,
   dossierId: string,
@@ -504,16 +498,8 @@ const makeResearch = () =>
       })
 
     /**
-     * explore(fan-out)1回ぶんを1つのdossierに固定する。
-     *
-     * webのdossierと違う点は2つ:
-     * - 分岐の状態(空振り・失敗・重複)を evidence 無しの observation として残す。
-     *   空振りは結果であって欠損ではない — 記録しないと同じ方向をもう一度掘る。
-     * - 親の予想と除外予定を**分岐の結果より先に**固定する。結果を見てから予想を書くと、
-     *   「予想を外した」の判定が後知恵になる。呼ぶ側は分岐実行前に
-     *   この引数を確定させる。
-     *
-     * 実体のあるclaim(evidence付き)の検証はwebと同じ: quoteは取得snapshotに実在すること。
+     * 空振り・失敗も observation として残す(残さないと同じ方向をもう一度調べる)。
+     * 予想と除外予定は分岐の実行前に確定させる。結果を見てから書くと予想の当否が判定できない。
      */
     const recordExploreDossier = (
       input: {
@@ -542,7 +528,7 @@ const makeResearch = () =>
         const dossierId = randomUUID()
         tx.run(INSERT_DOSSIER, dossierId, `[explore] ${input.seed.trim()}`, at)
 
-        /** evidence の無い記録行。open で入れて即 inconclusive に畳む(openのまま残すと終端化できない)。 */
+        // open のまま残すと dossier を終端化できないので、すぐ inconclusive にする。
         const note = (statement: string) => {
           const id = randomUUID()
           tx.run(INSERT_CLAIM, id, dossierId, statement, "observation", at)
@@ -568,7 +554,7 @@ const makeResearch = () =>
               ),
             )
 
-          // 分岐自身の予想を結果より先に置く。親の予想(上の [explore:予想])とは別 — 書き手が違う。
+          // 分岐自身の予想。親の [explore:予想] とは書き手が違う。
           if (branch.expected?.trim()) note(`[explore:${branch.transform}] 予想: ${branch.expected.trim()}`)
           note(
             branch.failed
@@ -597,7 +583,7 @@ const makeResearch = () =>
           note(`[explore:重複] ${duplicate.transforms.join("+")}: ${duplicate.statement.trim()}`)
         }
 
-        // 統合(conclusion)は分岐の仕事ではないので、dossierは常にinconclusiveで終端化する。
+        // 統合は explore の外で行うので、常に inconclusive で終端化する。
         tx.run(
           `UPDATE research_dossiers SET state='inconclusive',limitations=?,concluded_at=? WHERE id=?`,
           limitations.length > 0 ? limitations.join(" / ") : "explore fan-out(統合前)",
@@ -608,9 +594,8 @@ const makeResearch = () =>
       })
 
     /**
-     * 同じ種に近い過去の explore で空振り・失敗した方向。次の explore の分岐 brief に渡す —
-     * 空振りの記録は、読み手が居ないと「同じ方向をもう一度掘らない」という書いた目的を果たさない。
-     * 近さは語の重なりで見る(短い側の語集合の半分以上が共通)。方向ごとに最新の1件だけ返す。
+     * 近い種の過去 explore で空振り・失敗した方向。次の explore の分岐 brief に渡す。
+     * 近さは短い側の語集合の半分以上が共通かで見る。
      */
     const priorMisses = (seed: string, limit = 200) =>
       db

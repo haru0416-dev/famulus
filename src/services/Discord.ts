@@ -1,17 +1,8 @@
 /**
- * Discord。ユーザーとの入出力はここだけ。
- *
- * gateway でメッセージを受信しない。ボタン(interaction)は3秒以内の応答が要るため使わず、
- * リアクションと自由文を `src/poll.ts` から30秒ごとに REST で取得する。
- * オンライン表示だけは別プロセスの gateway 接続が担う(src/presence.ts)。
- *
- * 出す先は用途で分ける(`Desk`)。ミュートの単位が用途と一致する。チャンネルは id を env で
- * 指す。名前で引くと改名した日に出なくなる。
- *
- * 返事は最後に話しかけられた場所へ返す。リアクションを押させるものはスレッドを立てる
- * — スレッド外の自由文はどの1件への返事か判定できない。
- *
- * token / owner id が無ければ何もせず undefined を返す。自動処理を止めない。
+ * ボタン(interaction)は3秒以内の応答が要るので使わず、リアクションと自由文を REST で poll する。
+ * チャンネルは名前ではなく id で指す(改名で壊れないように)。
+ * リアクションを求める投稿はスレッドを立てる。スレッド外の自由文はどの投稿への返事か判定できない。
+ * token / owner id が無ければ何もせず undefined を返す。
  */
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
@@ -25,34 +16,22 @@ import { Db, type DbTx } from "./Db.ts"
 import type { DraftDecision } from "./Drafts.ts"
 import type { ProposalDecision } from "./Proposals.ts"
 
-/** API の base URL。テストだけ差し替える。 */
 const api = (): string => appConfig().discord.api
 
-/** 1通の上限。Discord は 2000 字で弾くので、超えるぶんは分けて出す。 */
 const LIMIT = 2000
 
-/**
- * 携帯クライアントで縦長の投稿が畳まれにくいように設けた、ローカルな1通あたりの行数上限。
- * Discord API 自体の制限ではない。
- */
+/** 携帯クライアントで長い投稿が折りたたまれないための独自の上限。Discord API の制限ではない。 */
 const LINES = 17
 
-/** 押させるリアクション。絵文字1つに意味を1つ割り当てる。 */
 export interface Tap {
   readonly emoji: string
-  /** 押されたときにユーザーの発言として DB へ入る文。 */
+  /** 押されたときにユーザーの発言として DB に入る文。 */
   readonly reply: string
   readonly draft?: { readonly id: string; readonly decision: DraftDecision }
   readonly proposal?: { readonly id: string; readonly decision: ProposalDecision }
 }
 
-/**
- * 出す先の種類。呼ぶ側はチャンネル id を知らなくてよい。
- *
- * `talk` は会話、`draft` は外に出す文(リアクションを押させる)、`log` は進み具合。
- * `talk` と `draft` は指す先が無ければ DM に落ちるが、`log` は落ちない
- * — 1回動くたびに1行出るので、DM に混ぜると会話が埋まる。
- */
+/** 未設定なら `talk` と `draft` は DM に送るが、`log` は送らない(件数が多く DM の会話が流れる)。 */
 export type Desk = "talk" | "draft" | "log"
 
 export interface Enqueue {
@@ -60,32 +39,23 @@ export interface Enqueue {
   readonly purpose: string
   readonly dedupeKey: string
   readonly text: string
-  /** 付けるリアクション。出した直後に自分で付ける。 */
   readonly taps?: readonly Tap[]
-  /** 出す先。既定は `talk`。 */
   readonly to?: Desk
-  /** メンションを付ける。ミュートしていても届くので、返事が要るものだけ。DM には付けない。 */
+  /** ミュート中でも通知されるので、返事が要るものだけ。DM には付けない。 */
   readonly ping?: boolean
-  /** スレッドの名前。渡すと出した1通からスレッドを立て、そこも読みに行く。 */
+  /** 渡すと送った1通からスレッドを立て、そこも poll する。 */
   readonly thread?: string
-  /**
-   * 立てたスレッドの中へ続けて出す本文。1要素が1通。`thread` と一緒のときだけ効く。
-   * チャンネル側を短く保ちつつ全文を届けるための置き場(長文は畳まれてスレッドに入る)。
-   */
+  /** スレッドの中へ続けて送る本文(1要素が1通)。`thread` と一緒のときだけ効く。 */
   readonly threadNotes?: readonly string[]
-  /**
-   * 受信済みメッセージに直接付けるリアクション(既読の合図)。
-   * `taps` と違い自分の投稿ではなくユーザーの発言に付くので、本文を1通も増やさずに
-   * 「見えている・動いている」だけを出せる。数分かかる回の沈黙を埋めるのが用途。
-   */
+  /** ユーザーの発言に付ける既読のリアクション。 */
   readonly ack?: {
     readonly channelId: string
     readonly messageId: string
     readonly emoji: string
-    /** 付けるのと同時に外す絵文字(進行中の印の置き換え)。付けてから外す — 逆だと失敗時に印が全部消える。 */
+    /** 付けてから外す絵文字。逆順だと失敗時にリアクションが全部消える。 */
     readonly clear?: string
   }
-  /** 添付する画像。実体は media に置き、ここには参照だけ渡す。最初の1通に載る。 */
+  /** media の参照。最初の1通に添付する。 */
   readonly files?: readonly { readonly sha: string; readonly mediaType: string; readonly name?: string }[]
 }
 
@@ -111,80 +81,62 @@ export interface Outbound {
   readonly actions: readonly OutboundAction[]
 }
 
-/** ユーザーから返ってきた1件。押したリアクションも自由文も、同じ形にして返す。 */
 export interface Inbound {
   readonly id: string
   readonly text: string
   readonly draft?: { readonly id: string; readonly decision: DraftDecision }
   readonly proposal?: { readonly id: string; readonly decision: ProposalDecision }
-  /** 添付されていた画像。取得はここでは行わない — URL を渡し、保存は inbox 側が持つ。 */
+  /** 取得と保存は inbox が行う。 */
   readonly images?: readonly { url: string; mediaType: string; name?: string; size: number }[]
 }
 
-/**
- * 1回読んだぶんと、まだ DB に書いていない既読位置。
- *
- * 読むことと記録することを分けてあるのは、記録前に cursor が進むと、記録が失敗した回の項目が
- * 二度と読まれないから。絞り込みは id の比較なので、cursor 以前の項目はチャンネルに残って
- * いても拾えない。
- */
+/** 読み取りと cursor の記録を分ける。記録前に cursor が進むと、記録に失敗した項目は二度と読まれない。 */
 export interface Batch {
-  /** 届いた順に並べたもの。 */
   readonly items: readonly Inbound[]
-  /** チャンネルごとの新しい cursor。`commitInboundBatch` を呼ぶまで DB には入らない。 */
+  /** `commitInboundBatch` を呼ぶまで DB には入らない。 */
   readonly marks: Readonly<Record<string, string>>
-  /** このbatchで押下を確認したmessage。commit時点の最新一覧からだけ削除する。 */
+  /** commit 時点の最新の待ち一覧からだけ削除する。 */
   readonly consumedTapIds: readonly string[]
-  /** 最後に自由文が来たチャンネル。返事はここへ出す。 */
+  /** 最後に自由文が来たチャンネル。返事はここへ送る。 */
   readonly heard?: string
-  /** `heard`を決めたメッセージ。並行batchが返信先を巻き戻さないために使う。 */
+  /** 並行する batch が返信先を古いほうへ戻さないために使う。 */
   readonly heardAt?: string
-  /** owner自由文を保存するeventへ引き継ぐ、messageごとの受信場所。 */
   readonly locations?: Readonly<Record<string, string>>
 }
 
 const token = (): string | undefined => appConfig().discord.token
 const ownerId = (): string | undefined => appConfig().discord.ownerId
 
-/** 用途ごとの出し先。Config境界で空文字は「指していない」として除かれる。 */
 const fixedChannel = (to: Desk): string | undefined => appConfig().discord.channels[to]
 
-/** 待っているリアクション。`{ メッセージid: { 絵文字: 返る文 } }` を schema_meta に置く。 */
+/** schema_meta に `{ メッセージid: { 絵文字: PendingTap } }` で置く。 */
 interface PendingTap {
   readonly reply: string
   readonly draft?: { readonly id: string; readonly decision: DraftDecision }
   readonly proposal?: { readonly id: string; readonly decision: ProposalDecision }
-  /** outboundがsentになる前の押下を消費しないための永続参照。旧metadataには無い。 */
+  /** outbound が sent になる前の押下を消費しないため。古い行には無い。 */
   readonly outboundId?: string
-  /** 最新一覧から落ちたmessageを直接確認するための配送先。旧metadataには無い。 */
+  /** 最新一覧に無い message を直接確認するため。古い行には無い。 */
   readonly channelId?: string
 }
 type Pending = Record<string, Record<string, PendingTap>>
 
-/** 完了済みoutboundについて覚えておくリアクション待ちの数。古いものから落とす。 */
+/** 完了済み outbound のリアクション待ちの保持数。古いものから捨てる。 */
 const MAX_PENDING = 20
 
-/**
- * 読み続けるスレッドの数。リアクションが押されても閉じない — 「直す」を押した後に何を直すかが
- * 書かれる。古いものから落ちる。1つ増えるごとに poll が30秒ごとに読む先が1つ増える。
- */
+/** リアクション後も読み続ける(「直す」の後に指摘が書かれる)。1つ増えるごとに poll の GET が1つ増える。 */
 const MAX_THREADS = 3
 
-/**
- * `pollInbound()` が同時に出す GET の上限。
- * 読む先は talk / draft / log / DM の最大4件と、スレッド最大3件で合計7件。
- * rate-limit bucket の分離は保証ではないため、ここでは並列数だけを8に制限する。
- */
+/** 読む先は最大7件(talk / draft / log / DM とスレッド3件)。 */
 const FETCH_AT_ONCE = 8
-/** Discordの一覧APIが1回に返せる最大件数。 */
+/** 一覧 API が1回に返せる最大件数。 */
 const MESSAGE_PAGE_SIZE = 100
 /**
- * 添付HTTPの最大60秒と送信準備に同じだけ余裕を取り、並行workerが処理中のactionを閉じない。
- * ceiling: 添付の読込とFormData生成が60秒を超える規模になったらclaimのheartbeatへ替える。
+ * 添付 HTTP の最大60秒に送信準備の分を足す。並行 worker が処理中の action を閉じないため。
+ * 添付の準備が60秒を超えるようになったら claim の heartbeat に替える。
  */
 const SENDING_STALE_MS = 120_000
 
-/** `GET /channels/{id}/messages` の応答のうち使うフィールド。 */
 interface RawMessage {
   readonly id: string
   readonly content: string
@@ -202,10 +154,8 @@ interface RawUser {
   readonly id: string
 }
 
-/** 画像として受ける添付の上限。これより大きいものは記述もできないまま容量だけ食う。 */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
-/** 添付から画像だけを拾う。画像以外(zip・pdf)は今は受けない。 */
 const imagesOf = (m: RawMessage): { url: string; mediaType: string; name?: string; size: number }[] =>
   (m.attachments ?? [])
     .filter(
@@ -297,17 +247,16 @@ const isRawMessage = (value: unknown): value is RawMessage => isRawMessages([val
 const isRawUsers = (value: unknown): value is RawUser[] =>
   Array.isArray(value) && value.every((user) => isRecord(user) && typeof user.id === "string")
 
-/** snowflake は上位ビットに生成時刻を持つ。文字列比較を避け、同時刻内は数値順で扱う。 */
+/** snowflake は桁数が変わるので文字列比較しない。 */
 const newer = (a: string, b: string): boolean => BigInt(a) > BigInt(b)
 
-/** 字数で切る位置。改行で切る。後半に改行が無ければ LIMIT で切る。 */
+/** 後半に改行が無ければ LIMIT で切る。 */
 const charCut = (s: string): number => {
   if (s.length <= LIMIT) return s.length
   const nl = s.lastIndexOf("\n", LIMIT)
   return nl > LIMIT / 2 ? nl : LIMIT
 }
 
-/** 行数で切る位置。LINES 行目の末尾。足りなければ切らない。 */
 const lineCut = (s: string): number => {
   let at = -1
   for (let n = 0; n < LINES; n++) {
@@ -318,7 +267,6 @@ const lineCut = (s: string): number => {
   return at
 }
 
-/** 字数と行数の、先に来たほうで切る。 */
 const chunks = (text: string): string[] => {
   const out: string[] = []
   let rest = text
@@ -342,11 +290,11 @@ const makeDiscord = () =>
           ...init,
           headers: {
             authorization: `Bot ${token()}`,
-            // multipart(添付)は fetch に boundary を書かせる。content-type を固定すると壊れる。
+            // multipart は fetch が boundary を付けるので、content-type を固定しない。
             ...(init?.body instanceof FormData ? {} : { "content-type": "application/json" }),
             ...(init?.headers ?? {}),
           },
-          // 添付は 8MB まで受けるので、既定の 10 秒では上りが間に合わないことがある
+          // 添付は 8MB まであり、10 秒では送信が終わらないことがある。
           signal: AbortSignal.timeout(init?.body instanceof FormData ? 60_000 : 10_000),
         }),
       )
@@ -429,7 +377,7 @@ const makeDiscord = () =>
       if (!owner) return Effect.succeed(false)
       return Effect.gen(function* () {
         let after: string | undefined
-        // ceiling: 1絵文字へ1万人超が反応する運用になったら、承認用の別入力へ替える。
+        // 100 ページ(1万人)まで。これを超える反応数を扱うなら承認の入力方法を替える。
         for (let page = 0; page < 100; page++) {
           const query = new URLSearchParams({ limit: "100", ...(after ? { after } : {}) })
           const path = `/channels/${ch}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}?${query}`
@@ -452,8 +400,7 @@ const makeDiscord = () =>
       })
     }
 
-    // ── 進行表示。台帳(discord_outbound)を通さない直接送信。進行中にだけ意味がある表示で、
-    // 受領証も再送も要らない — 失敗しても表示が出ないだけで、処理には関わらせない。
+    // 進行表示は discord_outbound を通さずに直接送る。再送は不要で、失敗は無視する。
     const typing = (channelId: string): Effect.Effect<void> =>
       call(`/channels/${channelId}/typing`, { method: "POST" }).pipe(
         Effect.map(() => undefined),
@@ -486,11 +433,7 @@ const makeDiscord = () =>
         Effect.catch(() => Effect.void),
       )
 
-    /**
-     * 進行表示の1本化。typing を打ち続け、内容が変わったときだけ1通を post→edit で更新し、
-     * 終わりに delete する。post に失敗した tick は shown を進めない — 次の tick が再試行になる。
-     * tick の重なりは捨てる(遅い HTTP の上に次の tick を積まない)。
-     */
+    /** post に失敗した tick は shown を進めず、次の tick で再試行する。重なった tick は捨てる。 */
     const progressFor = (channelId: string) => {
       let wanted = ""
       let shown = ""
@@ -535,14 +478,9 @@ const makeDiscord = () =>
         }),
       )
 
-    /** DM を開く HTTP は flushQueued だけが行う。ここでは永続 cache だけを見る。 */
+    /** DM を開く HTTP は flushQueued だけが行う。 */
     const dm = (): Effect.Effect<string | undefined, DbFailed> => db.meta("discord:dm")
 
-    /**
-     * 出す先を決める。`talk` は最後に話しかけられたチャンネルが最優先。
-     * `log` は指してあるチャンネルにしか出さない — 落とす先を持たせると進み具合の1行が
-     * 会話や DM に混ざる。
-     */
     const channel = (to: Desk = "talk"): Effect.Effect<{ id?: string; dm: boolean } | undefined, DbFailed> =>
       Effect.gen(function* () {
         if (!token() || !ownerId()) return undefined
@@ -568,10 +506,10 @@ const makeDiscord = () =>
       | {
           readonly kind: "message"
           readonly channelId?: string
-          /** 出す先を、先行する thread action の受領証(threadId)から取る。channelId より優先。 */
+          /** 先行する thread action の receipt の threadId に送る。channelId より優先。 */
           readonly threadOrdinal?: number
           readonly message: Record<string, unknown>
-          /** 添付する画像の参照。実体は media にあり、送信時に読む。 */
+          /** 実体は送信時に media から読む。 */
           readonly files?: readonly {
             readonly sha: string
             readonly mediaType: string
@@ -598,7 +536,6 @@ const makeDiscord = () =>
           readonly channelId: string
           readonly messageId: string
           readonly emoji: string
-          /** true なら自分のリアクションを外す(DELETE)。 */
           readonly remove?: true
         }
 
@@ -733,7 +670,7 @@ const makeDiscord = () =>
         }
       })
 
-    /** 宛先と全 HTTP action を確定して永続化する。ここでは network に触れない。 */
+    /** 宛先と全 HTTP action を確定して永続化するだけで、network には触れない。 */
     const enqueue = (p: Enqueue): Effect.Effect<Outbound | undefined, DbFailed | Conflict> =>
       Effect.gen(function* () {
         const destination = yield* channel(p.to)
@@ -760,7 +697,6 @@ const makeDiscord = () =>
             })
         }
         const parts = p.text === "" ? [] : chunks(head + p.text)
-        // 添付だけの投稿(本文なし)は、空本文の1通を立てて載せる
         if ((p.files?.length ?? 0) > 0 && parts.length === 0) parts.push("")
         const messageOrdinals: number[] = []
         for (const [partIndex, content] of parts.entries()) {
@@ -774,7 +710,6 @@ const makeDiscord = () =>
           })
         }
         const lastMessage = messageOrdinals.at(-1)
-        // ack だけの投稿(本文なし)は成立する。本文もリアクションも無いものは出さない。
         if (lastMessage === undefined && !p.ack) return undefined
         if (p.thread && lastMessage !== undefined) {
           const threadOrdinal = actionSpecs.length
@@ -871,7 +806,7 @@ const makeDiscord = () =>
         return yield* getOutbound(id)
       })
 
-    /** 受信開始時にも従来どおり DM を解決するが、HTTP より先に open_dm action を残す。 */
+    /** HTTP より先に open_dm action を記録する。 */
     const ensureDmQueued = (): Effect.Effect<void, DbFailed> =>
       Effect.gen(function* () {
         const owner = ownerId()
@@ -923,12 +858,11 @@ const makeDiscord = () =>
       Effect.gen(function* () {
         const at = nowIso()
         const staleAt = new Date(Date.now() - SENDING_STALE_MS).toISOString().replace(/\.\d{3}Z$/, "Z")
-        // HTTP timeoutを超えて残った action は結果を判定できない。再送せず unknown で閉じる。
+        // HTTP timeout を超えて sending のままの action は結果を判定できないので、再送せず unknown にする。
         const reconciledIds = filter
           ? []
           : yield* db.withImmediateTransaction("close interrupted Discord outbound", (tx) => {
-              // 旧版はHTTP開始前やreceipt保存後の停止まで親だけunknownにしていた。action側に
-              // 曖昧性が無い行だけを再調停へ戻す。現行版のunknownにはunknown actionがあるため対象外。
+              // 親だけが unknown で、action に曖昧さが無い古い行を再調停に戻す。
               const legacySafe = tx.all(
                 `SELECT id FROM discord_outbound o
               WHERE state='unknown' AND error='interrupted during HTTP'
@@ -960,8 +894,7 @@ const makeDiscord = () =>
                 at,
                 staleAt,
               )
-              // 旧版はreaction receiptとtap metadataを別transactionで保存していた。親を再開する前に
-              // 到達可能だった中間状態を補修する。現行版の行に対しても同じ値を書くので冪等。
+              // reaction の receipt と tap が別 transaction で保存された古い行を、再開前に補修する。冪等。
               const recovered = tx.all(
                 `SELECT a.outbound_id,a.ordinal,a.kind,a.spec,a.receipt
                FROM discord_outbound_actions a
@@ -1009,7 +942,7 @@ const makeDiscord = () =>
                 at,
                 staleAt,
               )
-              // receipt済みで曖昧なHTTPが無ければ、残りの未着手actionだけを安全に再開できる。
+              // 曖昧な HTTP が無ければ、未着手の action だけを再開できる。
               tx.run(
                 `UPDATE discord_outbound SET state='queued',updated_at=?
               WHERE state='sending' AND updated_at<?
@@ -1024,7 +957,7 @@ const makeDiscord = () =>
                 at,
                 staleAt,
               )
-              // 最後のreceipt直後に停止した場合は、HTTPを繰り返さず親だけを完了させる。
+              // 全 action が succeeded なら HTTP を繰り返さず親だけを完了させる。
               tx.run(
                 `UPDATE discord_outbound SET state='sent',updated_at=?
               WHERE state='sending' AND updated_at<?
@@ -1142,7 +1075,7 @@ const makeDiscord = () =>
                     f.bytes !== undefined,
                 )
               if (found.length > 0) {
-                // 実体が読めた添付だけ載せる。参照切れで投稿ごと落とさない。
+                // 読めない添付があっても投稿は送る。
                 const form = new FormData()
                 const attachments = found.map((f, i) => ({
                   id: i,
@@ -1187,7 +1120,7 @@ const makeDiscord = () =>
                 requested.success.status >= 400 && requested.success.status < 500 ? "failed" : "unknown"
               error = `HTTP ${requested.success.status}`
             } else if (spec.kind === "reaction" || spec.kind === "ack") {
-              // リアクションの PUT / DELETE は 204 で本文が無い。受領証は status で足りる。
+              // リアクションの PUT / DELETE は 204 で本文が無い。
               outcome = "succeeded"
               receipt = { status: requested.success.status }
             } else {
@@ -1298,7 +1231,7 @@ const makeDiscord = () =>
                 id,
                 claimAt,
               )
-              // Bun reports trigger updates in `changes` too。0だけがclaimを失った場合。
+              // Bun は trigger による更新も `changes` に数えるので、claim を失ったと判定できるのは 0 だけ。
               if (sent.changes === 0) return
               prunePendingTaps(tx)
             })
@@ -1326,12 +1259,11 @@ const makeDiscord = () =>
         )
         .pipe(Effect.map(Boolean))
 
-    /** 読みに行くチャンネル。出す先すべてと DM、立てたスレッド。 */
     const listening = (): Effect.Effect<readonly string[], DbFailed> =>
       Effect.gen(function* () {
         if (!token()) return []
         const out = new Set<string>()
-        // log も読む。返事を求めないチャンネルでもユーザーが書くことはある。
+        // 返事を求めない log にもユーザーが書くことがある。
         for (const to of ["talk", "draft", "log"] as const) {
           const fixed = fixedChannel(to)
           if (fixed) out.add(fixed)
@@ -1342,23 +1274,13 @@ const makeDiscord = () =>
         return [...out]
       })
 
-    /**
-     * そのチャンネルの cursor。持っていなければ undefined(取り込まずに cursor だけ進める)。
-     */
     const cursorOf = (ch: string): Effect.Effect<string | undefined, DbFailed> =>
       db.meta(`discord:last:${ch}`)
 
     /**
-     * 返ってきたものを読む。リアクションと自由文を同じ形で返す。自由文はcursorまで一覧を遡り、
-     * 一覧から落ちたリアクション待ちはmessage IDで直接確認する。
-     *
-     * cursor は進めない。進めるのは `commitInboundBatch`。
-     *
-     * cursor を持たないチャンネルは自由文を取り込まず cursor だけ返す。DM には過去の会話が
-     * 残っていて、cursor なしで引くと去年の発言が今日の入力になる。リアクションは対象外
-     * (自分が出したメッセージにしか登録されていない)。
-     *
-     * 取得失敗は失敗として返す。空配列だけを「届いていない」と扱う。
+     * cursor は進めない(`commitInboundBatch` が進める)。
+     * cursor の無いチャンネルは自由文を取り込まない。DM の過去の会話が今日の入力になるため。
+     * 取得失敗は失敗として返し、空配列と区別する。
      */
     const pollInbound = (): Effect.Effect<Batch, DbFailed | ConnectorFailed> =>
       Effect.gen(function* () {
@@ -1412,16 +1334,13 @@ const makeDiscord = () =>
         const marks: Record<string, string> = {}
         const locations: Record<string, string> = {}
         let heard: string | undefined
-        // 比較用に、`heard` を決めたときのメッセージ id を別に持つ。`heard` はチャンネル id なので、
-        // それと m.id を比べると常に m.id のほうが新しくなる(チャンネルはその中のどの
-        // メッセージよりも先に作られる)。
+        // `heard` はチャンネル id なので、m.id との新旧比較にはメッセージ id を別に持つ。
         let heardAt: string | undefined
 
         const cursors = new Map<string, string | undefined>()
         for (const ch of channels) cursors.set(ch, yield* cursorOf(ch))
 
-        // チャンネル間のGETだけ並列にする。各チャンネル内は最初の高水位からcursorへ順に遡る。
-        // 下の処理は直列のまま — `pending` の消し込み、`heard`、`marks` の順序に依存する。
+        // 並列にするのはチャンネル間の GET だけ。下の処理は `pending`・`heard`・`marks` の順序に依存する。
         const fetched = yield* Effect.all(
           channels.map((ch) =>
             Effect.gen(function* () {
@@ -1498,7 +1417,7 @@ const makeDiscord = () =>
             const tap = waiting[name]
             const outboundId = tap?.outboundId ?? pendingOutbounds.get(message.id)
             const ready = tap && (!outboundId || tapReady.get(outboundId) === true)
-            // 集計値は候補の絞り込みにしか使わない。誰が押したかは users API で照合する。
+            // count は候補の絞り込みにだけ使い、押した人は users API で照合する。
             if (ready && reaction.count > (reaction.me ? 1 : 0)) {
               tapCandidates.push({ messageId: message.id, channelId, name, tap })
             }
@@ -1508,9 +1427,9 @@ const makeDiscord = () =>
         for (const { ch, cursor, msgs } of fetched) {
           if (!msgs?.length) continue
 
-          // 古い順に見る。API は新しい順で返す。
+          // API は新しい順で返す。
           for (const m of [...msgs].reverse()) {
-            // 画像だけのメッセージ(本文なし)も1件として受ける。本文の空チェックだけだと黙って落ちる。
+            // 本文が空で画像だけのメッセージも受ける。
             const images = m.author.id === owner ? imagesOf(m) : []
             if (
               cursor &&
@@ -1520,8 +1439,7 @@ const makeDiscord = () =>
             ) {
               out.push({ id: m.id, text: m.content, ...(images.length > 0 ? { images } : {}) })
               locations[m.id] = ch
-              // 一番新しい自由文のチャンネルを覚える。リアクションでは動かさない
-              // (押すのは前に出したものへの返事で、話しかけられたのとは違う)。
+              // リアクションでは返信先を変えない。
               if (heardAt === undefined || newer(m.id, heardAt)) {
                 heard = ch
                 heardAt = m.id
@@ -1574,7 +1492,6 @@ const makeDiscord = () =>
         }
 
         return {
-          // チャンネルをまたいで snowflake の時刻順に並べる。同一ミリ秒内は id の数値順。
           items: out.sort((a, b) => (newer(a.id.split(":")[0] ?? "0", b.id.split(":")[0] ?? "0") ? 1 : -1)),
           marks,
           consumedTapIds: [...consumedTapIds],
@@ -1584,10 +1501,7 @@ const makeDiscord = () =>
         } satisfies Batch
       })
 
-    /**
-     * cursor を DB に書く。`pollInbound` の返り値を記録し終えた側が呼ぶ。
-     * 呼ばずに終えた回は次に同じものをもう一度読む。
-     */
+    /** `pollInbound` の返り値を記録し終えてから呼ぶ。 */
     const commitInboundBatch = (b: Batch): Effect.Effect<void, DbFailed> =>
       db.withImmediateTransaction("commit Discord inbound", (tx) => {
         let currentHeardAt = tx.get("SELECT value FROM schema_meta WHERE key='discord:heard_at'")?.value
@@ -1657,13 +1571,8 @@ const makeDiscord = () =>
         )
       })
 
-    /** 出せるか。CLI の表示にだけ使う。 */
     const configured = (): boolean => token() !== undefined && ownerId() !== undefined
 
-    /**
-     * いまどのチャンネルに出るか。CLI の表示にだけ使う。
-     * `talk` は最後に話しかけられたチャンネルで動くので、固定Configだけでは分からない。
-     */
     const where = (): Effect.Effect<{ talk?: string; draft?: string; log?: string; dm?: string }, DbFailed> =>
       Effect.gen(function* () {
         const talk = yield* channel("talk")

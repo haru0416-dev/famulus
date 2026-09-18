@@ -1,13 +1,7 @@
 /**
- * 調査モード。`wide` / `deep` は researcher と同じループへの指示の重ね、
- * `explore` は決められた fan-out — コード側が変形別の独立分岐を起動する。
- *
- * 分岐が受け取るのは**種となる問いと自分の変形だけ**。兄弟の結果も親の予想も渡さない —
- * 渡すと2件目が1件目の語彙を引き継いで、同じ観点しか見なくなる(観測済みの失敗)。
- * 予想と除外予定は親が dossier に observation として先に固定する(src/services/Research.ts)。
- *
- * 全方向を毎回走らせるかは
- * 呼ぶ側が決める(既定は全7 — 比較評価が終わるまで explore は opt-in のまま)。
+ * `wide` / `deep` は researcher のループに指示を足すだけ。`explore` はコードが変形ごとの独立分岐を起動する。
+ * 分岐には種の問いと自分の変形だけを渡す。兄弟の結果や親の予想を渡すと、語彙を引き継いで同じ観点しか見なくなる。
+ * 予想と除外予定は親が先に dossier へ記録する(src/services/Research.ts)。
  */
 import type { LanguageModelV4 } from "@ai-sdk/provider"
 import { Output, stepCountIs, ToolLoopAgent, type ToolSet } from "ai"
@@ -34,7 +28,6 @@ export const EXPLORE_TRANSFORMS: readonly ExploreTransform[] = [
   "human",
 ]
 
-/** 変形 → 探すもの。 */
 export const TRANSFORM_GOAL: Record<ExploreTransform, string> = {
   direct: "同じ問題の別製品、別実装、別研究",
   structural: "名前は違うが入力、失敗、評価の構造が同じもの",
@@ -45,9 +38,9 @@ export const TRANSFORM_GOAL: Record<ExploreTransform, string> = {
   human: "人間や組織で同じ現象を扱う分野",
 }
 
-/** 分岐1本の構造化出力。conclusion は作らせない — 統合は分岐の仕事ではない。 */
+/** conclusion は作らせない。統合は親が行う。 */
 const BRANCH_OBJECT = v.object({
-  // 必須欄にするのは、指示で「予想を書け」と言っても書かれない回があるため。schema なら欠けない。
+  // 指示だけでは予想が書かれない回があるので、schema の必須欄にする。
   expected: v.pipe(
     v.string(),
     v.description("検索する前に書く: この方向で何が出ると思うか1行。予想どおりなら確認、外れたら発見。"),
@@ -76,10 +69,7 @@ const BRANCH_OBJECT = v.object({
 const BRANCH_SCHEMA = rs(BRANCH_OBJECT)
 export type BranchOutput = v.InferOutput<typeof BRANCH_OBJECT>
 
-/**
- * 分岐への指示。決定的に組む — モデルにブリーフを書かせない(親が都合のよいブリーフだけを
- * 選ぶ余地を残さないのが fan-out をコードに置く理由)。
- */
+/** 親が都合のよいブリーフを選べないよう、モデルに書かせずコードで組む。 */
 export function branchBrief(
   seed: string,
   transform: ExploreTransform,
@@ -108,11 +98,7 @@ export function branchBrief(
   ].join("\n")
 }
 
-/**
- * wide への指示の重ね。件数を持たせるのが要点 — 持たせないと3件で満足して帰ってくる。
- * テンプレートを世代固定の対象にする(Skill 登録 — src/agent/skills.ts)。件数は task 入力で、
- * Skill の文面ではない — 埋めても Skill の世代は変わらない。
- */
+/** 件数を指定しないと3件で止まる。件数は placeholder で、埋めても Skill の世代は変わらない。 */
 export const WIDE_TEMPLATE = [
   "**wide モード**: 条件を満たすものを {targetCount} 件まで列挙する。",
   "1件 = claim 1つ(observation)。それぞれに evidence を付ける。",
@@ -124,7 +110,6 @@ export function wideInstructions(targetCount: number): string {
   return WIDE_TEMPLATE.replaceAll("{targetCount}", String(targetCount))
 }
 
-/** deep への指示の重ね。対象1つを一次資料で確かめる。 */
 export const DEEP_TEXT = [
   "**deep モード**: 対象は1つ。一次資料(公式ページ・リポジトリ・仕様書)まで開いて確かめる。",
   "検索の索引で止まらない — 一次資料を開けなかったら、その旨を limitations に書いて未確認として返す。",
@@ -143,16 +128,13 @@ export interface BranchOutcome {
   readonly snapshots: readonly Snapshot[]
   readonly steps: number
   readonly elapsedMs: number
-  /** 分岐の実行が失敗した場合の理由。output は空扱いになる。 */
+  /** 失敗時は output を空として扱う。 */
   readonly failed?: string
 }
 
 /**
- * 引用照合できる claim だけを残す(照合はサービス側と同じ規則: 2xx で取得した本文に quote が
- * そのまま含まれること)。落とした claim は文の一覧で返す — 記録側で throw させると、
- * 1件の照合失敗が委譲まるごとを捨てさせ、親が同じ委譲を再試行して手数を浪費する(実測:
- * 2026-08-17 の watch 回で researcher 3連続失敗)。捏造を止める最終検証は記録側に残したまま、
- * 残せる分をここで残す。
+ * 照合規則は記録側と同じ(2xx の本文に quote がそのまま含まれる)。記録側で throw すると1件の失敗で
+ * 委譲ごと捨てられ、親が同じ委譲を再試行するので、ここで落として一覧で返す。最終検証は記録側に残す。
  */
 export function salvageClaims<
   C extends { readonly statement: string; readonly evidence: readonly { url: string; quote: string }[] },
@@ -169,7 +151,7 @@ export function salvageClaims<
   return { kept, dropped }
 }
 
-/** 兄弟間の重複を可視化する。消さない — 重複は「同じ候補に別方向から当たった」という情報。 */
+/** 重複は消さない。同じ候補に別方向から到達したという情報になる。 */
 export function findDuplicates(
   branches: readonly BranchOutcome[],
 ): readonly { statement: string; transforms: readonly ExploreTransform[] }[] {
@@ -190,26 +172,23 @@ export function findDuplicates(
   return [...seen.values()].filter((e) => e.transforms.length > 1)
 }
 
-/**
- * 締切に応じて道具を絞る。残りが少ない分岐は fetch(1回20秒級)を
- * 止めて search だけにし、さらに少なければ道具を全部止めて手持ちで書かせる。
- */
+/** fetch は1回が長いので、残り時間が減ったら search より先に外す。 */
 export function activeToolsFor(leftMs: number): readonly string[] | undefined {
   if (leftMs < 45_000) return []
   if (leftMs < 90_000) return ["search"]
-  return undefined // 制限なし
+  return undefined
 }
 
 export interface BranchDeps {
-  /** 統治つきモデル(governedModel)。分岐ごとの検査と会計はこの中で掛かる。 */
+  /** governedModel。分岐ごとの検査と会計はこの中で行う。 */
   readonly model: LanguageModelV4
-  /** 収集器つきの道具(search / fetch)。ゲートは呼ぶ側が掛けて渡す。 */
+  /** ゲートは呼ぶ側が付けて渡す。 */
   readonly makeTools: (collector: Snapshot[]) => ToolSet
   readonly maxSteps: number
   readonly signal?: AbortSignal
 }
 
-/** 分岐1本を実行する。失敗しても投げない — 空振りと同じく1件の結果として返す。 */
+/** 失敗しても例外にせず、空振りと同じく1件の結果として返す。 */
 async function runBranch(
   deps: BranchDeps,
   seed: string,
@@ -262,10 +241,7 @@ async function runBranch(
   }
 }
 
-/**
- * 決められた fan-out。同時実行は絞る — 分岐は互いの結果を見ないので順序は結果に影響しない。
- * 1本の失敗は他を止めない(all-settled 相当)。
- */
+/** 分岐は互いの結果を見ないので、実行順は結果に影響しない。 */
 export async function runExplore(
   deps: BranchDeps,
   seed: string,
@@ -283,7 +259,7 @@ export async function runExplore(
     }
   })
   await Promise.all(workers)
-  // 実行順は同時実行で揺れる。記録と比較を安定させるため、宣言順に並べ直す。
+  // 記録と比較を安定させるため、宣言順に並べ直す。
   branches.sort((a, b) => transforms.indexOf(a.transform) - transforms.indexOf(b.transform))
   return { branches, duplicates: findDuplicates(branches) }
 }

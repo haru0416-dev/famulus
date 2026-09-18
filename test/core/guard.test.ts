@@ -19,7 +19,6 @@ describe("evaluateCommand — 素直な破壊コマンド", () => {
   test("find -delete", () => deny("find . -name '*.ts' -delete"))
 })
 
-// GuardFall のバイパス5クラス(A-E)。生regexは破られるが評価器は防ぐべき。
 describe("evaluateCommand — バイパスクラス A-E", () => {
   test("Class A: quote除去 r''m", () => deny("r''m -rf /tmp/x"))
   test('Class A: "r"m', () => deny('"r"m -rf build'))
@@ -35,11 +34,7 @@ describe("evaluateCommand — バイパスクラス A-E", () => {
   test("Class E: dd 代替", () => deny("dd of=/dev/nvme0n1 if=/dev/zero"))
 })
 
-// Class F: 連結・グルーピングによる「safe && dangerous」型の構造的持ち込み
-// (②着手ゲート 2026-07-10、opencodeのbash AST解析に触発された回帰)。
-// トークン列全体を走査する評価器は連結を素通り防止できるが、空白なしで語に
-// 接着した ( ) { } はセパレータでないと base() が実効コマンド頭を取り違える —
-// tokenizeでグルーピング記号を独立トークン化して閉じた。
+// 空白なしで語に接した ( ) { } を区切りとして扱わないと、base() がコマンド名を取り違える。
 describe("evaluateCommand — バイパスクラス F(連結・グルーピング)", () => {
   test("&& 連結の後段", () => deny("echo hi && rm -rf /"))
   test("; 連結の後段", () => deny("true; rm -rf ~"))
@@ -123,7 +118,7 @@ describe("evaluateCommand — reviewerロール(read-only強制、experiments/05
   })
 
   test("ファイル変異コマンドは遮断", () => {
-    rdeny("rm foo.txt") // 非再帰でもreviewerは不可
+    rdeny("rm foo.txt")
     rdeny("mv a b")
     rdeny("cp a b")
     rdeny("touch marker")
@@ -178,8 +173,6 @@ describe("reviewer-redirect の >&(Reviewer live probeで発見されたバイ�
     expect(r("bun test 2>&-")).toBe("allow")
   })
 })
-
-// ---- 拡張フックイベントの評価器(実験08、851765d) --------------------------------
 
 import { evaluateFileRead, evaluateMcp, evaluateToolUse } from "../../src/core/guard.ts"
 

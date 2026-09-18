@@ -1,14 +1,7 @@
 /**
- * GPT 経路の実装。`~/.codex/auth.json` の OAuth トークンで Codex の Responses API を直接呼ぶ。
- * ログインは持たない — 資格情報は Codex CLI(`codex login`)が作り、ここは読むだけ。
- *
- * 使うのは精査役(reviewer)だけ。ChatGPT Pro x5 は SuperGrok より小さい枠なので、
- * 高頻度の役をここへ載せない(役の割当は src/model/Runner.ts の ROLE_MODEL)。
- *
- * 上流の制約。どちらも外すと 400 で拒否される:
- *  - `store` は false。
- *  - `stream` は true。**非ストリームの `doGenerate` は使えない**ので、
- *    doStream の出力をまとめて doGenerate を作る(xai 経路と同じ `collect`)。
+ * `~/.codex/auth.json` の OAuth トークンで Codex の Responses API を直接呼ぶ。資格情報は `codex login` が作り、
+ * ここは読むだけ。枠が SuperGrok より小さいので高頻度の役を載せない。
+ * 上流は `store: false` と `stream: true` 以外を 400 で拒否するので、doGenerate は doStream の出力をまとめて作る。
  */
 
 import { randomUUID } from "node:crypto"
@@ -33,13 +26,10 @@ import { callResponses, collectResponses } from "./responses-call.ts"
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
-/** `providerMetadata` の鍵。統治の middleware がここからクォータシグナルを読む。 */
+/** 統治の middleware がここからクォータシグナルを読む。 */
 export const CODEX_PROVIDER_META = "codex-oauth"
 
-/**
- * Codex CLI が送る originator。これを外すとバックエンドが受け付けない。
- * 版番号は資格情報の生成元(`codex login` を実行した CLI)に合わせてある。
- */
+/** 外すとバックエンドが受け付けない。版番号は `codex login` を実行した CLI に合わせる。 */
 const CODEX_USER_AGENT = `codex_cli_rs/0.144.6 (${process.platform}; ${process.arch}) famulus`
 
 const authPath = (): string => appConfig().paths.codexAuth
@@ -77,11 +67,8 @@ function readAuth(): CodexAuth {
 }
 
 /**
- * 応答ヘッダ → クォータシグナル。
- *
- * `x-codex-primary-*` が主クォータ、`x-codex-secondary-*` が短い窓。
- * Governance は pool ごとに1つしか持たないので、使用率の高いほうを渡す —
- * 先に上限へ達するのはそちらで、使用率の低いほうを渡すと上限に達していても呼び出しに行く。
+ * `x-codex-primary-*` が主クォータ、`x-codex-secondary-*` が短い窓。Governance は pool ごとに1つしか
+ * 持たないので、先に上限へ達する使用率の高いほうを渡す。
  */
 export function quotaFromHeaders(
   headers: Record<string, string | undefined>,
@@ -122,7 +109,7 @@ const quotaJson = (q: QuotaSignal): JSONObject => ({
   ...(q.exhausted !== undefined ? { exhausted: q.exhausted } : {}),
 })
 
-/** 上流の失敗を、統治が読める型に変換する。429 だけはクォータシグナルを付けて返す。 */
+/** 429 だけはクォータシグナルを付けて返す。 */
 function toCodexError(e: unknown, pool: string): ModelCallError {
   if (e instanceof ModelCallError) return e
   const status = (e as { statusCode?: number })?.statusCode
@@ -137,13 +124,10 @@ function toCodexError(e: unknown, pool: string): ModelCallError {
   return new ModelCallError(`codex: ${message}`)
 }
 
-/**
- * Codex の Responses を1つの V4 モデルとして返す。統治は適用されていない —
- * ゲートと会計は呼ぶ側(Runner の makeRunner)が持つ。これを直接使わない。
- */
+/** 統治は適用されていない。ゲートと会計は呼ぶ側(makeRunner)が持つので、直接使わない。 */
 export function codexResponsesModel(modelId: string): LanguageModelV4 {
   const pool = poolForModel(modelId)
-  /** 呼び出しごとに生成する。トークンを毎回読み直し、応答ヘッダをこの呼び出し専用の変数へ記録するため。 */
+  /** トークンを毎回読み直し、応答ヘッダをこの呼び出し専用に記録するため、呼び出しごとに生成する。 */
   const build = (): { model: LanguageModelV4; quota: () => QuotaSignal | undefined } => {
     const headers: Record<string, string | undefined> = {}
     const auth = readAuth()
@@ -151,7 +135,7 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
 
     const provider = createOpenAI({
       baseURL: CODEX_BASE_URL,
-      // 認証は fetch 側で付ける。ここは静的な文字列しか受けないので、更新したトークンを反映できない。
+      // ここは静的な文字列しか受けず更新したトークンを反映できないので、認証は fetch で付ける。
       apiKey: "unused",
       headers: {
         ...(auth.accountId ? { "chatgpt-account-id": auth.accountId } : {}),
@@ -174,10 +158,7 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
     return { model: provider.responses(modelId), quota: () => quotaFromHeaders(headers, Date.now(), pool) }
   }
 
-  /**
-   * 上流が拒否する既定値を上書きする。`strictJsonSchema` を false にする理由は
-   * xai 経路と同じ — valibot 生成のスキーマは任意欄を持ち、strict では 400 になる。
-   */
+  /** `strictJsonSchema` は false。valibot 生成のスキーマは任意欄を持ち、strict では 400 になる。 */
   const prepare = (options: LanguageModelV4CallOptions): LanguageModelV4CallOptions => ({
     ...options,
     providerOptions: {
@@ -186,7 +167,7 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
     },
   })
 
-  /** クォータシグナルを統治が読む欄へ書き出す。従量課金換算額はこの経路では取得できないので 0。 */
+  /** 従量課金換算額はこの経路では取得できないので 0。 */
   const withQuota = (
     meta: LanguageModelV4GenerateResult["providerMetadata"],
     quota: QuotaSignal | undefined,
@@ -220,7 +201,7 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
       } catch (e) {
         throw toCodexError(e, pool)
       }
-      // finish にだけクォータを付ける。ヘッダは応答の先頭で届くので、この時点で取得済み。
+      // ヘッダは応答の先頭で届くので、finish の時点で取得済み。
       return {
         ...result,
         stream: result.stream.pipeThrough(
@@ -239,10 +220,7 @@ export function codexResponsesModel(modelId: string): LanguageModelV4 {
   }
 }
 
-/**
- * Codexを1回呼ぶ構造化処理の入口。src/model/Runner.tsが使う。
- * そちらは道具ループを持たないので、prompt 1つと任意の JSON Schema だけを渡す。
- */
+/** Runner 用。道具ループを持たないので、prompt 1つと任意の JSON Schema だけを渡す。 */
 export async function callCodex(opts: ModelCallOptions) {
   const pool = poolForModel(opts.model)
   try {

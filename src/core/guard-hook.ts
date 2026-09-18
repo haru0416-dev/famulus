@@ -1,16 +1,6 @@
 /**
- * Cursor フックランタイムの入口。stdin の JSON を hook_event_name でディスパッチし、
- * permission JSON を stdout に返す(exit 0 + JSON で allow/deny)。
- *
- * coder の workspace に置いた .cursor/hooks/guard.sh から起動される。role は環境変数
- * ではなく argv で受ける(env を読むのは core/config だけ、の境界を子プロセスでも守る
- * — guard.sh 側が $FAMULUS_CODER_ROLE を argv に展開する)。
- *
- * 対応イベント:
- * - beforeShellExecution: tokenize 評価器(guard.ts)でコマンド評価
- * - preToolUse:           reviewer ロール時に変異系 tool_name を deny
- * - beforeReadFile:       秘密ファイル(.env等)の読取を deny(入口側データフェンス)
- * - beforeMCPExecution:   reviewer は MCP を deny(executor は allowlist 未設定なら素通し)
+ * Cursor フック(.cursor/hooks/guard.sh から起動)。exit 0 + stdout の JSON で allow/deny を返す。
+ * env を読むのは core/config だけなので、role は guard.sh が argv に展開して渡す。
  */
 import { appendFileSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
@@ -24,7 +14,7 @@ import {
 
 export interface HookInput {
   hook_event_name?: string
-  /** shell 系イベントのみ。他イベントは workspace_roots から解決する。 */
+  /** shell 系イベントのみ。 */
   cwd?: string
   workspace_roots?: string[]
   command?: string
@@ -35,15 +25,10 @@ export interface HookInput {
 
 export interface HookDecision {
   verdict: GuardVerdict
-  /** deny 記録に使う説明文字列(コマンド or 疑似コマンド)。 */
   descriptor: string
 }
 
-/**
- * フック入力をイベント別に評価する(純関数、副作用なし)。
- * hook_event_name 欠落時は beforeShellExecution として扱う。
- * 未知のイベント(観測系フック等)は allow — 遮断は登録済みイベントのみの明示設計。
- */
+/** 未知のイベント(観測系フック等)は allow。遮断するのは登録済みイベントだけ。 */
 export function evaluateHookInput(
   input: HookInput,
   role?: string,
@@ -81,7 +66,7 @@ export function evaluateHookInput(
   }
 }
 
-/** deny 時にモデルへ返す説明(英語 — モデル向け注入文字列の方針)。 */
+/** モデル向けの注入文字列は英語で書く。 */
 export function buildAgentMessage(verdict: GuardVerdict): string {
   const rule = verdict.reason ?? "unknown"
   if (rule.startsWith("reviewer-")) {
@@ -103,18 +88,18 @@ export function buildAgentMessage(verdict: GuardVerdict): string {
   )
 }
 
-/** 全 deny を workspace 側の jsonl に残す(ガード誤爆=正当プローブの遮断はここでしか観測できない)。 */
+/** 正当なコマンドの誤遮断はこのログでしか分からない。 */
 function appendDenyLog(cwd: string, entry: Record<string, unknown>): void {
   try {
     const dir = join(cwd, ".agent")
     mkdirSync(dir, { recursive: true })
     appendFileSync(join(dir, "guard-denies.jsonl"), `${JSON.stringify(entry)}\n`)
   } catch {
-    // 計装は best-effort
+    // best-effort
   }
 }
 
-/** stdin → 判定 → stdout。失敗は fail-open(壊れた入力で coder 全体を止めない)。 */
+/** 壊れた入力で coder 全体を止めないよう fail-open。 */
 export async function runGuardHook(
   role: string | undefined,
   stdinText: () => Promise<string>,

@@ -1,9 +1,6 @@
 /**
- * 進み具合の検査。見るのは「報告と記録が分かれているか」。
- *
- * cycle の締めの文は自分で書いた報告なので、そこに「watch を実行した」と書いてあっても
- * 実行したことの証拠にはならない。ここが押さえるのは、報告文を1文字も読まずに
- * 「何を呼んだか」「何行増えたか」が出ること、そしてその2つが食い違ったときに食い違って見えること。
+ * 締めの文はモデル自身の報告で、実行の証拠にならない。
+ * 呼んだ道具と増えた行数は報告文を読まずに出す。
  */
 
 import assert from "node:assert/strict"
@@ -28,7 +25,7 @@ import { Memory } from "../src/services/Memory.ts"
 import { Proposals } from "../src/services/Proposals.ts"
 import { withHarness } from "./helpers.ts"
 
-/** 現行のcycle記録。旧記録を作るときはcycleIdを明示してundefinedにする。 */
+/** 旧記録を作るときは cycleId に undefined を明示する。 */
 const cycleRow = (c: Record<string, unknown>, wroteAt: string) =>
   Effect.gen(function* () {
     const mem = yield* Memory
@@ -61,9 +58,7 @@ test("呼んだ道具の並びは、締めの文と別に残る", async () => {
     assert.deepEqual([...(e.tools ?? [])], ["shell", "shell", "record_watch_run", "workspaces"])
     assert.equal(e.steps, 11)
     assert.equal(e.ms, 305_000)
-    // 報告文はそのまま持つが、道具の並びはそこから作っていない。
     assert.match(e.said, /watch を1本回した/)
-    // Discord は幅が無いので数だけ、`fam journal` は並びごと。どちらも報告文からは作っていない。
     assert.match(dailyPost([e], "2026-08-13"), /- 道具 shell×2 · record_watch_run · workspaces/)
     assert.match(renderJournal([e]), /道具 {4}shell×2 → record_watch_run → workspaces/)
   })
@@ -76,7 +71,6 @@ test("道具を呼んでも何も残らなかった回は、残った行が全�
         {
           cycle: "2026-08-13T06:00:00Z",
           reasons: ["期限が近い承認待ち"],
-          // 報告は「提案を出した」と言っているのに、提案は1件も増えていない。
           said: "承認待ちの件について新しい提案を1件出した。",
           tools: ["propose"],
           steps: 3,
@@ -114,7 +108,7 @@ test("同時に動く二つのcycleと対話の行は混ざらず、過去のsou
         const attention = yield* Attention
         const watch = yield* attention.watch(name, "famulus", { at: sourceAt })
         for (let i = 0; i < count; i++) {
-          // awaitを跨ぐと別の実行が進む。サービス作成時のIDを保持してはいけない。
+          // await を跨ぐと別の実行が進むので、サービス作成時の ID を保持してはいけない。
           yield* Effect.promise(() => Promise.resolve())
           yield* mem.remember({ source: "system", content: { ran: name }, at: sourceAt })
           yield* mem.remember({ source: "system", content: { told: name }, at })
@@ -134,11 +128,10 @@ test("同時に動く二つのcycleと対話の行は混ざらず、過去のsou
           yield* attention.recordWatchRun(watch, name, sourceAt)
           yield* ledger.record({ kind: "run", role: "assistant", usage: { outTok }, at })
         }
-        // 同じcycleでも、モデルを呼んでいない監査行はrun数に入らない。
         yield* ledger.record({ kind: "audit", usage: { outTok: 50_000 }, at })
         if (journal) yield* cycleRow({ cycle: at, said: name }, "2026-08-13T06:01:00Z")
       })
-    // レイヤーは共有する。各書き込み時の非同期contextだけで帰属が決まる。
+    // レイヤーは共有し、帰属は各書き込み時の非同期 context だけで決まる。
     await h.run(Db)
     await Promise.all([
       withCycleContext("cycle-a", async () => {
@@ -184,7 +177,6 @@ test("同時に動く二つのcycleと対話の行は混ざらず、過去のsou
   })
 })
 
-/** 記録を追加する前の回。「モデル未呼び出し」と「記録なし」を区別する。 */
 test("旧記録は周辺の行があっても数量不明になり、日次集計も未帰属を明示する", async () => {
   await withHarness(async (h) => {
     await h.run(
@@ -222,7 +214,7 @@ test("旧記録は周辺の行があっても数量不明になり、日次集�
     assert.doesNotMatch(renderJournal([e]), /0run|何も残らなかった|12345/)
     const one = dailyPost([e], "2026-08-12")
     assert.match(one, /- 道具 記録なし/)
-    // 時間の記録が無い回だけの日は、合計時間を出さない。0秒と出すと一瞬で終わった日に見える。
+    // 0秒と出すと一瞬で終わった日に見えるので、合計時間を出さない。
     assert.match(one, /- 動いた 1回$/m)
     assert.doesNotMatch(one, /計0秒/)
     assert.match(one, /未帰属 1回/)
@@ -253,7 +245,7 @@ test("止まった回は、そのことが記録に残る — 締めの文に書
     const [e] = await h.run(readJournal(5))
     assert.ok(e)
     assert.equal(e.cutOff, "420秒で時間切れ")
-    // 止まったことは上に出す。下に置くと、上だけ読んで全部走り切った日と見分けが付かない。
+    // 上だけ読む人が完走した日と取り違えないよう、止まったことは上に出す。
     const lines = dailyPost([e], "2026-08-13").split("\n")
     assert.match(lines[1] ?? "", /^- \*\*止まった 1回\*\* 420秒で時間切れ$/)
   })
@@ -275,7 +267,6 @@ test("新しい回が上に来る", async () => {
   })
 })
 
-/** cycle の記録ではない system イベント(shell の跡や下書き)を1回ぶんとして数えない。 */
 test("cycle 以外の system イベントは回として並ばない", async () => {
   await withHarness(async (h) => {
     await h.run(
@@ -304,14 +295,8 @@ test("数だけに畳むほうは、離れて呼んだぶんも足す — 多い
 })
 
 /**
- * 狭い画面の幅を検査に入れる。
- *
- * Discord を携帯で読むときに本文へ使える幅はおよそ 40 桁(全角20文字)。
- * 折り返した2行目は左端に戻るので、幅を超えた行はラベルと中身の対応が消える。
- * 揃えた桁で読ませる形に戻したら、ここが落ちる。
- *
- * 見ているのはこちらが組む行だけ。`理由` は digest が書いた文がそのまま入るので、
- * 長さを決められない(超える回はある)。
+ * 携帯の Discord で本文に使える幅はおよそ 40 桁。折り返すとラベルと中身の対応が崩れる。
+ * `理由` は digest の文がそのまま入り長さを決められないので対象外。
  */
 test("Discord に出す行は、携帯の幅に収まる", () => {
   const wide = (c: string): number =>
@@ -401,11 +386,10 @@ test("1日ぶんは合計して1通に畳む — 道具は上位6種+他n種", (
   assert.match(post, /^### 2026-08-17 のまとめ$/m)
   assert.match(post, /- 動いた 2回 \/ 計2分30秒/)
   assert.match(post, /- 推論 10run \/ 出力2\.0k/)
-  // 8種のうち上位6種だけ並び、残りは数になる。
   assert.match(post, /- 道具 recall×3 · draft · search · fetch · shell · tell · 他2種/)
   assert.match(post, /- 残った 下書き 2本 \/ 確定した事実 2件/)
   assert.doesNotMatch(post, /止まった/)
-  // 承認待ちは前の日の集計ではなく出す時点の残数。0 のときは行そのものを出さない。
+  // 承認待ちは前日の集計ではなく出す時点の残数。0 なら行を出さない。
   assert.doesNotMatch(post, /承認待ち/)
   assert.match(dailyPost([a, b], "2026-08-17", 3), /- 承認待ち 3件\(現在\)$/m)
 })
@@ -424,7 +408,7 @@ test("出しどきの判定 — 同じ日のうちは出さない", () => {
 
 test("出しどきの判定 — 日が変わったら前の日ぶんの窓が返る", () => {
   const yesterday = localDayRange("2026-08-17T12:00:00Z")
-  const now = yesterday.endIso // 今日の頭ちょうど
+  const now = yesterday.endIso
   const w = dailyLogWindow(yesterday.startIso, now)
   assert.ok(w?.post)
   assert.equal(w.post.fromIso, yesterday.startIso)

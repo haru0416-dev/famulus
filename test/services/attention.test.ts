@@ -1,10 +1,5 @@
-/**
- * 自律実行条件の検査。実行条件が必要なときだけ成立することを見る。
- *
- * cycle で怖いのは動かないことではなく、止まらないことのほう。
- * system由来の書き込みによる自己再実行 / 解消しない理由による無限再実行、の2つは実装を見ても気づきにくく、
- * 気づくのは「一晩で枠を使い切っていた」ときになる。だからここで固定する。
- */
+// system 由来の書き込みによる自己再実行と、解消しない理由による無限再実行は
+// 実装を見ても気づきにくいので、ここで固定する。
 
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
@@ -36,7 +31,7 @@ const terminalDossier = (question: string) =>
     }),
   )
 
-// 日次の下書きは別の軸。通常の実行条件では24時を渡して成立させない。
+// 日次の下書きは別の条件。通常の検査では draftHour に 24 を渡して成立させない。
 const planAt = (ms: number, draftHour = 24) =>
   Effect.gen(function* () {
     const att = yield* Attention
@@ -162,7 +157,7 @@ test("締めの時刻保存に失敗した回は位置も冷却も進めず、�
         { key: "cycle:repeat", value: "1" },
       ],
     )
-    // 古い判定が後から締まっても、処理済み入力と冷却の起点を戻さない。
+    // 古い判定の完了が後から届いても、処理済み入力と冷却の起点を戻さない。
     await h.run(
       Effect.flatMap(Attention, (att) =>
         att.completeCycle({ active: true, upto: 0, at: "2026-08-08T08:30:00Z" }),
@@ -194,14 +189,8 @@ test("自分が動く番の watch は実行条件になる — ただしcooldown
   })
 })
 
-/**
- * 実行しても静かにならない状態を止める。
- *
- * `next_move_owner = 'famulus'` は無条件で滞留に入るので、`last_activity_at` を更新しても
- * 自分持ちの watch は次の cycle で再び処理対象になる。実際にそうなり、モデルは最終走行時刻を
- * subject の文字列に書き込んで登録し直すという回避をしていた(列が無いのでそうするしかない)。
- * 止めるのは経過日数ではなく、実行した時刻とcooldown。
- */
+// `next_move_owner = 'famulus'` は無条件で滞留に入るので、`last_activity_at` を更新しても
+// 自分持ちの watch は次の cycle で再び対象になる。止めるのは実行した時刻と cooldown。
 test("一周回した watch は、cooldownが終了するまでプロンプトに載らない", async () => {
   await withHarness(async (h) => {
     const id = await h.run(
@@ -233,7 +222,7 @@ test("一周回した watch は、cooldownが終了するまでプロンプト�
     const back = await h.run(planAt(T0 + hours(26)))
     assert.equal(back.stalled.length, 1, "cooldownが終了すれば再び掲載対象になる")
     assert.equal(back.stalled[0]?.run_count, 1)
-    // 前回の結果を渡さないと、毎回まっさらな状態で同じ一覧を読み直すことになる。
+    // 前回の結果を渡さないと、毎回同じ一覧を最初から読み直す。
     assert.equal(back.stalled[0]?.last_result, "8/8 時点で新着に該当なし")
   })
 })
@@ -258,8 +247,7 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
       }),
     )
 
-    // 動きがあった(touchWatch)と、自分が実行した(ranWatch)は別のこと。
-    // 相手から返事が来ても自分は何もしていないので、cooldownは始まらない。
+    // 動き(touchWatch)と実行(ranWatch)は別。相手から返事が来ても cooldown は始まらない。
     await h.run(
       Effect.gen(function* () {
         const att = yield* Attention
@@ -283,12 +271,7 @@ test("何も出てこなかった回も『回した』— 空振りこそ次の 
   })
 })
 
-/**
- * 後から記録する道。これが無いと記録そのものが見送られる。
- *
- * 数時間前に実行したものを「今」で記録すると、cooldownがその分だけ後ろへずれる。実際に、
- * ずれるくらいなら呼ばないという判断が起き(端から端まで走らせた回で観測)、watch はプロンプトに残った。
- */
+// 数時間前の実行を「今」で記録すると cooldown がその分後ろへずれるので、実行時刻を渡せるようにする。
 test("回した時刻を渡して後から記録できる。先の時刻は取らない", async () => {
   await withHarness(async (h) => {
     const id = await h.run(
@@ -344,13 +327,8 @@ test("存在しないwatchの実行記録に失敗してもtransactionを残さ�
   })
 })
 
-/**
- * 順番の検査。cooldownは「いつまで載せないか」しか決めない。
- *
- * 同じ日に登録した watch は同時刻に再提示可能になり、対象がすべて同時に掲載候補になる。実測では6件が
- * 毎回そろって載り、cycle はその一覧を読み直すだけで1件も回さずに終えていた(34回中20回が
- * 呼び出し2回以下)。載せる数に上限を置き、載せた順に後ろへ送る。
- */
+// 同じ日に登録した watch は同時に再提示可能になり、全件が毎回載って1件も進まなくなる。
+// 載せる数に上限を置き、載せた順に後ろへ送る。
 const sixWatches = Effect.gen(function* () {
   const att = yield* Attention
   const ids: string[] = []
@@ -367,8 +345,7 @@ test("複数のcooldownが同時に終了しても、1回に載せるのは上�
 
     assert.equal(d.stalled.length, STALLED_SHOW_MAX, "載せるのは上限まで")
     assert.equal(d.stalledHeld, 6 - STALLED_SHOW_MAX, "上限を超えた分は除外せず次回分として保持する")
-    // 実行条件はcooldownが終了した全件の数。載せた数で書くと、6件待っている回と3件しかない回が
-    // 同じ文になり、後ろに何件溜まっているかがどこにも出なくなる。
+    // 実行条件の文は cooldown が終了した全件の数で書く。載せた数で書くと後ろに溜まった件数が出ない。
     assert.match(d.reasons.join(), /watch が 6 件/)
     assert.deepEqual(
       d.stalled.map((w) => w.id),
@@ -382,8 +359,7 @@ test("載せたのに回さなかった watch も後ろへ回る — 進むの�
     const ids = await h.run(sixWatches)
     const first = await h.run(planAt(T0 + hours(2)))
 
-    // planCycle だけでは進まない。planCycle は実行条件が無い回にも走るので、ここで記録すると
-    // 誰も読んでいない一覧を載せたことにして順番だけが回る。
+    // planCycle は実行条件が無い回にも走るので、そこで順番を進めると誰も読んでいない一覧で順番が進む。
     const again = await h.run(planAt(T0 + hours(3)))
     assert.deepEqual(
       again.stalled.map((w) => w.id),
@@ -401,8 +377,7 @@ test("載せたのに回さなかった watch も後ろへ回る — 進むの�
       }),
     )
 
-    // `ran` は1件も呼んでいない。それでも次は別の3件が載る — 回さずに終えた watch が
-    // 表示上限を占め続けるのを、ここで止めている。
+    // 1件も呼んでいなくても次は別の3件が載る。回さずに終えた watch が表示上限を占め続けないため。
     const second = await h.run(planAt(T0 + hours(4)))
     assert.deepEqual(
       second.stalled.map((w) => w.id),
@@ -457,10 +432,8 @@ test("未解決の問いは実行条件にしない(自分では解消できず�
   })
 })
 
-/**
- * 問いの終了経路。回答と取り下げは別で、片方しか無いと不要な問いが上限を占有し続ける。
- * 実行条件ではないぶん見落としやすいが、上限に達したプロンプトは新しい問いを除外する — そこまで見る。
- */
+// 回答と取り下げの片方しか無いと、不要な問いが上限を占め続ける。
+// 上限に達すると新しい問いはプロンプトから除外される。
 test("答えないまま取り下げられる。理由は残る", async () => {
   await withHarness(async (h) => {
     const { dropped, stored, left } = await h.run(
@@ -468,7 +441,6 @@ test("答えないまま取り下げられる。理由は残る", async () => {
         const att = yield* Attention
         const id = yield* att.ask("現職の就業規則で副業は可能か")
         const dropped = yield* att.drop(id, "副業探し自体を中断した")
-        // 返り値と DB の中身の両方を見る。書けたことと、書けたと言うことは別。
         return { dropped, stored: yield* att.findQuestion(id), left: yield* att.openQuestions() }
       }),
     )
@@ -485,7 +457,7 @@ test("不要になった未解決質問が上限を占有すると新しい問�
       Effect.gen(function* () {
         const att = yield* Attention
         const dead: string[] = []
-        // 上限は古い順の 20 件。先に立てたものだけで埋める。
+        // 上限は古い順の 20 件。
         for (let i = 0; i < 20; i++) dead.push(yield* att.ask(`前の向きで立てた問い ${i}`))
         yield* att.ask("いま追っている問い")
         return dead
@@ -528,7 +500,7 @@ test("同じ理由で実行が続くとcooldownが倍に伸びる。新しい入
       }),
     )
 
-    // 1.5h → 3h → 6h … と伸びる。毎回「cooldown後に再実行したが理由は解消しなかった」を再現する。
+    // cooldown 後に再実行して理由が解消しなかった回を繰り返す。1.5h → 3h → 6h と伸びる。
     let at = T0
     const seen: number[] = []
     for (let i = 0; i < 8; i++) {
@@ -544,7 +516,7 @@ test("同じ理由で実行が続くとcooldownが倍に伸びる。新しい入
         }),
       )
     }
-    // 倍々に伸びて 24 時間で止まる = 最後は1日1回まで下がる(完全には止めない)。
+    // 24 時間で止まる。完全には止めない。
     assert.deepEqual(seen, [1.5, 3, 6, 12, 24, 24, 24, 24])
 
     const capped = await h.run(planAt(at + hours(MAX_COOLDOWN_HOURS)))
@@ -553,7 +525,6 @@ test("同じ理由で実行が続くとcooldownが倍に伸びる。新しい入
     const tooSoon = await h.run(planAt(at + hours(MAX_COOLDOWN_HOURS - 1)))
     assert.equal(tooSoon.idle, true, "上限に達したら24時間は再実行しない")
 
-    // 外部入力が来たら指数バックオフをリセットする。
     const fresh = await h.run(
       Effect.gen(function* () {
         const mem = yield* Memory
@@ -593,8 +564,8 @@ test("期限が近い承認待ちは実行条件になる", async () => {
     assert.equal(d.pending.length, 1)
     assert.match(d.reasons.join(), /期限が近い承認待ち/)
 
-    // 結論を1回書いたら、同じ件を実行条件にしない。承認を出せるのはユーザーだけなので、
-    // 再実行しても「あなた待ちです」をもう一度書くところまでしか進まない。
+    // 承認を出せるのはユーザーだけなので、再実行しても同じ「あなた待ち」を書くだけ。
+    // 結論を1回書いた件は実行条件にしない。
     await h.run(
       Effect.gen(function* () {
         const proposals = yield* Proposals
@@ -605,7 +576,7 @@ test("期限が近い承認待ちは実行条件になる", async () => {
     )
     const after = await h.run(planAt(T0 + hours(8)))
     assert.equal(after.idle, true, "結論を置いた提案は実行条件にしない")
-    // 一覧からは消さない。承認はまだ要るので、別件の実行時にはプロンプトへ載る。
+    // 承認はまだ要るので一覧からは消さない。別件の実行時にはプロンプトへ載る。
     assert.equal(after.pending.length, 1)
     assert.equal(after.pending[0]?.settled_note, "承認はユーザーしか出せない。こちらからは進まない。")
   })
@@ -644,10 +615,7 @@ const denied = (n: number, at: string, reason: string | null) =>
     )
   })
 
-/**
- * 断られたことを次の回に渡す。渡さないと、同じ相手に同じ用件を出し直す。
- * watch に前回の結果を渡すのと同じ理由。
- */
+// 断られたことを渡さないと、同じ相手に同じ用件を出し直す。
 test("断られた提案はプロンプトに載る — ただし実行条件にはしない", async () => {
   await withHarness(async (h) => {
     await h.run(
@@ -662,7 +630,7 @@ test("断られた提案はプロンプトに載る — ただし実行条件に
       d.refused.map((r) => [r.summary, r.reason]),
       [["1 件目の用件", "希望日が経過した"]],
     )
-    // 却下済みの提案を実行条件にしても処理は進まない。同じ却下による無限再実行を避ける。
+    // 却下済みの提案を実行条件にすると、同じ却下で無限に再実行する。
     assert.equal(d.idle, true)
     assert.equal(d.reasons.length, 0)
   })
@@ -685,10 +653,7 @@ test("断られたぶんは新しい順に決めた数だけ — 古いものか
   })
 })
 
-/**
- * 1日1本の下書き。同日に下書き生成条件が二度成立しないことを固定する。
- * cooldownの対象外にしてあるのは、夕方に別件を処理した日でも下書き生成を省略しないため。
- */
+// cooldown の対象外にしているのは、夕方に別件を処理した日でも下書きを省略しないため。
 test("下書き生成条件は決めた時刻から1日1回だけ成立する", async () => {
   await withHarness(async (h) => {
     await h.run(

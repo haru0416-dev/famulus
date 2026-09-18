@@ -1,13 +1,6 @@
 /**
- * 提案と承認の状態機械。作成と承認を同じAPIに集約し、承認主体とpayloadの指紋を保存する。
- *
- * 状態機械(schema.sql の CHECK と一致):
- *   proposed ─approve→ approved ・・・ここで止まる
- *      │ deny→ denied
- *      └ 期限切れ→ expired
- *
- * 一般の提案は承認記録で止まる。Sandboxの公開通信だけはSandboxNetworkが指紋を照合し、
- * 起動前にsandbox_network_usesへ単回の使用を記録する。approved自体は実行成功を意味しない。
+ * proposed から approved / denied / expired へ一度だけ遷移する(schema.sql の CHECK と一致)。
+ * approved は実行成功を意味しない。Sandbox の公開通信だけは SandboxNetwork が起動時に指紋を照合する。
  */
 import { createHash, randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
@@ -18,34 +11,27 @@ import { Conflict, NotFound } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { Db, type Row } from "./Db.ts"
 
-/** 承認判断の状態。Sandbox許可の使用履歴やコマンドの成否とは分ける。 */
 export type ProposalStatus = "proposed" | "approved" | "denied" | "expired"
 
-/** リアクション1つに割り当てる判断。理由を書ける口が無いのは deny 側だけ。 */
 export type ProposalDecision = "approve" | "deny"
 
-/**
- * リアクションで却下されたときの理由。deny は理由を必須にしてあり(schema の CHECK も同じ)、
- * 絵文字1つには理由が乗らない。押した事実だけを理由として書く。
- * 押した後にスレッドへ書かれた文は owner の発言として別に入る。
- */
+/** deny は理由が必須(schema の CHECK)だが、リアクションには理由が無いので固定文を入れる。 */
 export const REACTION_DENY_REASON = "リアクションで却下(理由なし)"
 
 export interface CreateInput {
   readonly summary: string
   readonly assessment: string
   readonly ask: string
-  /** 完全性ゲート5要素。名指しできない案は提案にしない。 */
+  /** 5要素のどれかを書けない案は提案にしない。 */
   readonly what: string
   readonly when: string
   readonly who: "famulus" | "human"
   readonly how: string
   readonly howVerified: string
-  /** 実行内容の完全直列化。省略時は入力そのものを payload とする。 */
+  /** 省略時は入力そのものを payload とする。 */
   readonly payload?: unknown
   readonly provenance?: unknown
   readonly at?: string
-  /** 未承認のまま放置される上限日数。 */
   readonly pendingDays?: number
 }
 
@@ -65,18 +51,16 @@ export interface ProposalRow {
   readonly status: ProposalStatus
   readonly expires_at: string
   readonly deny_reason: string | null
-  /** 自動処理が「今回できることは無い」と結論を置いた時刻。null = まだ何も言っていない。 */
+  /** 自動処理が「今回できることは無い」と記録した時刻。 */
   readonly settled_at: string | null
   readonly settled_note: string | null
 }
 
-/** 未承認のまま置ける日数。過ぎたものは list の前に expired に落とす。 */
 export const MAX_PENDING_DAYS = 7
 
 const plusDays = (at: string, days: number) =>
   new Date(Date.parse(at) + days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z")
 
-/** 承認対象の完全なpayloadに対する指紋。Sandbox公開通信の起動時にも照合する。 */
 export const payloadHash = (payload: string): string => createHash("sha256").update(payload).digest("hex")
 
 const DECIDABLE: readonly ProposalStatus[] = ["proposed"]
@@ -148,7 +132,7 @@ const makeProposals = () =>
         return id
       })
 
-    /** 期限切れを expired に落とす。読み取り・判断のどの入口から来ても先に呼ぶ。 */
+    /** 読み取り・判断のどの入口でも最初に呼ぶ。 */
     const expireDue = (at: string = nowIso()) =>
       db.withImmediateTransaction("expire proposals", (tx) => {
         const due = tx.all(
@@ -169,10 +153,7 @@ const makeProposals = () =>
         tx.run("UPDATE proposals SET status='expired' WHERE status='proposed' AND expires_at <= ?", at)
       })
 
-    /**
-     * id 前方一致で1件引く。CLI で 36 文字の UUID を打たせないため。
-     * 複数に当たったら選ばずに失敗させる — 曖昧なまま承認を通すのが一番まずい。
-     */
+    /** id の前方一致。複数に一致したら選ばずに失敗させる(曖昧なまま承認させない)。 */
     const get = (idOrPrefix: string, at: string = nowIso()) =>
       Effect.gen(function* () {
         yield* expireDue(at)
@@ -194,10 +175,7 @@ const makeProposals = () =>
         return rows as unknown as ProposalRow[]
       })
 
-    /**
-     * 承認actionの追記とstatus遷移を同一トランザクションで行う
-     * (承認記録の無い approved を作らない = 後で照合する相手を必ず残す)。
-     */
+    // 承認記録の無い approved を作らないため、action の追記と遷移を同一トランザクションで行う。
     const approve = (idOrPrefix: string, opts?: { approverRef?: string; at?: string }) =>
       Effect.gen(function* () {
         const at = opts?.at ?? nowIso()
@@ -228,7 +206,7 @@ const makeProposals = () =>
         })
       })
 
-    /** 却下。理由は次の生成へ還流させる学習信号なので必須にする。 */
+    /** 理由は次の生成に渡すので必須。 */
     const deny = (idOrPrefix: string, reason: string, opts?: { at?: string }) =>
       Effect.gen(function* () {
         const at = opts?.at ?? nowIso()
@@ -258,15 +236,8 @@ const makeProposals = () =>
       })
 
     /**
-     * 承認待ちについて、自動処理側の結論を置く。提案の状態は動かさない。
-     *
-     * 承認を出せるのはユーザーだけなので、自動処理には決着をつけられない。つけられるのは
-     * 「今回できることは無い」まで — それを書く場所が無いと、この件を理由に毎回実行され、
-     * 毎回同じ結論を書き直す(実測で4回、いずれも道具呼び出し4回以下)。
-     *
-     * 書いた後は `planCycle` が実行条件に数えない。一覧からは消さない — 承認はまだ要る。
-     * `recordWatchRun` と同じく、実行したことと対象を一覧に残すことを別に記録する。
-     * 上書きしてよい: 状況が動けば結論も変わる。
+     * 状態は動かさない。これが無いと承認待ちを理由に cycle が毎回走り、同じ結論を書き直す。
+     * 記録後は `planCycle` が実行条件に数えないが、一覧には残す。上書きしてよい。
      */
     const recordPendingConclusion = (idOrPrefix: string, note: string, opts?: { at?: string }) =>
       Effect.gen(function* () {

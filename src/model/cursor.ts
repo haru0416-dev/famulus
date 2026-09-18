@@ -1,10 +1,6 @@
 /**
- * Cursor SDK の実行核。coder の1タスクを doom-loop ガード付きで走らせる。
- *
- * ここはモデル呼び出しの機構だけを持つ。branch/snapshot/記帳は呼ぶ側(src/agent/coder.ts)、
- * shell の実行前遮断は workspace の .cursor/hooks(src/core/guard.ts)が持つ。
- * famulus の自走(cycle)からは呼ばれない — 入口は CLI だけ(コスト上限が governance に
- * 入るまで自走側に渡さない)。
+ * coder の1タスクを doom-loop ガード付きで走らせる。branch/snapshot/記帳は src/agent/coder.ts、shell の遮断は
+ * .cursor/hooks(src/core/guard.ts)が持つ。入口は CLI だけで、コスト上限が governance に入るまで cycle からは呼ばない。
  */
 import { execFileSync } from "node:child_process"
 import { mkdirSync } from "node:fs"
@@ -17,7 +13,7 @@ export interface CursorRunOptions {
   readonly cwd: string
   readonly task: string
   readonly model?: string
-  /** "plan" は計画モード。SDK公称は読み取り志向だが、plan 中でも edit で Markdown を書けた実測がある。 */
+  /** SDK の公称は読み取り志向だが、plan 中でも edit で Markdown を書ける。 */
   readonly mode?: "agent" | "plan"
   readonly onMessage?: (m: SDKMessage) => void
 }
@@ -56,16 +52,13 @@ export function requireCursorKey(): string {
   return key
 }
 
-/** モデル一覧(鍵の生死確認を兼ねる。これ自体は課金 run ではない)。 */
+/** 鍵の有効確認を兼ねる。課金 run ではない。 */
 export async function listCursorModels(): Promise<readonly { id: string; displayName?: string }[]> {
   const models = await Cursor.models.list({ apiKey: requireCursorKey() })
   return models.map((m) => ({ id: m.id, ...(m.displayName ? { displayName: m.displayName } : {}) }))
 }
 
-/**
- * 1タスクを実行する。doom-loop ガード3層(道具回数・時間・非キャッシュ token)を
- * stream の消費地点で一元的に掛ける。
- */
+/** doom-loop ガード3層(道具回数・時間・非キャッシュ token)は stream の消費地点でまとめて掛ける。 */
 export async function runCursorTask(options: CursorRunOptions): Promise<CursorRunSummary> {
   const cfg = appConfig().cursor
   const { cwd, task, mode, onMessage } = options
@@ -75,8 +68,7 @@ export async function runCursorTask(options: CursorRunOptions): Promise<CursorRu
   const gitBefore = git(cwd, "rev-parse", "HEAD")
   const startedAt = Date.now()
 
-  // Composer 系は fast=true が既定バリアントで高額(二次情報で約6倍)。明示的に標準へ倒す。
-  // fast パラメータ非対応のモデル(Claude等)には付けない。
+  // Composer 系は fast=true が既定で高額なので、明示的に標準を指定する。fast 非対応のモデルには付けない。
   const modelSelection = model.includes("composer")
     ? { id: model, params: [{ id: "fast", value: "false" }] }
     : { id: model }
@@ -88,7 +80,7 @@ export async function runCursorTask(options: CursorRunOptions): Promise<CursorRu
     local: {
       cwd,
       autoReview: true,
-      // .cursor/ 配下の rules(コンテキスト注入)/ hooks(実行前deny)をロードさせる。
+      // .cursor/ 配下の rules / hooks を読み込ませる。
       settingSources: ["project"],
       // 実行前遮断は .cursor/hooks(guard)が持つ。SDK sandbox は既定で使わない。
       sandboxOptions: { enabled: false },
@@ -116,7 +108,7 @@ export async function runCursorTask(options: CursorRunOptions): Promise<CursorRu
         if (message.type === "tool_call") {
           if (message.status === "running") {
             toolCalls += 1
-            // 中断理由は最初の一因だけを記録する(cancel 後に stream が数件流れても上書きしない)
+            // 中断理由は最初の一因だけ記録する(cancel 後に流れた分で上書きしない)
             if (toolCalls > cfg.maxToolCalls && !aborted) {
               aborted = "doomloop-toolcalls"
               void run.cancel().catch(() => {})
@@ -125,8 +117,7 @@ export async function runCursorTask(options: CursorRunOptions): Promise<CursorRu
             toolErrors += 1
           }
         } else if (message.type === "usage") {
-          // run 単位 token 上限(予算の最内層)。cacheRead は実コストが桁違いに安いため除外
-          // (実測: total の半分近くが cacheRead で、含めると即発火する)。
+          // cacheRead は実コストが桁違いに安く、含めるとすぐ上限に達するので除外する。
           runTokens += message.usage.totalTokens - (message.usage.cacheReadTokens ?? 0)
           if (runTokens > cfg.runTokens && !aborted) {
             aborted = "budget-tokens"

@@ -1,8 +1,4 @@
-/**
- * Skill 登録と SkillPlan 合成の検査。
- * 合成はホストの規則で決まり、Skill を足しても指示以外(道具・権限)は変わらない。
- * kernel への固定は「同じ計画は同じ hash、違う計画は Conflict」を loop_specs の行で確かめる。
- */
+/** Skill を足しても変わるのは指示だけで、道具と権限は変わらない。 */
 
 import assert from "node:assert/strict"
 import * as Effect from "effect/Effect"
@@ -25,12 +21,12 @@ test("SkillPlan の合成は決定的で、選択が変わると hash が変わ�
 })
 
 test("スロット不一致・profile 不許可・exclusive の同居は拒否する", () => {
-  // presentation スロットに method Skill
+  // スロット不一致
   assert.throws(
     () => compileSkillPlan({ profile: "researcher", presentation: "research-wide" as never }),
     SkillPlanRejected,
   )
-  // researcher に presentation Skill(親専用)は許可されていない
+  // presentation Skill は親専用
   assert.throws(
     () => compileSkillPlan({ profile: "researcher", presentation: "draft-presentation" }),
     SkillPlanRejected,
@@ -80,7 +76,6 @@ test("kernel は SkillPlan を LoopSpec に固定し、同じ計画は再入・�
     assert.equal(row?.skill_plan_json, plan.json)
     assert.equal(row?.skill_plan_hash, plan.hash)
 
-    // 同じ owner・同じ計画 → 既存の loop に再入する(2本目を作らない)
     await h.run(
       Effect.flatMap(ExecutionKernel, (kernel) =>
         kernel.openSingleLoop({ ...base, skillPlan: { json: plan.json, hash: plan.hash } }),
@@ -89,7 +84,6 @@ test("kernel は SkillPlan を LoopSpec に固定し、同じ計画は再入・�
     const count = await h.run(Effect.flatMap(Db, (db) => db.get("SELECT COUNT(*)n FROM loop_specs")))
     assert.equal(Number(count?.n), 1)
 
-    // 同じ owner・違う計画 → Conflict(黙って差し替えない)
     const other = compileSkillPlan({ profile: "researcher", method: "research-deep" })
     const error = await h.fail(
       Effect.flatMap(ExecutionKernel, (kernel) =>

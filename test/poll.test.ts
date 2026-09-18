@@ -1,12 +1,9 @@
 /**
- * 受信ポーリングの検査。systemd も Discord もモデルも呼ばない。
- *
- * poll.ts は import した瞬間に設定を固める(loadEnv → configureApp)ので、
- * 環境を先に置いてから動的 import で読む。ここで置く3つが境界になる:
- * - FAMULUS_DB=:memory: … 既定 runtime に実 DB を開かせない
- * - FAMULUS_DISCORD_TOKEN 空 … token が無いと読む先が無く、pollInbound は外へ出ない
+ * poll.ts は import 時に設定を確定するので、環境を先に置いてから動的 import する。
+ * - FAMULUS_DB=:memory: … 実 DB を開かせない
+ * - FAMULUS_DISCORD_TOKEN 空 … pollInbound が外へ出ない
  * - FAMULUS_CYCLE_UNIT 空 … wake が systemctl を呼ばない
- * 万一どれかが外れて外へ出たら、下の fetch 差し替えが先に落とす。
+ * どれかが外れて外へ出たら、下の fetch 差し替えが落とす。
  */
 
 import assert from "node:assert/strict"
@@ -75,7 +72,7 @@ test("未読があれば起動を試み、cycle:woke を記録する", async () 
 })
 
 test("起動直後の未読では再起動しない(間隔を空ける)", async () => {
-  // cycle:woke は直前の検査で入ったばかり。完走の記録(cycle:last)は無い。
+  // cycle:woke は直前の検査で入ったばかりで、cycle:last は無い。
   assert.equal(await poll(), "届 0 / 未読 1 — 起動しない(前回から間隔が短い)")
 })
 
@@ -97,8 +94,8 @@ test("cursor が進めば未読は消える", async () => {
 })
 
 test("wake: unit があれば systemd の状態を見てから起動する", async () => {
-  // CONFIG は import 時に固まるので、unit と偽の systemctl を置いてから読み直す。
-  // systemctl は PATH 上の代替スクリプト — 実 systemd には触れない。
+  // CONFIG は import 時に確定するので、unit と偽の systemctl を置いてから読み直す。
+  // systemctl は PATH 上の代替スクリプトで、実 systemd を呼ばない。
   const dir = mkdtempSync(join(tmpdir(), "fam-poll-systemctl-"))
   const bin = join(dir, "bin")
   mkdirSync(bin)

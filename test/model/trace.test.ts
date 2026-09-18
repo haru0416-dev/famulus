@@ -1,7 +1,3 @@
-/**
- * DB の summary に最終本文をそのまま残しつつ、1行の保存上限を守る。
- */
-
 import assert from "node:assert/strict"
 import { test } from "vitest"
 import { traceOf } from "../../src/model/trace.ts"

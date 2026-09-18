@@ -7,7 +7,7 @@ import type {
 import type { ModelCallOptions, ModelCallResult, QuotaSignal } from "./models.ts"
 import { RUNTIME_PROMPT } from "./models.ts"
 
-/** Responses のストリームを1回ぶんの応答へ畳む。 */
+/** Responses のストリームを1回ぶんの応答にまとめる。 */
 export async function collectResponses(
   stream: ReadableStream<LanguageModelV4StreamPart>,
   onText?: (delta: string) => void,
@@ -94,7 +94,6 @@ interface ResponsesCallConfig {
   readonly quota?: (metadata: LanguageModelV4GenerateResult["providerMetadata"]) => QuotaSignal | undefined
 }
 
-/** 単発の Responses 呼び出しに共通する中断・収集・usage 変換。 */
 export async function callResponses(
   model: LanguageModelV4,
   opts: ModelCallOptions,

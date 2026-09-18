@@ -1,18 +1,8 @@
 #!/usr/bin/env bun
 /**
- * cycle。話しかけられなくても動くための唯一の入口。起動の理由を人の発話ではなく
- * DB の状態に置く。systemd のタイマーから定期的に呼ばれる。
- *
- *   1. Attention.planCycle() …SQL だけでモデル実行が必要かを決める。ここでモデルは呼ばない。
- *   2. 実行条件を満たさなければ何もせず終わる(モデル利用量を消費しない)。定期実行の大半はこの経路を通る。
- *   3. 実行条件を満たすときだけエージェントを組み立て、1回実行する。
- *   4. 返ってきたものを system イベントとして DB に残し、既読位置を進める。
- *
- * 2 が本体。「15分ごとに推論を1回実行する」形にすると、用件が無い回にも利用量を消費する。
- * 実行条件は Attention 側に集約し、ここは判定結果に従って実行するだけにしてある。
- *
- * process-local laneをautonomousへ切り替えて自律実行として計上する。日次 run 数の内訳が対話と分かれ、
- * cycle が過剰実行されても対話用の run 数は残る。
+ * 自走の入口。systemd のタイマーから呼ばれ、起動の理由を人の発話ではなく DB の状態に置く。
+ * 実行条件は Attention.planCycle()(SQL のみ)に集約し、満たさない回はモデルを呼ばずに終わる。
+ * lane は autonomous で計上し、cycle が過剰実行されても対話用の run 数は残す。
  */
 import { randomUUID } from "node:crypto"
 import * as Effect from "effect/Effect"
@@ -44,23 +34,20 @@ import { buildFencedPrompt, Governance, setLane, type UntrustedBlock } from "./s
 import { Memory } from "./services/Memory.ts"
 import { Proposals } from "./services/Proposals.ts"
 
-// static importは設定を読まない。入口で.envを反映し、検証済みConfigを設置してからruntimeを作る。
+// static import は設定を読まない。runtime を作る前に .env を反映し、検証済み Config を置く。
 loadEnv()
 const CONFIG = configureApp()
 
 /**
- * 1回の cycle に許す時間。上限を付けないと無限に待つ。
- *
- * 300 秒では下書きの日が入り切らない。書いて精査に出して直してもう一度出す形になり、
- * 実測した回は 270 秒の時点でまだ3稿目を書いていた。unit の `TimeoutStartSec` は 600 秒なので、
- * その内側に収まる範囲で伸ばす。個々のコンテナ走行は180秒で先に切り、締め処理の時間を残す。
+ * 短くすると下書きの日に入り切らない。unit の `TimeoutStartSec`(600秒)の内側に収める。
+ * 個々のコンテナ走行は180秒で先に切り、締め処理の時間を残す。
  */
 const TIMEOUT_MS = CONFIG.cycle.timeoutMs
 
-/** 日次まとめに載せる承認待ちの数え上げ上限。出すのは件数だけなので、超えたら「N件以上」ではなく頭打ちで出る。 */
+/** 出すのは件数だけ。超えたら頭打ちで出る。 */
 const MAX_PENDING_SHOWN = 100
 
-/** 共有 skill の書く規律。分類・正本のどちらが欠けても下書き自体は止めない。 */
+/** 分類・正本のどちらが欠けても下書きは止めない。 */
 function jissokuOverlay(): string | undefined {
   try {
     const plan = compileSkillPlan({ profile: "autonomous-parent", presentation: "jissoku-writing" })
@@ -71,11 +58,10 @@ function jissokuOverlay(): string | undefined {
 }
 
 const short = (id: string) => id.slice(0, 8)
-/** cycle が使うモデル。既定は対話と同じ — 自走のほうを安くしたいときだけ差し替える。 */
+/** 既定は対話と同じ。 */
 const cycleModel = () => CONFIG.models.cycle
 const log = (...parts: unknown[]) => console.error("[cycle]", ...parts)
 
-/** イベントの content は JSON 文字列。人(とモデル)が読める1行に戻す。 */
 function renderEvent(e: ObservedEvent): string {
   let body: string
   try {
@@ -107,8 +93,7 @@ function renderWatchSection(d: CyclePlan): string | undefined {
   if (d.stalled.length === 0) return undefined
   return [
     "## 対応対象の watch",
-    // 前回の結果を一緒に渡す。無いと毎回まっさらな状態で同じ一覧を読み直すことになり、
-    // 先週を踏まえた文が一度も出ない。実際に AI追跡の watch がそうなっていた。
+    // 前回の結果を渡さないと、毎回同じ一覧を読み直して前回を踏まえた文が出ない。
     ...d.stalled.map((w) => {
       const head = `- ${short(w.id)} ${w.subject}(最後の動きから ${w.stalledDays} 日 / 次に動くのは ${w.next_move_owner}`
       const runs = w.run_count > 0 ? ` / 通算 ${w.run_count} 回` : " / まだ一度も実行していない"
@@ -116,7 +101,7 @@ function renderWatchSection(d: CyclePlan): string | undefined {
       return `${head}${runs})${prev}`
     }),
     "",
-    // 残りの件数だけ出す。中身は出さない — 出すと結局全部読むことになり、絞った意味が消える。
+    // 中身は出さない。出すと全部読むことになり、絞った意味が消える。
     ...(d.stalledHeld > 0
       ? [
           `他に ${d.stalledHeld} 件が再提示可能な状態で待っているが、**この回は上の ${d.stalled.length} 件だけ見る。**`,
@@ -134,7 +119,6 @@ function renderPendingSection(d: CyclePlan): string | undefined {
   if (d.pending.length === 0) return undefined
   return [
     "## 返事待ちの提案(あなたは決められない。ユーザーが見るのを待っている)",
-    // 前回の結論を一緒に渡す。watch の `前回:` と同じ形。
     ...d.pending.map((p) => {
       const expiry = p.daysLeft >= 0 ? `あと ${p.daysLeft} 日で期限切れ` : "期限切れ"
       const head = `- ${short(p.id)} ${p.summary}(${expiry})`
@@ -151,8 +135,7 @@ function renderPendingSection(d: CyclePlan): string | undefined {
 function renderRefusedSection(d: CyclePlan): string | undefined {
   if (d.refused.length === 0) return undefined
   return [
-    // watch に前回の結果を渡すのと同じ。断られた側を渡さないと、
-    // まっさらな状態で同じ相手に同じ用件を出し直す。
+    // 断られた提案を渡さないと、同じ相手に同じ用件を出し直す。
     "## 断られた提案(同じ形をもう一度出さない)",
     ...d.refused.map((p) => `- ${p.summary}\n  → ${p.reason}`),
     "",
@@ -161,15 +144,7 @@ function renderRefusedSection(d: CyclePlan): string | undefined {
   ].join("\n")
 }
 
-/**
- * cycle のプロンプト。「何もしない」を正解として明示するのが要点。
- * 実行された以上なにか成果を出さねば、と読ませると、用が無いのに watch を増やし propose を出す。
- * 実行条件と対象だけ渡して、処理する必要が無ければ一行で終えてよいと書く。
- */
-/**
- * 既読の合図を付ける先。owner の未読のうち最後の1件を採る — 連投された回に全部へ付けても
- * 意味は増えない。場所は provenance(`[{"kind":"discord","ref":"<channel id>"}]`)から読む。
- */
+/** owner の未読の最後の1件だけに付ける。場所は provenance から読む。 */
 function discordAck(events: readonly ObservedEvent[]): { channelId: string; messageId: string } | undefined {
   for (const e of [...events].reverse()) {
     if (e.source !== "owner" || !e.origin_id || !e.provenance) continue
@@ -184,6 +159,7 @@ function discordAck(events: readonly ObservedEvent[]): { channelId: string; mess
   return undefined
 }
 
+/** 「何もしない」を正解として明示する。成果を出さねばと読ませると、用が無いのに watch を増やし propose を出す。 */
 function buildPrompt(
   d: CyclePlan,
   spokenTo: boolean,
@@ -241,8 +217,7 @@ function buildPrompt(
   const refusedSection = renderRefusedSection(d)
   if (refusedSection) sections.push(refusedSection)
 
-  // 残っている workspace は毎回載せる。道具(`workspaces`)を置いただけでは引かれない —
-  // 引くかどうかを判断するには、まず在ることを知っていなければならない。数行で済む。
+  // 道具(`workspaces`)を置くだけでは引かれない。存在を知らないと引く判断ができないので毎回載せる。
   if (workspaces.length > 0) {
     sections.push(
       [
@@ -258,9 +233,7 @@ function buildPrompt(
   // 下書きの規律は出す日にだけ載せる。毎回渡すと、書かない回にもコンテキスト容量を使う。
   if (d.draftDue) {
     const pending = d.pendingDraft
-    // 書く規律の正本は共有 skill(~/.famulus/skills/jissoku-writing)。Haru が正本を
-    // 書き換えれば次の下書きの日から反映される(一本化)。読めない日は famulus 固有の
-    // DRAFTING だけで書く — 下書きを止めるほどの依存にはしない。
+    // 正本は共有 skill(~/.famulus/skills/jissoku-writing)。読めない日は DRAFTING だけで書き、下書きは止めない。
     const overlay = jissokuOverlay()
     sections.push(
       [
@@ -334,11 +307,8 @@ function buildPrompt(
       "- 必要な情報が揃ったらそこで打ち切って、`tell` なり `remember` なりで形にして終える。",
       "- 指示や記録の仕組みに分かりにくい点があったら `confusion` で1行残す。タスクの難しさは書かない。無ければ呼ばない。",
       "",
-      // 「何もしないでよい」は載せるものが無い回にだけ言う。無条件に書くと、冷却の明けた
-      // watch を並べておきながら同じ文で「動かなくてよい」と言うことになる。実測(直近40回の実働)では
-      // watch で起きた9回のうち7回が道具呼び出し4回以下だった。逆に「必ず何かやれ」と書くと
-      // 用の無い watch と提案が増える。分けるのは件数ではなく、載っているかどうか。
-      // この分岐そのものの結果は測れていない(前後1回ずつでは差が出なかった)。
+      // 「何もしないでよい」は載せるものが無い回にだけ言う。無条件に書くと、冷却の明けた watch を並べながら
+      // 動かなくてよいと言うことになる。「必ず何かやれ」と書くと用の無い watch と提案が増える。
       ...(spokenTo
         ? [
             "**訊き返してよい。** 相手はいま画面の前にいる。分岐が決められないなら、",
@@ -361,7 +331,6 @@ function buildPrompt(
   return buildFencedPrompt(sections.join("\n\n"), untrusted)
 }
 
-/** エージェントを組み立てる前の予備判定。 */
 const blocked = Effect.gen(function* () {
   const gov = yield* Governance
   const model = cycleModel()
@@ -412,9 +381,7 @@ async function runCycleHeld(
     Effect.gen(function* () {
       const lease = yield* CycleLease
       yield* lease.assertCurrent(token)
-      // planCycle より先に読む — 届いていた文がそのまま未読の入力になり、「ユーザーから
-      // 言われた」ことが実行条件になる。ここが後だと、返事は次回まで読まれない。
-      // poll が先に取り込んでいれば0件で通り、DB に残っているぶんが planCycle に出る。
+      // planCycle より先に読む。後だと、届いていた返事が次回まで読まれない。
       const arrived = yield* drainInbox
       const db = yield* Db
       yield* db.setMeta("health:inbound:last_success", nowIso())
@@ -423,24 +390,20 @@ async function runCycleHeld(
       return yield* att.planCycle()
     }),
   )
-  // 手動起動やidle/blockedの回でも、受信処理から分離した配送workerへqueueを渡す。
+  // 手動起動や idle/blocked の回でも、配送 worker へ queue を渡す。
   await wakeDelivery(CONFIG.discord.token !== undefined)
 
-  // ── 実行条件が無い。ここで終わるのが正常。モデルは1回も呼ばない。
+  // 実行条件が無い回はここで終わる。モデルは呼ばない。
   if (d.idle) {
-    // ただし1日1回だけ、何日ぶんかの見直しをここで回す。
-    // idle の回に置く理由は、返信を待たせないため。見直しは Luna で 30 秒前後かかるので、
-    // 話しかけられた回に挟むとその秒数だけ返事が遅れる。実行条件が無い回なら誰も待っていない。
-    // その日に idle の回が一度も来なければ翌日へ回る — 対象期間は 7 日あり、`dream:through` が
-    // 進んだところを覚えているので、飛ばした日ぶんの材料は次の回にそのまま出てくる。
+    // 1日1回の見直しは idle の回に回す。話しかけられた回に挟むとその秒数だけ返事が遅れる。
+    // idle の回が来なかった日は翌日へ回る(`dream:through` が進んだ位置を持つ)。
     const shouldDream = await run(dreamDue(d.at))
     if (shouldDream) await assertLease(token)
     const dreamed = shouldDream
       ? await run(dream({ signal: leaseSignal })).catch((e: unknown) => `dream: 失敗(${causeReason(e)})`)
       : undefined
     if (dreamed) log(dreamed)
-    // 削除処理も1日1回。実行済み状態は別に持つ — 見直しが失敗した日に
-    // 掃除まで止まると、データの増加だけが進む。こちらはモデルを呼ばないのでクォータにも関係しない。
+    // 実行済み状態は見直しと別に持つ。見直しが失敗した日に掃除まで止めない。
     const shouldClean = await run(cleanupDue(d.at))
     if (shouldClean) await assertLease(token)
     const swept = shouldClean
@@ -455,7 +418,7 @@ async function runCycleHeld(
         const db = yield* Db
         const mem = yield* Memory
         const n = yield* bumpCount("cycle:idle_count")
-        // 失敗した回にも実行済み状態を付ける。付けないと、同じ失敗を 15 分ごとに1日じゅう繰り返す。
+        // 失敗した回にも付ける。付けないと同じ失敗を15分ごとに1日じゅう繰り返す。
         if (dreamed) yield* db.setMeta(DREAM_DAILY, localDayRange(d.at).key)
         if (swept) yield* db.setMeta(CLEANUP_DAILY, localDayRange(d.at).key)
         const lines = [dreamed, swept].filter(Boolean) as string[]
@@ -468,8 +431,7 @@ async function runCycleHeld(
             at: nowIso(),
           })
         }
-        // 見ていないので進めない。idle は入力が無いという判定なので、この起動と入れ違いに
-        // 届いたぶんまで既読にすると、届いた側は何も返らないまま消える。
+        // 見ていないので進めない。入れ違いに届いたぶんまで既読にすると、何も返らないまま消える。
         yield* att.completeCycle({ upto: d.cursor })
         return n
       }),
@@ -483,13 +445,11 @@ async function runCycleHeld(
   const stop = await run(blocked)
   if (stop) return `見送った: ${stop}`
 
-  // ユーザー入力による実行か、自律条件による実行か。ここで返信の宛先が決まる。
   // owner の未読があるなら、この回の最後の文は DB ではなくユーザーの画面へ出す。
   const spokenTo = d.newEvents.some((e) => e.source === "owner")
   log("実行条件:", d.reasons.join(" / "), spokenTo ? "(返信)" : "")
 
-  // 話しかけられた回は、答えが出るまで数分かかる。その間ユーザーの画面には何も起きないので、
-  // 受け取った発言そのものに 👀 を付けて「見えている」だけ先に返す(本文は1通も増やさない)。
+  // 答えまで数分かかるので、受け取った発言に 👀 を付けて先に返す(本文は増やさない)。
   const acked = spokenTo ? discordAck(d.newEvents) : undefined
   if (acked) {
     await run(
@@ -506,13 +466,11 @@ async function runCycleHeld(
     ).catch(() => {})
   }
 
-  // 道具一式を読み込むのは、モデル実行が必要と決まってから。idle の回(定期実行の大半)は
-  // ここを通らないので、その回の起動は DB を1回引くだけで終わる。
+  // 道具一式はモデル実行が決まってから読み込む。idle の回の起動は DB を1回引くだけで終える。
   const createAssistant =
     dependencies.createAssistant ?? (await import("./agent/assistant.ts")).createAssistant
 
-  // 話しかけられた回の進行表示。typing は即時、道具の経過は最初の道具から1通を編集で更新する。
-  // 台帳は通さない(Discord.ts の注記)。自律実行の回には出さない — 誰も待っていない。
+  // typing は即時、道具の経過は1通を編集で更新する。durable queue は通さない。自律実行の回には出さない。
   const display = acked ? await run(Effect.map(Discord, (dc) => dc.progressFor(acked.channelId))) : undefined
 
   try {
@@ -529,14 +487,12 @@ async function runCycleHeld(
       onLeaseLost: (reason) => leaseAbort.abort(reason),
       ...(display ? { onToolStep: (tools, targets) => display.want(`🛠 ${tally(tools, targets)}`) } : {}),
     })
-    // 道具に締切を見せる。プロンプトに書くだけでは足りない — 起動時の文は、9回目を
-    // 走らせるかどうかを決める時点では過去の話になっている(src/core/deadline.ts)。
+    // 起動時のプロンプトに書いた締切は判断の時点では古いので、道具に締切を見せる(src/core/deadline.ts)。
     startDeadline(TIMEOUT_MS)
-    // 切られてもここで受け止める。投げ返すと completeCycle に辿り着かないので冷却の起点が進まず、
-    // 次のタイマーが同じ条件で実行され、同量のクォータと時間を消費して同じ理由で失敗する。失敗した回も1回動いた回として
-    // 締める — 実際にモデルは走り、道具も動いて、その跡は DB に残っている。
+    // 切られても例外を外へ出さない。出すと completeCycle に届かず冷却の起点が進まないので、
+    // 次のタイマーが同じ理由で失敗を繰り返す。失敗した回も1回動いた回として締める。
     const deadline = AbortSignal.timeout(TIMEOUT_MS)
-    // 受け取った画像に記述を付ける(looker)。プロンプトより先 — 記述が無いと返信が画像に触れられない。
+    // プロンプトより先に画像の記述を付ける。無いと返信が画像に触れられない。
     const imageNotes = await run(describePendingImages(d.newEvents, { signal: deadline })).catch(
       (e: unknown) => {
         log("画像の記述に失敗:", causeReason(e))
@@ -544,9 +500,8 @@ async function runCycleHeld(
       },
     )
     const prompt = buildPrompt(d, spokenTo, await run(listWorkspaces), imageNotes)
-    // 「載せた」を記録するのはここ。planCycle の中ではない — planCycle は実行条件が無い回にも
-    // 走るので、そこで印を付けると誰も読んでいない一覧を載せたことにして順番だけが進む。
-    // 切られた回でも記録は残す。載ったことは事実で、次は他のものに順番を渡す。
+    // 載せた記録は planCycle ではなくここで付ける。planCycle は idle の回にも走るので、そこで付けると
+    // 読まれていない一覧の順番が進む。切られた回でも記録は残す。
     if (d.stalled.length > 0) {
       await run(
         Effect.gen(function* () {
@@ -566,12 +521,11 @@ async function runCycleHeld(
       turn = await assistant.respond(prompt, { signal: AbortSignal.any([deadline, leaseSignal]) })
     } finally {
       if (ticker) clearInterval(ticker)
-      // 進行表示は返事と入れ替わりで消す。切られた回も消す — ⚠️ の合図が残る。
+      // 切られた回も消す(⚠️ の合図が残る)。
       if (display) await run(display.stop()).catch(() => {})
     }
     const ms = Date.now() - began
-    // 時間切れと、それ以外の止まり方を混ぜない。混ぜると「420秒で切られた」だけが DB に残り、
-    // 自律実行上限への到達もモデル側の失敗も同じ文言になる。次回に何を直せばいいか読めなくなる。
+    // 時間切れとそれ以外の止まり方を混ぜない。混ぜると上限到達とモデルの失敗が同じ文言になる。
     const cutOff = turn.cutOff
       ? deadline.aborted
         ? `${Math.round(TIMEOUT_MS / 1000)}秒で時間切れ`
@@ -579,14 +533,11 @@ async function runCycleHeld(
       : undefined
     if (cutOff) log("止まった:", cutOff, `/ ${turn.steps} 手まで`)
 
-    // 切られた回でも、そこまでに書けた文は捨てない。道具ループの途中の文が残っている
-    // ことがあり、それが「9回走らせて何が分かったか」の唯一の記録になる。
+    // 切られた回でも書けた文は捨てない。それがその回の唯一の記録になることがある。
     let text = (turn.text || (cutOff ? `(${cutOff}。この回の締めの文は書けていない)` : "")).trim()
 
-    // ── 返信の先行配送。返信文はこの時点で確定していて、keeper の後ろに置くと確定から
-    // 届くまでがその分遅れる。durable queue に置いてから flush する。未送信はworkerが再送し、
-    // HTTP結果が曖昧なら本文と状態を残して自動再送を止める。鍵は締めの前に落ちた回の
-    // 再実行でも同じになるので、二重送信にならない。
+    // 返信は keeper より先に配送する。durable queue に置いてから flush する。
+    // 鍵は締めの前に落ちた回の再実行でも同じなので、二重送信にならない。
     const deliveryKey = digestOf({
       reasonKey: d.reasonKey,
       upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
@@ -603,8 +554,7 @@ async function runCycleHeld(
             "SELECT id FROM discord_outbound WHERE purpose='cycle-reply' AND dedupe_key=?",
             deliveryKey,
           )
-          // 締める前に落ちた回では、作り直した本文より先に保存した返信を正本にする。
-          // enqueue の spec 照合を緩めず、この用途だけ既存の配送を引き継ぐ。
+          // 締める前に落ちた回では、保存済みの返信を正本にする。enqueue の spec 照合は緩めない。
           if (existing) return yield* discord.getOutbound(String(existing.id))
           return yield* discord.enqueue({ purpose: "cycle-reply", dedupeKey: deliveryKey, text })
         }),
@@ -633,14 +583,13 @@ async function runCycleHeld(
       }
     }
 
-    // ── 締めの keeper。ユーザーが話した回にだけ通る。
-    // 材料はユーザーの発言そのもので、外から来たものは渡さない。切られた回は通さない —
-    // 途中で止まった回のやり取りは、確かめられたかどうかが判断できる形になっていない。
+    // keeper はユーザーが話した回にだけ通し、材料はユーザーの発言だけにする。
+    // 切られた回は確かめられたかを判断できないので通さない。
     let kept: string | undefined
     if (spokenTo && !cutOff) {
       const evidence = d.newEvents.filter((e) => e.source === "owner" && e.taint === 0)
       const material = evidence.map(renderEvent).join("\n")
-      // `since` はこの回の起点。本体が既に確定させた slot を keeper が言い換え直さないための線。
+      // `since` はこの回の起点。本体が確定させた slot を keeper が言い換え直さないため。
       await assertLease(token)
       const keepInput = {
         material,
@@ -664,10 +613,8 @@ async function runCycleHeld(
         yield* mem.remember({
           kind: "observe",
           source: "system",
-          // やったことと、やったと書いたことを別の欄に置く。`said` は自分で書いた報告なので、
-          // それだけでは外から進み具合を確かめられない。`tools` は実際に呼ばれた
-          // 道具の並び、`steps` は手数、`ms` は掛かった時間 — どれも呼び出し側で数えた値。
-          // 切られた回は `cutOff` も残す。止まったことが `said` に書かれるとは限らない。
+          // `said` は自己申告なので、呼び出し側で数えた `tools`・`steps`・`ms` を別の欄に置く。
+          // 止まったことが `said` に書かれるとは限らないので `cutOff` も残す。
           content: {
             cycle: d.at,
             cycleId: currentCycleId(),
@@ -681,23 +628,20 @@ async function runCycleHeld(
             ...(turn.confusion ? { confusion: turn.confusion } : {}),
             ...(kept ? { kept } : {}),
           },
-          // 索引に入れるのは言ったことだけ。`deriveText` に任せると封筒(起動時刻・起きた理由)まで
-          // 平らにして混ぜてしまい、「ユーザーの入力が未読」のような定型句が毎回の記録に紛れて、
-          // 何を検索してもそれが当たるようになる。封筒は DB に残す、索引には入れない。
+          // 索引には言ったことだけ入れる。`deriveText` に任せると起動時刻や理由の定型句が毎回混ざり、
+          // 何を検索してもそれが当たる。
           text,
           at: nowIso(),
         })
         yield* bumpCount("cycle:active_count")
-        // active を立てるのはここだけ。次の cycle はこの時刻から冷却時間を数える。
-        // reasonKey を渡すと、同じ組み合わせで起きるたびに次の冷却が倍になる(回し続けない)。
-        // 進めるのは planCycle に載った行まで。走っている間に届いたぶんは未読のまま残り、
-        // 30秒ごとの poll(poll.ts)が次の起動で拾い直す。ここを最大 rowid にすると黙って落ちる。
+        // active を立てるのはここだけ(次の cycle はこの時刻から冷却を数える)。reasonKey を渡すと同じ組み合わせの
+        // 冷却が倍になる。進めるのは planCycle に載った行まで。最大 rowid にすると走行中に届いたぶんが落ちる。
         yield* att.completeCycle({
           active: true,
           reasonKey: d.reasonKey,
           upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
         })
-        // 済んだ合図に置き換える。👀 は進行中の印なので、終わりの合図と同時に外す。
+        // 👀 は進行中の印なので、終わりの合図と同時に外す。
         if (acked)
           yield* discord
             .enqueue({
@@ -707,14 +651,8 @@ async function runCycleHeld(
               ack: { ...acked, emoji: cutOff ? "⚠️" : "✅", clear: "👀" },
             })
             .pipe(Effect.catch(() => Effect.void))
-        // ── 進み具合は1日1通。日付が変わった後の最初に動いた回が、前の日ぶんをまとめて出す。
-        // 呼びかけない。出す先が指してなければ何も起きない(`Desk` の "log" は DM に落ちない)。
-        //
-        // 書いた記録をそのまま読み直して出す。ここで数え直すと、画面で見る値と
-        // `fam journal` の値が別々に変わっていって、食い違ったときにどちらが本当か決められなくなる。
-        // 最後に置いてあるのは、enqueue に失敗しても commit まで済んでいるようにするため。
-        // enqueue の後に境界(meta)を書く順 — 逆だと、enqueue に失敗した日ぶんが二度と出ない。
-        // 同じ窓の再 enqueue はラベル鍵の重複として弾かれる。
+        // 進み具合は1日1通。書いた記録を読み直して出す(数え直すと `fam journal` と食い違う)。
+        // 境界(meta)は enqueue の後に書く。逆だと enqueue に失敗した日ぶんが二度と出ない。
         const db = yield* Db
         const w = dailyLogWindow(yield* db.meta("log:upto"), nowIso())
         if (w) {
@@ -736,9 +674,8 @@ async function runCycleHeld(
         }
       }),
     )
-    // 返信は書けた瞬間に出す。独立配送workerだけに任せると、起動までのぶんだけ待つので
-    // 次の poll tick(最大30秒後)まで queued のまま待つ(実測: 完成 05:05:22 → 配送 05:05:35)。
-    // 失敗しても投げない — queue は永続で、次の poll が再送する。commit は上で済んでいる。
+    // 独立 worker だけに任せると次の poll まで queued のまま待つので、書けた時点で起こす。
+    // 失敗しても例外にしない(queue は永続で、次の poll が再送する)。
     await wakeDelivery(CONFIG.discord.token !== undefined)
     if (cutOff) return `止まった(${cutOff})— 走った跡は DB に残っている`
     return text ? `動いた: ${text.slice(0, 400)}` : "動いた(発話なし)"
@@ -748,7 +685,7 @@ async function runCycleHeld(
 }
 
 export async function runCycle(dependencies: CycleDependencies = {}): Promise<string> {
-  // dreamを含むcycle内の全モデル実行を、自走枠の検査と会計へ載せる。
+  // dream を含む cycle 内の全モデル実行を、自走枠で検査・計上する。
   setLane("autonomous")
   let token: CycleLeaseToken
   try {
@@ -802,8 +739,7 @@ const main = async (): Promise<void> => {
   try {
     console.log(await runCycle())
   } catch (e) {
-    // 拒否(halt / クォータ再実行抑止 / 自律実行上限)は失敗ではなく設計どおりの結果。
-    // 既読位置を進めないので、窓が開いた次の cycle が同じ入力をもう一度見る。
+    // 拒否(halt / クォータ再実行抑止 / 自律実行上限)は失敗ではない。既読位置を進めないので次の cycle が同じ入力を見る。
     const cause = e instanceof Error && "cause" in e ? (e as { cause?: unknown }).cause : undefined
     const inner = isRefusal(cause) ? cause : e
     if (inner instanceof ConnectorFailed) {

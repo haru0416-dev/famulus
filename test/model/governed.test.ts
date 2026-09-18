@@ -1,11 +1,6 @@
 /**
- * governance middleware(src/model/governed.ts)の検査。モデルは呼ばない。
- * 固定するのは失敗→cooldown の連鎖: quota 付きの失敗が noteFailure で記録され、
- * **次の**呼び出しが gate の precheck で拒否されること。ここが切れると枯渇後も
- * 429 を叩き続けて週次プールを浪費する(クォータ検出は失敗分類だけが頼り)。
- *
- * governed の run() はプロセス共通の runtime を遅延生成し、生成時に設定を読む。
- * vitest はファイルごとに別プロセスなので、最初の呼び出しの前に DB を :memory: へ向ける。
+ * 失敗→cooldown の連鎖が切れると、枯渇後も 429 を受け続けて週次プールを使い切る。
+ * run() は初回呼び出しで設定を読むので、その前に DB を :memory: へ向ける。
  */
 
 import assert from "node:assert/strict"
@@ -24,7 +19,6 @@ beforeAll(() => {
   configureApp()
 })
 
-/** doGenerate が枯渇シグナル付きで落ちる素体。 */
 const exhaustedModel: LanguageModelV4 = {
   specificationVersion: "v4",
   provider: "test",
@@ -49,13 +43,11 @@ const OPTS = {
 test("quota 付きの失敗は記録され、次の呼び出しは cooldown で拒否される", async () => {
   const wrapped = wrapLanguageModel({ model: exhaustedModel, middleware: governance() })
 
-  // 1回目: gate は通り、失敗がそのまま外へ出る(握り潰さない)。
   await assert.rejects(async () => void (await wrapped.doGenerate(OPTS)), /credits exhausted/)
 
-  // 2回目: noteFailure が置いた cooldown を gate が読み、モデルに触れる前に拒否する。
   await assert.rejects(async () => void (await wrapped.doGenerate(OPTS)), /クールダウン中/)
 
-  // 失敗は ledger に1行だけ(2回目は gate 止まりで記録されない)。
+  // 2回目は gate で止まるので ledger に残らない。
   const rows = await run(Effect.flatMap(Db, (db) => db.all("SELECT kind, provenance FROM ledger")))
   assert.equal(rows.length, 1)
   assert.equal(rows[0]?.kind, "model-failed")

@@ -1,8 +1,4 @@
-/**
- * 調査モードの検査。分岐の隔離・締切による道具の絞り・重複の可視化と、
- * explore dossier の記録規律(空振りも予想も evidence 検証も)を見る。
- * 分岐ループの実走はモデルが要るのでここでは見ない — 実走は evaluate:explore が担う。
- */
+/** 分岐ループの実走はモデルが要るので evaluate:explore で見る。 */
 
 import assert from "node:assert/strict"
 import type { LanguageModelV4 } from "@ai-sdk/provider"
@@ -28,7 +24,7 @@ test("変形は7種で、分岐ブリーフは種と自分の変形しか含ま�
     const brief = branchBrief(seed, transform)
     assert.ok(brief.includes(seed), transform)
     assert.ok(brief.includes(TRANSFORM_GOAL[transform]), transform)
-    // 兄弟の変形の目標文言が混ざっていない。混ざると分岐の独立が壊れる。
+    // 他の変形の目標文言が混ざると分岐が独立しない。
     for (const other of EXPLORE_TRANSFORMS) {
       if (other === transform) continue
       assert.ok(!brief.includes(TRANSFORM_GOAL[other]), `${transform} に ${other} が混ざった`)
@@ -56,9 +52,9 @@ test("wide の指示は目標件数を持つ", () => {
 })
 
 test("残り時間で道具が絞られる", () => {
-  assert.equal(activeToolsFor(300_000), undefined) // 余裕あり: 制限なし
-  assert.deepEqual(activeToolsFor(60_000), ["search"]) // fetch(20秒級)を止める
-  assert.deepEqual(activeToolsFor(30_000), []) // 手持ちで書かせる
+  assert.equal(activeToolsFor(300_000), undefined)
+  assert.deepEqual(activeToolsFor(60_000), ["search"]) // fetch は20秒級かかるので止める
+  assert.deepEqual(activeToolsFor(30_000), [])
 })
 
 test("重複は兄弟間だけを数え、消さずに一覧で返す", () => {
@@ -147,7 +143,7 @@ test("explore dossier は予想・空振り・失敗・重複を残し、inconcl
       }),
     )
     const dossier = rows.dossier as { state?: unknown } | undefined
-    assert.equal(dossier?.state, "inconclusive") // 統合前 — conclusion は分岐の仕事ではない
+    assert.equal(dossier?.state, "inconclusive") // 結論は統合で出す
     const claims = rows.claims as { statement: string; state: string }[]
     const texts = claims.map((c) => c.statement)
     assert.ok(texts.some((t) => t.startsWith("[explore:予想]")))
@@ -159,13 +155,12 @@ test("explore dossier は予想・空振り・失敗・重複を残し、inconcl
     const substantive = claims.find((c) => c.statement === "[direct] 計測位置が解決率を分ける")
     assert.equal(substantive?.state, "supported")
 
-    // ── 空振り・失敗の還流。近い種では方向ごとに最新の1件が返り、遠い種では返らない。
     const near = await h.run(
       Effect.flatMap(Research, (r) => r.priorMisses("エージェントの自走が空回りするのはどんな条件か")),
     )
     assert.deepEqual([...near.keys()].sort(), ["falsify", "human"])
     assert.match(near.get("falsify")?.summary ?? "", /反証は見つからず/)
-    // 実のある結果が出た方向(direct)は空振りではないので入らない
+    // direct は結果が出たので空振りではない
     assert.equal(near.get("direct"), undefined)
 
     const far = await h.run(Effect.flatMap(Research, (r) => r.priorMisses("Techmeme の feed を読む頻度")))
@@ -211,10 +206,7 @@ test("explore dossier は snapshot に無い quote を拒否する", async () =>
   })
 })
 
-/**
- * 引用の救済。照合失敗1件で委譲まるごとを捨てない — 照合できた claim は残し、
- * 落とした分は文の一覧で返す(limitations 行き)。捏造を止める最終検証は記録側に残る。
- */
+/** 照合失敗1件で委譲全体を捨てない。捏造を止める最終検証は記録側にある。 */
 test("照合できない claim は落とし、できた分だけ残す", () => {
   const snapshots = [{ url: "https://a", content: "実在する本文", status: 200 }]
   const { kept, dropped } = salvageClaims(
@@ -223,7 +215,7 @@ test("照合できない claim は落とし、できた分だけ残す", () => {
         statement: "実在",
         evidence: [
           { url: "https://a", quote: "実在する本文" },
-          { url: "https://a", quote: "無い引用" }, // この evidence だけ落ちる
+          { url: "https://a", quote: "無い引用" },
         ],
       },
       { statement: "捏造", evidence: [{ url: "https://a", quote: "全部無い" }] },

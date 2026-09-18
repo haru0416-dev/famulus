@@ -1,8 +1,4 @@
-/**
- * 受け取った画像の置き場。DB には参照(sha256)だけを置き、実体はここに置く —
- * events を太らせない。名前は内容ハッシュなので、同じ画像を何度受けても1つに落ちる。
- * 消す判断は cleanup と DB リセットの側にあり、ここは置くことと読むことだけを持つ。
- */
+/** events を大きくしないよう、DB には sha256 の参照だけを置き画像本体はファイルに置く。 */
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -35,7 +31,7 @@ export const saveMedia = (bytes: Uint8Array, mediaType: string): MediaRef => {
   return { sha, mediaType }
 }
 
-/** 無ければ undefined — 参照だけ残って実体が消えている状態を、読む側で区別できるように。 */
+/** 参照だけ残って実体が消えている状態を呼び出し側で区別できるよう undefined を返す。 */
 export const readMedia = (ref: MediaRef): Uint8Array | undefined => {
   const path = join(appConfig().paths.media, fileFor(ref.sha, ref.mediaType))
   if (!existsSync(path)) return undefined
