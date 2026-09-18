@@ -23,6 +23,7 @@ import { nowIso } from "../core/time.ts"
 import { canonicalJson, digestOf } from "../model/kernel-spec.ts"
 import { Db, type DbTx } from "./Db.ts"
 import type { DraftDecision } from "./Drafts.ts"
+import type { ProposalDecision } from "./Proposals.ts"
 
 /** API の base URL。テストだけ差し替える。 */
 const api = (): string => appConfig().discord.api
@@ -42,6 +43,7 @@ export interface Tap {
   /** 押されたときにユーザーの発言として DB へ入る文。 */
   readonly reply: string
   readonly draft?: { readonly id: string; readonly decision: DraftDecision }
+  readonly proposal?: { readonly id: string; readonly decision: ProposalDecision }
 }
 
 /**
@@ -114,6 +116,7 @@ export interface Inbound {
   readonly id: string
   readonly text: string
   readonly draft?: { readonly id: string; readonly decision: DraftDecision }
+  readonly proposal?: { readonly id: string; readonly decision: ProposalDecision }
   /** 添付されていた画像。取得はここでは行わない — URL を渡し、保存は inbox 側が持つ。 */
   readonly images?: readonly { url: string; mediaType: string; name?: string; size: number }[]
 }
@@ -150,6 +153,7 @@ const fixedChannel = (to: Desk): string | undefined => appConfig().discord.chann
 interface PendingTap {
   readonly reply: string
   readonly draft?: { readonly id: string; readonly decision: DraftDecision }
+  readonly proposal?: { readonly id: string; readonly decision: ProposalDecision }
   /** outboundがsentになる前の押下を消費しないための永続参照。旧metadataには無い。 */
   readonly outboundId?: string
   /** 最新一覧から落ちたmessageを直接確認するための配送先。旧metadataには無い。 */
@@ -245,10 +249,18 @@ const decodePending = (raw: string | undefined): Pending => {
         isRecord(draft) &&
         typeof draft.id === "string" &&
         (draft.decision === "accept" || draft.decision === "revise" || draft.decision === "discard")
+      const proposal = tap.proposal
+      const validProposal =
+        isRecord(proposal) &&
+        typeof proposal.id === "string" &&
+        (proposal.decision === "approve" || proposal.decision === "deny")
       taps[emoji] = {
         reply: tap.reply,
         ...(validDraft
           ? { draft: { id: draft.id as string, decision: draft.decision as DraftDecision } }
+          : {}),
+        ...(validProposal
+          ? { proposal: { id: proposal.id as string, decision: proposal.decision as ProposalDecision } }
           : {}),
         ...(typeof tap.outboundId === "string" ? { outboundId: tap.outboundId } : {}),
         ...(typeof tap.channelId === "string" ? { channelId: tap.channelId } : {}),
@@ -579,6 +591,7 @@ const makeDiscord = () =>
           readonly emoji: string
           readonly reply: string
           readonly draft?: { readonly id: string; readonly decision: DraftDecision }
+          readonly proposal?: { readonly id: string; readonly decision: ProposalDecision }
         }
       | {
           readonly kind: "ack"
@@ -613,6 +626,7 @@ const makeDiscord = () =>
         [spec.emoji]: {
           reply: spec.reply,
           ...(spec.draft ? { draft: spec.draft } : {}),
+          ...(spec.proposal ? { proposal: spec.proposal } : {}),
           outboundId,
           channelId,
         },
@@ -795,6 +809,7 @@ const makeDiscord = () =>
               emoji: tap.emoji,
               reply: tap.reply,
               ...(tap.draft ? { draft: tap.draft } : {}),
+              ...(tap.proposal ? { proposal: tap.proposal } : {}),
             })
 
         const spec = canonicalJson({
@@ -1552,6 +1567,7 @@ const makeDiscord = () =>
             id: `${candidate.messageId}:${candidate.name}`,
             text: candidate.tap.reply,
             ...(candidate.tap.draft ? { draft: candidate.tap.draft } : {}),
+            ...(candidate.tap.proposal ? { proposal: candidate.tap.proposal } : {}),
           })
           delete pending[candidate.messageId]
           consumedTapIds.add(candidate.messageId)

@@ -159,23 +159,133 @@ test("belief追記が失敗したtransactionは巻き戻される", async () => 
   })
 })
 
-test("redact監査追記が失敗したtransactionは巻き戻される", async () => {
+test("redact監査追記が失敗すると本文・引用・索引も巻き戻される", async () => {
   await withHarness(async (h) => {
+    const { evidence, belief } = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const db = yield* Db
+        const evidence = yield* mem.remember({ content: "今は東京に住んでいる" })
+        const belief = yield* mem.recordBelief("home.city", "東京", {
+          evidenceEventId: evidence,
+          evidenceQuote: "今は東京に住んでいる",
+        })
+        yield* db.run(`CREATE TRIGGER reject_redact_audit BEFORE INSERT ON events
+          WHEN NEW.kind = 'redact' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END`)
+        return { evidence, belief }
+      }),
+    )
+    const snapshot = Effect.gen(function* () {
+      const db = yield* Db
+      return {
+        events: yield* db.all("SELECT * FROM events ORDER BY seq"),
+        index: yield* db.all("SELECT event_id,text FROM events_fts ORDER BY event_id"),
+      }
+    })
+    const before = await h.run(snapshot)
+    // 原文を消す経路は参照先の引用、beliefを消す経路は自身の引用を巻き戻す。
+    for (const id of [evidence, belief]) {
+      const failed = await h.fail(Effect.flatMap(Memory, (mem) => mem.redact(id, "本人の依頼")))
+      assert.equal(failed._tag, "DbFailed")
+      assert.match(failed.message, /audit unavailable/)
+      assert.deepEqual(await h.run(snapshot), before)
+    }
+  })
+})
+
+test("beliefの抹消は自身の引用を消し、根拠eventと参照関係は残す", async () => {
+  await withHarness(async (h) => {
+    const result = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const db = yield* Db
+        const evidence = yield* mem.remember({ content: "今は東京に住んでいる" })
+        const belief = yield* mem.recordBelief("home.city", "東京", {
+          evidenceEventId: evidence,
+          evidenceQuote: "今は東京に住んでいる",
+        })
+        yield* mem.redact(belief, "確定内容の抹消")
+        return {
+          evidence,
+          original: yield* db.get("SELECT content FROM events WHERE id=?", evidence),
+          belief: yield* db.get(
+            "SELECT content,search_text,evidence_event_id,evidence_quote FROM events WHERE id=?",
+            belief,
+          ),
+        }
+      }),
+    )
+    assert.equal(result.original?.content, JSON.stringify("今は東京に住んでいる"))
+    assert.deepEqual(result.belief, {
+      content: null,
+      search_text: null,
+      evidence_event_id: result.evidence,
+      evidence_quote: null,
+    })
+  })
+})
+
+test("原文の抹消は全参照元の引用を消し、beliefの内容は消さない", async () => {
+  await withHarness(async (h) => {
+    const result = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const db = yield* Db
+        const evidence = yield* mem.remember({ content: "今は東京に住んでいる" })
+        for (const slot of ["home.city", "profile.city"]) {
+          yield* mem.recordBelief(slot, "東京", {
+            evidenceEventId: evidence,
+            evidenceQuote: "今は東京に住んでいる",
+          })
+        }
+        yield* mem.redact(evidence, "原文の抹消")
+        return {
+          original: yield* db.get("SELECT content,search_text FROM events WHERE id=?", evidence),
+          quotes: yield* db.all("SELECT evidence_quote FROM events WHERE evidence_event_id=?", evidence),
+          home: yield* mem.currentBelief("home.city"),
+          profile: yield* mem.currentBelief("profile.city"),
+          recalled: yield* mem.recall("home.city"),
+        }
+      }),
+    )
+    assert.deepEqual(result.original, { content: null, search_text: null })
+    assert.deepEqual(result.quotes, [{ evidence_quote: null }, { evidence_quote: null }])
+    assert.equal(result.home?.value, "東京")
+    assert.equal(result.profile?.value, "東京")
+    assert.equal(result.recalled[0]?.content, JSON.stringify("東京"))
+  })
+})
+
+test("引用のNULL化で本文・索引・根拠リンク・メタデータの改変は許されない", async () => {
+  await withHarness(async (h) => {
+    const id = await h.run(
+      Effect.gen(function* () {
+        const mem = yield* Memory
+        const evidence = yield* mem.remember({ content: "今は東京に住んでいる" })
+        return yield* mem.recordBelief("home.city", "東京", {
+          evidenceEventId: evidence,
+          evidenceQuote: "今は東京に住んでいる",
+        })
+      }),
+    )
+    for (const mutation of [
+      `evidence_quote=NULL, content='"大阪"'`,
+      "evidence_quote=NULL, search_text='大阪'",
+      "evidence_quote=NULL, evidence_event_id=NULL",
+      "evidence_quote=NULL, source='owner'",
+      "evidence_quote='別の引用', content=NULL, search_text=NULL",
+    ]) {
+      const failed = await h.fail(
+        Effect.flatMap(Db, (db) => db.run(`UPDATE events SET ${mutation} WHERE id=?`, id)),
+      )
+      assert.equal(failed._tag, "DbFailed")
+      assert.match(failed.message, /append-only/)
+    }
+    await h.run(Effect.flatMap(Memory, (mem) => mem.redact(id, "本人の依頼")))
     const failed = await h.fail(
-      Effect.gen(function* () {
-        const mem = yield* Memory
-        yield* mem.redact("missing-event", "存在しないevent")
-      }),
+      Effect.flatMap(Db, (db) => db.run("UPDATE events SET evidence_quote='復元' WHERE id=?", id)),
     )
-    assert.equal((failed as { _tag: string })._tag, "DbFailed")
-    const count = await h.run(
-      Effect.gen(function* () {
-        const mem = yield* Memory
-        yield* mem.remember({ content: "次の正常な追記" })
-        return yield* mem.count
-      }),
-    )
-    assert.equal(count, 1)
+    assert.equal(failed._tag, "DbFailed")
   })
 })
 

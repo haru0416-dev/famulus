@@ -7,8 +7,10 @@
  */
 
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
+import { currentCycleId, withCycleContext } from "../src/core/cycle-context.ts"
 import { localDayRange } from "../src/core/time.ts"
 import {
   dailyLogWindow,
@@ -19,18 +21,21 @@ import {
   runs,
   tally,
 } from "../src/journal.ts"
+import { Attention } from "../src/services/Attention.ts"
 import { Db } from "../src/services/Db.ts"
+import { Ledger } from "../src/services/Ledger.ts"
 import { Memory } from "../src/services/Memory.ts"
+import { Proposals } from "../src/services/Proposals.ts"
 import { withHarness } from "./helpers.ts"
 
-/** cycle が書く形そのまま。欄名を変えたらここが落ちる(読む側と書く側が離れているので)。 */
+/** 現行のcycle記録。旧記録を作るときはcycleIdを明示してundefinedにする。 */
 const cycleRow = (c: Record<string, unknown>, wroteAt: string) =>
   Effect.gen(function* () {
     const mem = yield* Memory
     yield* mem.remember({
       kind: "observe",
       source: "system",
-      content: c,
+      content: { cycleId: currentCycleId() ?? randomUUID(), ...c },
       text: String(c.said ?? ""),
       at: wroteAt,
     })
@@ -95,100 +100,113 @@ test("道具を呼んでも何も残らなかった回は、残った行が全�
   })
 })
 
-test("窓の中に増えた行だけ数える — 前後の回のぶんは混ざらない", async () => {
+test("同時に動く二つのcycleと対話の行は混ざらず、過去のsource時刻も保持する", async () => {
   await withHarness(async (h) => {
-    await h.run(
+    const at = "2026-08-13T06:00:00Z"
+    const sourceAt = "2026-08-12T01:00:00Z"
+    const enteredA = Promise.withResolvers<void>()
+    const enteredB = Promise.withResolvers<void>()
+    const record = (name: string, count: number, outTok: number, journal: boolean) =>
       Effect.gen(function* () {
         const mem = yield* Memory
-        yield* mem.remember({
-          source: "system",
-          content: { ran: "ls", exitCode: 0 },
-          at: "2026-08-13T05:00:00Z",
-        })
-        yield* mem.remember({
-          source: "system",
-          content: { ran: "grep", exitCode: 0 },
-          at: "2026-08-13T06:00:10Z",
-        })
-        yield* mem.remember({
-          source: "system",
-          content: { told: "下書きが1本できた", body: "…", sent: true },
-          at: "2026-08-13T06:00:20Z",
-        })
-        yield* mem.remember({
-          source: "system",
-          content: { drafted: "題", body: "…", basis: "…", sent: true },
-          at: "2026-08-13T06:10:00Z",
-        })
+        const ledger = yield* Ledger
+        const proposals = yield* Proposals
+        const attention = yield* Attention
+        const watch = yield* attention.watch(name, "famulus", { at: sourceAt })
+        for (let i = 0; i < count; i++) {
+          // awaitを跨ぐと別の実行が進む。サービス作成時のIDを保持してはいけない。
+          yield* Effect.promise(() => Promise.resolve())
+          yield* mem.remember({ source: "system", content: { ran: name }, at: sourceAt })
+          yield* mem.remember({ source: "system", content: { told: name }, at })
+          yield* mem.remember({ source: "system", content: { drafted: name }, at })
+          yield* mem.recordBelief(`${name}-${i}`, name)
+          yield* proposals.create({
+            summary: name,
+            assessment: name,
+            ask: name,
+            what: name,
+            when: name,
+            who: "famulus",
+            how: name,
+            howVerified: name,
+            at,
+          })
+          yield* attention.recordWatchRun(watch, name, sourceAt)
+          yield* ledger.record({ kind: "run", role: "assistant", usage: { outTok }, at })
+        }
+        // 同じcycleでも、モデルを呼んでいない監査行はrun数に入らない。
+        yield* ledger.record({ kind: "audit", usage: { outTok: 50_000 }, at })
+        if (journal) yield* cycleRow({ cycle: at, said: name }, "2026-08-13T06:01:00Z")
+      })
+    // レイヤーは共有する。各書き込み時の非同期contextだけで帰属が決まる。
+    await h.run(Db)
+    await Promise.all([
+      withCycleContext("cycle-a", async () => {
+        enteredA.resolve()
+        await enteredB.promise
+        await h.run(record("a", 1, 11, true))
       }),
-    )
-    await h.run(
-      cycleRow(
-        { cycle: "2026-08-13T06:00:00Z", reasons: ["下書きの日"], said: "書いた", tools: ["shell", "tell"] },
-        "2026-08-13T06:00:30Z",
+      withCycleContext("cycle-b", async () => {
+        enteredB.resolve()
+        await enteredA.promise
+        await h.run(record("b", 2, 37, true))
+      }),
+      h.run(record("interactive", 3, 9000, false)),
+    ])
+    assert.equal(currentCycleId(), undefined)
+    const entries = await h.run(readJournal(5))
+    assert.equal(entries.length, 2)
+    for (const [id, count, outTok] of [
+      ["cycle-a", 1, 11],
+      ["cycle-b", 2, 74],
+    ] as const) {
+      const e = entries.find((entry) => entry.cycleId === id)
+      assert.ok(e)
+      assert.deepEqual(e.left, {
+        proposals: count,
+        drafts: count,
+        tells: count,
+        shells: count,
+        beliefs: count,
+        watchRuns: count,
+      })
+      assert.equal(e.runs, count)
+      assert.equal(e.outTok, outTok)
+    }
+    const source = await h.run(
+      Effect.flatMap(Db, (db) =>
+        db.get(
+          "SELECT at FROM events WHERE cycle_id = 'cycle-a' AND json_extract(content, '$.ran') IS NOT NULL",
+        ),
       ),
     )
-    const [e] = await h.run(readJournal(5))
-    assert.ok(e)
-    assert.equal(e.left.shells, 1, "窓の前の1件が混ざっている")
-    assert.equal(e.left.tells, 1)
-    assert.equal(e.left.drafts, 0, "窓の後の1件が混ざっている")
-  })
-})
-
-test("run 数と出力tokenは窓の中の ledger だけを足す", async () => {
-  await withHarness(async (h) => {
-    await h.run(
-      Effect.gen(function* () {
-        const db = yield* Db
-        for (const [id, at, out] of [
-          ["l0", "2026-08-13T05:59:00Z", 9000],
-          ["l1", "2026-08-13T06:00:05Z", 800],
-          ["l2", "2026-08-13T06:00:25Z", 400],
-          ["l3", "2026-08-13T06:01:00Z", 9000],
-        ] as const) {
-          yield* db.run("INSERT INTO ledger (id, at, kind, out_tok)VALUES (?, ?, 'run', ?)", id, at, out)
-        }
-      }),
-    )
-    await h.run(
-      cycleRow({ cycle: "2026-08-13T06:00:00Z", reasons: ["入力"], said: "返した" }, "2026-08-13T06:00:30Z"),
-    )
-    const [e] = await h.run(readJournal(5))
-    assert.ok(e)
-    assert.equal(e.runs, 2)
-    assert.equal(e.outTok, 1200)
-    assert.match(dailyPost([e], "2026-08-13"), /- 推論 2run \/ 出力1\.2k/)
-  })
-})
-
-test("金額欄を持たず、出したトークンを出す", async () => {
-  await withHarness(async (h) => {
-    await h.run(
-      Effect.gen(function* () {
-        const db = yield* Db
-        yield* db.run(
-          "INSERT INTO ledger (id, at, kind, out_tok)VALUES ('m1', '2026-08-13T08:00:10Z', 'turn', 830)",
-        )
-      }),
-    )
-    await h.run(
-      cycleRow({ cycle: "2026-08-13T08:00:00Z", reasons: ["watch"], said: "見た" }, "2026-08-13T08:00:20Z"),
-    )
-    const [e] = await h.run(readJournal(5))
-    assert.ok(e)
-    const one = dailyPost([e], "2026-08-13")
-    assert.match(one, /- 推論 1run \/ 出力830/)
-    assert.doesNotMatch(one, /\$/)
+    assert.equal(source?.at, sourceAt)
   })
 })
 
 /** 記録を追加する前の回。「モデル未呼び出し」と「記録なし」を区別する。 */
-test("道具の記録を持たない古い回は「—」で出る(0手とは書かない)", async () => {
+test("旧記録は周辺の行があっても数量不明になり、日次集計も未帰属を明示する", async () => {
   await withHarness(async (h) => {
     await h.run(
+      Effect.gen(function* () {
+        const ledger = yield* Ledger
+        const mem = yield* Memory
+        yield* ledger.record({
+          kind: "run",
+          role: "assistant",
+          usage: { outTok: 12_345 },
+          at: "2026-08-12T01:01:00Z",
+        })
+        yield* mem.remember({
+          source: "system",
+          content: { drafted: "別の仕事" },
+          at: "2026-08-12T01:01:00Z",
+        })
+      }),
+    )
+    await h.run(
       cycleRow(
-        { tick: "2026-08-12T01:00:00Z", reasons: ["入力"], said: "前の形で書かれた回" },
+        { cycleId: undefined, tick: "2026-08-12T01:00:00Z", reasons: ["入力"], said: "前の形で書かれた回" },
         "2026-08-12T01:02:00Z",
       ),
     )
@@ -196,11 +214,23 @@ test("道具の記録を持たない古い回は「—」で出る(0手とは書
     assert.ok(e)
     assert.equal(e.tools, undefined)
     assert.equal(e.steps, undefined)
+    assert.equal(e.cycleId, undefined)
+    assert.equal(e.left, undefined)
+    assert.equal(e.runs, undefined)
+    assert.equal(e.outTok, undefined)
+    assert.match(renderJournal([e]), /未帰属/)
+    assert.doesNotMatch(renderJournal([e]), /0run|何も残らなかった|12345/)
     const one = dailyPost([e], "2026-08-12")
     assert.match(one, /- 道具 記録なし/)
     // 時間の記録が無い回だけの日は、合計時間を出さない。0秒と出すと一瞬で終わった日に見える。
     assert.match(one, /- 動いた 1回$/m)
     assert.doesNotMatch(one, /計0秒/)
+    assert.match(one, /未帰属 1回/)
+    assert.doesNotMatch(one, /0run|残った なし|12\.3k/)
+    await h.run(cycleRow({ cycle: "2026-08-12T02:00:00Z" }, "2026-08-12T02:01:00Z"))
+    const mixed = dailyPost(await h.run(readJournal()), "2026-08-12")
+    assert.match(mixed, /未帰属 1回/)
+    assert.match(mixed, /集計対象 IDあり 1回/)
   })
 })
 
@@ -291,6 +321,7 @@ test("Discord に出す行は、携帯の幅に収まる", () => {
 
   const e = {
     at: "2026-08-13T05:28:00Z",
+    cycleId: "cycle-width",
     reasons: ["下書きの時間"],
     tools: ["recall", "recall", "draft", "remember", "draft", "ask"],
     steps: 15,
@@ -353,6 +384,7 @@ test("戸惑い(confusion)は残した回の journal にだけ出て、Discord �
 test("1日ぶんは合計して1通に畳む — 道具は上位6種+他n種", () => {
   const base = {
     reasons: ["watch"],
+    cycleId: "cycle-daily",
     said: "",
     left: { proposals: 0, drafts: 1, tells: 0, shells: 0, beliefs: 1, watchRuns: 0 },
     runs: 5,
@@ -373,6 +405,9 @@ test("1日ぶんは合計して1通に畳む — 道具は上位6種+他n種", (
   assert.match(post, /- 道具 recall×3 · draft · search · fetch · shell · tell · 他2種/)
   assert.match(post, /- 残った 下書き 2本 \/ 確定した事実 2件/)
   assert.doesNotMatch(post, /止まった/)
+  // 承認待ちは前の日の集計ではなく出す時点の残数。0 のときは行そのものを出さない。
+  assert.doesNotMatch(post, /承認待ち/)
+  assert.match(dailyPost([a, b], "2026-08-17", 3), /- 承認待ち 3件\(現在\)$/m)
 })
 
 test("出しどきの判定 — 初回は境界を置くだけで出さない", () => {

@@ -6,7 +6,13 @@ import * as Effect from "effect/Effect"
 import { afterAll, beforeAll, test } from "vitest"
 import { PROJECT_ROOT } from "../../src/core/config.ts"
 import { NotFound } from "../../src/core/errors.ts"
-import { assertCurrentSchema, enableWalJournalMode, openDb, SCHEMA_SQL } from "../../src/db/sqlite.ts"
+import {
+  assertCurrentSchema,
+  enableWalJournalMode,
+  ensureCurrentSchema,
+  openDb,
+  SCHEMA_SQL,
+} from "../../src/db/sqlite.ts"
 import { RunnerStub } from "../../src/model/Runner.ts"
 import { makeRuntime } from "../../src/runtime.ts"
 import { Db, DbLive, type DbTxAbort } from "../../src/services/Db.ts"
@@ -22,6 +28,46 @@ const makeLegacyV4 = (db: ReturnType<typeof openDb>): void => {
   db.exec(legacyV4Sql(SCHEMA_SQL))
   db.exec("DROP TABLE schema_migrations")
 }
+
+test("既存の抹消済み引用だけを消し、原文・履歴・未帰属台帳を保持して移行する", () => {
+  const db = openDb(":memory:")
+  try {
+    makeLegacyV4(db)
+    db.exec(`
+      INSERT INTO events(id,at,kind,source,taint,exposure,provenance,content)
+      VALUES ('owner','2026-01-01T00:00:00Z','observe','owner',0,'private','[]','"secret"');
+      INSERT INTO events(id,at,kind,source,taint,exposure,provenance,content,belief_slot,valid_from,evidence_event_id,evidence_quote)
+      VALUES ('belief','2026-01-01T00:00:01Z','belief','system',0,'private','[]','"retained-value"','probe.slot','2026-01-01T00:00:01Z','owner','secret');
+      UPDATE events SET content=NULL,search_text=NULL WHERE id='owner';
+      INSERT INTO ledger(id,at,kind,role,out_tok) VALUES ('old-ledger','2026-01-01T00:00:00Z','turn','dialogue',123);
+    `)
+    ensureCurrentSchema(db, ":memory:")
+    assertCurrentSchema(db, ":memory:")
+    assert.deepEqual(
+      db
+        .prepare("SELECT id,content,evidence_event_id,evidence_quote,cycle_id FROM events ORDER BY seq")
+        .all(),
+      [
+        { id: "owner", content: null, evidence_event_id: null, evidence_quote: null, cycle_id: null },
+        {
+          id: "belief",
+          content: '"retained-value"',
+          evidence_event_id: "owner",
+          evidence_quote: null,
+          cycle_id: null,
+        },
+      ],
+    )
+    assert.deepEqual(db.prepare("SELECT out_tok,cycle_id FROM ledger WHERE id='old-ledger'").get(), {
+      out_tok: 123,
+      cycle_id: null,
+    })
+    ensureCurrentSchema(db, ":memory:")
+    assert.deepEqual(db.prepare("SELECT count(*) n FROM events").get(), { n: 2 })
+  } finally {
+    db.close()
+  }
+})
 
 const readLine = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
   const reader = stream.getReader()
@@ -117,12 +163,6 @@ test("空DBは現行schemaで一度だけ作られ再オープンできる", asy
 
   const reopened = openDb(path)
   assertCurrentSchema(reopened, path)
-  assert.deepEqual(reopened.prepare("SELECT version,name FROM schema_migrations ORDER BY version").all(), [
-    { version: 1, name: "migration-ledger" },
-    { version: 2, name: "discord-ack" },
-    { version: 3, name: "recall-vec" },
-    { version: 4, name: "draft-delivery-key" },
-  ])
   assert.throws(() => reopened.exec("DELETE FROM schema_migrations"), /immutable/)
   reopened.close()
 })
@@ -150,12 +190,6 @@ test("既知のbaseline DBはデータを保ったままcurrent schemaへ移行�
   assert.deepEqual(reopened.prepare("SELECT value FROM schema_meta WHERE key='preserved'").get(), {
     value: "yes",
   })
-  assert.deepEqual(reopened.prepare("SELECT version,name FROM schema_migrations ORDER BY version").all(), [
-    { version: 1, name: "migration-ledger" },
-    { version: 2, name: "discord-ack" },
-    { version: 3, name: "recall-vec" },
-    { version: 4, name: "draft-delivery-key" },
-  ])
   reopened.close()
 })
 

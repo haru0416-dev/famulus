@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { currentCycleId } from "../core/cycle-context.ts"
 import { localDayRange, nowIso } from "../core/time.ts"
 import { Db } from "./Db.ts"
 
@@ -45,8 +46,8 @@ const makeLedger = () =>
         const u = input.usage ?? {}
         yield* db.run(
           `INSERT INTO ledger
-             (id, at, kind, role, model, in_tok, out_tok, cache_read, cache_write, summary, provenance)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, at, kind, role, model, in_tok, out_tok, cache_read, cache_write, summary, provenance, cycle_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           id,
           at,
           input.kind,
@@ -58,6 +59,7 @@ const makeLedger = () =>
           u.cacheWrite ?? 0,
           input.summary ?? null,
           input.provenance === undefined ? null : JSON.stringify(input.provenance),
+          currentCycleId() ?? null,
         )
         return id
       })

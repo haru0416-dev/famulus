@@ -1,7 +1,7 @@
 /**
  * memory サービス。記録の基準は append-only の `events`。belief履歴はview、FTSはprojection。
  *
- * 抹消は本文と検索文をNULLにし、同じtransactionでredactイベントを追記する。
+ * 抹消は本文・検索文・根拠の引用をNULLにし、同じtransactionでredactイベントを追記する。
  *
  * `remember` は引数を最小・既定値を厚くしてある。仕組みがあっても記録が溜まらなければ DB は無いのと同じで、
  * 溜まらない原因が API の摩擦なら、それは設計の側で消せる。
@@ -10,6 +10,7 @@ import { createHash, randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { currentCycleId } from "../core/cycle-context.ts"
 import { DbFailed } from "../core/errors.ts"
 import { localStamp, nowIso } from "../core/time.ts"
 import { EMBEDDING_DIM, EMBEDDING_MODEL, embedPassage, embedQuery } from "../model/embedding.ts"
@@ -250,8 +251,8 @@ const makeMemory = () =>
         `INSERT INTO events
            (id, at, kind, source, taint, exposure, supersedes, provenance, content, search_text,
             origin_kind, origin_id, belief_slot, valid_from, invalidated_reason,
-            evidence_event_id, evidence_quote)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            evidence_event_id, evidence_quote, cycle_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         at,
         kind,
@@ -269,6 +270,7 @@ const makeMemory = () =>
         meta.invalidatedReason,
         meta.evidenceEventId,
         meta.evidenceQuote,
+        currentCycleId() ?? null,
       )
       if (text.length > 0) tx.run("INSERT INTO events_fts (event_id, text)VALUES (?, ?)", id, text)
       return id
@@ -608,13 +610,20 @@ const makeMemory = () =>
         )
         .pipe(Effect.map((rows) => rows as unknown as EventRow[]))
 
-    /** 本文・FTS・監査eventを同じtransactionで抹消する。 */
+    /** 本文・根拠の引用・索引の抹消と監査event追記を同じtransactionで行う。 */
     const redact = (eventId: string, reason: string) =>
       Effect.gen(function* () {
         const id = randomUUID()
         const at = nowIso()
         return yield* db.withImmediateTransaction("redact event", (tx) => {
-          tx.run("UPDATE events SET content = NULL, search_text = NULL WHERE id = ?", eventId)
+          tx.run(
+            "UPDATE events SET content = NULL, search_text = NULL, evidence_quote = NULL WHERE id = ?",
+            eventId,
+          )
+          tx.run(
+            "UPDATE events SET evidence_quote = NULL WHERE evidence_event_id = ? AND evidence_quote IS NOT NULL",
+            eventId,
+          )
           tx.run("DELETE FROM events_fts WHERE event_id = ?", eventId)
           // 埋め込みは原文から作られる。原文を消して埋め込みを残すと、消した意味が無い。
           const row = tx.get("SELECT rowid AS r FROM events WHERE id = ?", eventId)

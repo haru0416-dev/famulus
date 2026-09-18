@@ -14,6 +14,7 @@
  * process-local laneをautonomousへ切り替えて自律実行として計上する。日次 run 数の内訳が対話と分かれ、
  * cycle が過剰実行されても対話用の run 数は残る。
  */
+import { randomUUID } from "node:crypto"
 import * as Effect from "effect/Effect"
 import type { AssistantOptions, AssistantTurnResult } from "./agent/assistant.ts"
 import { DRAFTING } from "./agent/drafting.ts"
@@ -23,6 +24,7 @@ import { compileSkillPlan, renderSkillOverlay } from "./agent/skills.ts"
 import { describePendingImages } from "./agent/vision.ts"
 import { CLEANUP_DAILY, cleanup, cleanupDue } from "./core/cleanup.ts"
 import { configureApp } from "./core/config.ts"
+import { currentCycleId, withCycleContext } from "./core/cycle-context.ts"
 import { clearDeadline, startDeadline } from "./core/deadline.ts"
 import { loadEnv } from "./core/env.ts"
 import { ConnectorFailed, causeReason, describeRefusal } from "./core/errors.ts"
@@ -40,6 +42,7 @@ import { Db } from "./services/Db.ts"
 import { Discord } from "./services/Discord.ts"
 import { buildFencedPrompt, Governance, setLane, type UntrustedBlock } from "./services/Governance.ts"
 import { Memory } from "./services/Memory.ts"
+import { Proposals } from "./services/Proposals.ts"
 
 // static importは設定を読まない。入口で.envを反映し、検証済みConfigを設置してからruntimeを作る。
 loadEnv()
@@ -53,6 +56,9 @@ const CONFIG = configureApp()
  * その内側に収まる範囲で伸ばす。個々のコンテナ走行は180秒で先に切り、締め処理の時間を残す。
  */
 const TIMEOUT_MS = CONFIG.cycle.timeoutMs
+
+/** 日次まとめに載せる承認待ちの数え上げ上限。出すのは件数だけなので、超えたら「N件以上」ではなく頭打ちで出る。 */
+const MAX_PENDING_SHOWN = 100
 
 /** 共有 skill の書く規律。分類・正本のどちらが欠けても下書き自体は止めない。 */
 function jissokuOverlay(): string | undefined {
@@ -575,12 +581,12 @@ async function runCycleHeld(
 
     // 切られた回でも、そこまでに書けた文は捨てない。道具ループの途中の文が残っている
     // ことがあり、それが「9回走らせて何が分かったか」の唯一の記録になる。
-    const text = (turn.text || (cutOff ? `(${cutOff}。この回の締めの文は書けていない)` : "")).trim()
+    let text = (turn.text || (cutOff ? `(${cutOff}。この回の締めの文は書けていない)` : "")).trim()
 
     // ── 返信の先行配送。返信文はこの時点で確定していて、keeper の後ろに置くと確定から
-    // 届くまでがその分遅れる。durable queue に置いてから flush する — 送信に失敗しても
-    // queue が残り、末尾の flush と独立配送workerが再送する。鍵は締めの前に落ちた回の再実行でも
-    // 同じになるので、二重送信にならない。
+    // 届くまでがその分遅れる。durable queue に置いてから flush する。未送信はworkerが再送し、
+    // HTTP結果が曖昧なら本文と状態を残して自動再送を止める。鍵は締めの前に落ちた回の
+    // 再実行でも同じになるので、二重送信にならない。
     const deliveryKey = digestOf({
       reasonKey: d.reasonKey,
       upto: d.newEvents.at(-1)?.rowid ?? d.cursor,
@@ -588,16 +594,42 @@ async function runCycleHeld(
     })
     if (spokenTo && text && !cutOff) {
       await assertLease(token)
-      try {
-        await run(
-          Effect.gen(function* () {
-            const discord = yield* Discord
-            const outbound = yield* discord.enqueue({ purpose: "cycle-reply", dedupeKey: deliveryKey, text })
-            if (outbound) yield* discord.flushOutbound(outbound.id)
-          }),
+      // 保存に失敗したら入力を未処理のまま残す。配送失敗とは違い、再送できる本文がまだ無い。
+      const outbound = await run(
+        Effect.gen(function* () {
+          const db = yield* Db
+          const discord = yield* Discord
+          const existing = yield* db.get(
+            "SELECT id FROM discord_outbound WHERE purpose='cycle-reply' AND dedupe_key=?",
+            deliveryKey,
+          )
+          // 締める前に落ちた回では、作り直した本文より先に保存した返信を正本にする。
+          // enqueue の spec 照合を緩めず、この用途だけ既存の配送を引き継ぐ。
+          if (existing) return yield* discord.getOutbound(String(existing.id))
+          return yield* discord.enqueue({ purpose: "cycle-reply", dedupeKey: deliveryKey, text })
+        }),
+      )
+      if (outbound) {
+        text = outbound.actions
+          .filter((action) => action.kind === "message")
+          .map((action) => {
+            const spec = action.spec
+            if (
+              typeof spec !== "object" ||
+              spec === null ||
+              !("message" in spec) ||
+              typeof spec.message !== "object" ||
+              spec.message === null ||
+              !("content" in spec.message) ||
+              typeof spec.message.content !== "string"
+            )
+              throw new Error("保存済みの cycle 返信本文を読めない")
+            return spec.message.content
+          })
+          .join("")
+        await run(Effect.flatMap(Discord, (discord) => discord.flushOutbound(outbound.id))).catch(
+          (e: unknown) => log("返信の配送に失敗(保存済みの queue を保持):", causeReason(e)),
         )
-      } catch (e) {
-        log("返信の先行配送に失敗(末尾の flush が再送する):", causeReason(e))
       }
     }
 
@@ -638,6 +670,7 @@ async function runCycleHeld(
           // 切られた回は `cutOff` も残す。止まったことが `said` に書かれるとは限らない。
           content: {
             cycle: d.at,
+            cycleId: currentCycleId(),
             reasons: d.reasons,
             said: text,
             tools: turn.tools,
@@ -689,10 +722,12 @@ async function runCycleHeld(
             const entries = yield* readJournalRange(w.post.fromIso, w.post.toIso)
             if (entries.length > 0) {
               yield* lease.assertCurrent(token)
+              const proposals = yield* Proposals
+              const pending = (yield* proposals.list("proposed", MAX_PENDING_SHOWN)).length
               yield* discord.enqueue({
                 purpose: "cycle-log",
                 dedupeKey: digestOf({ dailyLog: w.post.label }),
-                text: dailyPost(entries, w.post.label),
+                text: dailyPost(entries, w.post.label, pending),
                 to: "log",
               })
             }
@@ -748,7 +783,7 @@ export async function runCycle(dependencies: CycleDependencies = {}): Promise<st
   schedule()
 
   try {
-    const result = await runCycleHeld(token, leaseAbort, dependencies)
+    const result = await withCycleContext(randomUUID(), () => runCycleHeld(token, leaseAbort, dependencies))
     if (heartbeatFailure) throw heartbeatFailure
     return result
   } finally {

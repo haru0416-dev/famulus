@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { currentCycleId } from "../core/cycle-context.ts"
 import { Conflict, type DbFailed, ProcessIdentityUnavailable } from "../core/errors.ts"
 import {
   currentProcessIncarnation,
@@ -249,7 +250,7 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
               })
             const recoveredAt = nowIso()
             const interrupted = tx.all(
-              `SELECT m.id,m.started_at,l.role,l.profile_snapshot
+              `SELECT m.id,m.started_at,m.cycle_id,l.role,l.profile_snapshot
                  FROM model_attempts m
                  JOIN loop_attempts a ON a.id=m.loop_attempt_id
                  JOIN loop_specs l ON l.id=a.loop_id
@@ -271,14 +272,15 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
               if (typeof profile.model !== "string") throw new Error("stored profile snapshot has no model")
               tx.run(
                 `INSERT INTO ledger
-                   (id,at,kind,role,model,in_tok,out_tok,cache_read,cache_write,summary,provenance,model_attempt_id)
-                 VALUES (?,?,'recovered-model-attempt',?,?,0,0,0,0,NULL,?,?)`,
+                   (id,at,kind,role,model,in_tok,out_tok,cache_read,cache_write,summary,provenance,model_attempt_id,cycle_id)
+                 VALUES (?,?,'recovered-model-attempt',?,?,0,0,0,0,NULL,?,?,?)`,
                 randomUUID(),
                 attempt.started_at,
                 attempt.role,
                 profile.model,
                 canonicalJson({ outcome: "unknown", recovered: true }),
                 attempt.id,
+                attempt.cycle_id,
               )
             }
             tx.run(
@@ -478,8 +480,8 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
         tx.run(
           `INSERT INTO model_attempts
             (id,loop_attempt_id,step_ordinal,attempt_ordinal,state,reservation_id,profile_id,profile_generation,
-              profile_digest,request_digest,owner_fence,started_at)
-            VALUES (?,?,1,?,'started',?,?,?,?,?,?,?)`,
+              profile_digest,request_digest,owner_fence,started_at,cycle_id)
+            VALUES (?,?,1,?,'started',?,?,?,?,?,?,?,?)`,
           id,
           context.loopAttemptId,
           ordinal,
@@ -490,6 +492,7 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
           requestDigest,
           context.fence,
           at,
+          currentCycleId() ?? null,
         )
         return { id, reservationId, context, requestDigest } satisfies ModelAttemptToken
       })
@@ -530,8 +533,8 @@ export const makeExecutionKernel = (overrides: Partial<ExecutionKernelDeps> = {}
         )
         tx.run(
           `INSERT INTO ledger
-             (id,at,kind,role,model,in_tok,out_tok,cache_read,cache_write,summary,provenance,model_attempt_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+             (id,at,kind,role,model,in_tok,out_tok,cache_read,cache_write,summary,provenance,model_attempt_id,cycle_id)
+           SELECT ?,?,?,?,?,?,?,?,?,?,?,id,cycle_id FROM model_attempts WHERE id=?`,
           randomUUID(),
           finish.ledger.at,
           finish.ledger.kind,

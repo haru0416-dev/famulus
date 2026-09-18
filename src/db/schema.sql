@@ -493,6 +493,7 @@ CREATE TABLE events (
   invalidated_reason  TEXT,
   evidence_event_id   TEXT REFERENCES events(id),
   evidence_quote      TEXT,
+  cycle_id TEXT,
   CHECK ((origin_kind IS NULL) = (origin_id IS NULL)),
   CHECK ((kind = 'belief') = (belief_slot IS NOT NULL AND valid_from IS NOT NULL)),
   CHECK (kind = 'belief' OR (invalidated_reason IS NULL AND evidence_event_id IS NULL AND evidence_quote IS NULL))
@@ -503,6 +504,14 @@ CREATE INDEX idx_events_supersedes ON events(supersedes);
 CREATE INDEX idx_events_belief ON events(belief_slot, valid_from, seq) WHERE kind = 'belief';
 CREATE UNIQUE INDEX idx_events_origin ON events(origin_kind, origin_id)
   WHERE origin_id IS NOT NULL AND content IS NOT NULL;
+CREATE INDEX idx_events_cycle ON events(cycle_id, kind) WHERE cycle_id IS NOT NULL;
+
+CREATE TRIGGER events_cycle_immutable
+BEFORE UPDATE OF cycle_id ON events
+WHEN NEW.cycle_id IS NOT OLD.cycle_id
+BEGIN
+  SELECT RAISE(ABORT, 'event cycle attribution is immutable');
+END;
 
 CREATE TRIGGER events_no_delete
 BEFORE DELETE ON events
@@ -534,9 +543,14 @@ WHEN
   OR NEW.origin_kind IS NOT OLD.origin_kind OR NEW.origin_id IS NOT OLD.origin_id
   OR NEW.belief_slot IS NOT OLD.belief_slot OR NEW.valid_from IS NOT OLD.valid_from
   OR NEW.invalidated_reason IS NOT OLD.invalidated_reason OR NEW.evidence_event_id IS NOT OLD.evidence_event_id
-  OR NEW.evidence_quote IS NOT OLD.evidence_quote OR NEW.content IS NOT NULL OR NEW.search_text IS NOT NULL
+  OR (NEW.evidence_quote IS NOT OLD.evidence_quote AND NEW.evidence_quote IS NOT NULL)
+  OR NOT (
+    (NEW.content IS NULL AND NEW.search_text IS NULL)
+    OR (OLD.evidence_quote IS NOT NULL AND NEW.evidence_quote IS NULL
+        AND NEW.content IS OLD.content AND NEW.search_text IS OLD.search_text)
+  )
 BEGIN
-  SELECT RAISE(ABORT, 'events is append-only: only content/search_text redaction is permitted');
+  SELECT RAISE(ABORT, 'events is append-only: only content/search_text or evidence_quote redaction is permitted');
 END;
 
 CREATE VIRTUAL TABLE events_fts USING fts5(
@@ -594,11 +608,13 @@ CREATE TABLE proposals (
   deny_reason    TEXT,
   settled_at     TEXT,
   settled_note   TEXT,
+  cycle_id TEXT,
   CHECK ((status = 'denied') = (deny_reason IS NOT NULL)),
   CHECK ((settled_at IS NULL) = (settled_note IS NULL))
 ) STRICT;
 CREATE INDEX idx_proposals_status ON proposals(status, created_at DESC);
 CREATE INDEX idx_proposals_expires ON proposals(expires_at) WHERE status = 'proposed';
+CREATE INDEX idx_proposals_cycle ON proposals(cycle_id) WHERE cycle_id IS NOT NULL;
 
 CREATE TABLE proposal_actions (
   seq           INTEGER PRIMARY KEY,
@@ -619,6 +635,21 @@ CREATE TABLE proposal_actions (
 CREATE UNIQUE INDEX idx_proposal_terminal ON proposal_actions(proposal_id);
 CREATE INDEX idx_proposal_actions_at ON proposal_actions(at, seq);
 
+CREATE TABLE sandbox_network_uses (
+  proposal_id TEXT PRIMARY KEY REFERENCES proposals(id),
+  used_at TEXT NOT NULL
+) STRICT;
+
+CREATE TRIGGER sandbox_network_uses_no_update
+BEFORE UPDATE ON sandbox_network_uses BEGIN
+  SELECT RAISE(ABORT, 'sandbox network approval use is immutable');
+END;
+
+CREATE TRIGGER sandbox_network_uses_no_delete
+BEFORE DELETE ON sandbox_network_uses BEGIN
+  SELECT RAISE(ABORT, 'sandbox network approval use is immutable');
+END;
+
 CREATE TABLE ledger (
   seq          INTEGER PRIMARY KEY,
   id           TEXT NOT NULL UNIQUE,
@@ -632,11 +663,13 @@ CREATE TABLE ledger (
   cache_write  INTEGER NOT NULL DEFAULT 0 CHECK (cache_write >= 0),
   summary      TEXT,
   provenance   TEXT CHECK (provenance IS NULL OR json_valid(provenance)),
-  model_attempt_id TEXT REFERENCES model_attempts(id)
+  model_attempt_id TEXT REFERENCES model_attempts(id),
+  cycle_id TEXT
 ) STRICT;
 CREATE INDEX idx_ledger_at ON ledger(at, seq);
 CREATE INDEX idx_ledger_role_at ON ledger(role, at) WHERE role IS NOT NULL;
 CREATE UNIQUE INDEX idx_ledger_model_attempt ON ledger(model_attempt_id) WHERE model_attempt_id IS NOT NULL;
+CREATE INDEX idx_ledger_cycle ON ledger(cycle_id) WHERE cycle_id IS NOT NULL AND role IS NOT NULL;
 
 CREATE TABLE watchlist (
   id               TEXT PRIMARY KEY,
@@ -662,10 +695,12 @@ CREATE TABLE watch_runs (
   seq       INTEGER PRIMARY KEY,
   watch_id  TEXT NOT NULL REFERENCES watchlist(id),
   at        TEXT NOT NULL,
-  result    TEXT NOT NULL
+  result    TEXT NOT NULL,
+  cycle_id TEXT
 ) STRICT;
 CREATE INDEX idx_watch_runs_at ON watch_runs(at, seq);
 CREATE INDEX idx_watch_runs_watch ON watch_runs(watch_id, seq);
+CREATE INDEX idx_watch_runs_cycle ON watch_runs(cycle_id) WHERE cycle_id IS NOT NULL;
 
 CREATE TABLE questions (
   id                TEXT PRIMARY KEY,

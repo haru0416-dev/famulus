@@ -120,6 +120,7 @@ CREATE TABLE model_attempts (
   actual_cost_microusd INTEGER CHECK (actual_cost_microusd IS NULL OR actual_cost_microusd >= 0),
   started_at          TEXT NOT NULL,
   finished_at         TEXT,
+  cycle_id TEXT,
   UNIQUE(loop_attempt_id, step_ordinal, attempt_ordinal),
   CHECK ((state = 'started') = (finished_at IS NULL)),
   CHECK ((state = 'succeeded') = (response_json IS NOT NULL))

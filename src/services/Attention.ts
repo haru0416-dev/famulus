@@ -12,6 +12,7 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { appConfig } from "../core/config.ts"
+import { currentCycleId } from "../core/cycle-context.ts"
 import { Conflict, NotFound } from "../core/errors.ts"
 import { localDayRange, localHour, nowIso } from "../core/time.ts"
 import { Db, type Row } from "./Db.ts"
@@ -277,7 +278,13 @@ const makeAttention = () =>
         const at = ranAt === undefined || ranAt > now ? now : ranAt
         // 動きの時刻は戻さない。後から記録するとき、その間に来た返事のほうが新しい。
         const activity = at > w.last_activity_at ? at : w.last_activity_at
-        tx.run("INSERT INTO watch_runs (watch_id, at, result)VALUES (?, ?, ?)", w.id, at, result)
+        tx.run(
+          "INSERT INTO watch_runs (watch_id, at, result, cycle_id)VALUES (?, ?, ?, ?)",
+          w.id,
+          at,
+          result,
+          currentCycleId() ?? null,
+        )
         tx.run(
           `UPDATE watchlist
                 SET last_run_at = ?, last_activity_at = ?, run_count = run_count + 1, last_result = ?
@@ -567,24 +574,27 @@ const makeAttention = () =>
      * cycle 自身の書き込みで cycle が起きることは無い(planCycle が `source='system'` を外している)。
      */
     const completeCycle = (opts?: { active?: boolean; at?: string; reasonKey?: string; upto?: number }) =>
-      Effect.gen(function* () {
-        let upto = opts?.upto
-        if (upto === undefined) {
-          const max = yield* db.get("SELECT COALESCE(MAX(seq),0)m FROM events")
-          upto = Number(max?.m ?? 0)
-        }
-        yield* db.setMeta("cycle:cursor", String(upto))
+      db.withImmediateTransaction("complete cycle", (tx) => {
+        const meta = (key: string) =>
+          tx.get("SELECT value FROM schema_meta WHERE key = ?", key)?.value as string | undefined
+        const setMeta = (key: string, value: string) =>
+          tx.run("INSERT OR REPLACE INTO schema_meta (key, value)VALUES (?, ?)", key, value)
+        const upto = opts?.upto ?? Number(tx.get("SELECT COALESCE(MAX(seq),0)m FROM events")?.m ?? 0)
+        // 遅れて締めた回が、先に処理済みになった入力を未読へ戻さない。
+        setMeta("cycle:cursor", String(Math.max(upto, Number(meta("cycle:cursor") ?? 0))))
         const at = opts?.at ?? nowIso()
-        yield* db.setMeta("cycle:last", at)
+        const last = meta("cycle:last")
+        setMeta("cycle:last", last && Date.parse(last) > Date.parse(at) ? last : at)
         if (!opts?.active) return
-        yield* db.setMeta("cycle:last_active", at)
+        const lastActive = meta("cycle:last_active")
+        setMeta("cycle:last_active", lastActive && Date.parse(lastActive) > Date.parse(at) ? lastActive : at)
         // 理由の組み合わせが前回と同じなら後退を1段深くする。違えば数え直し。
         // 数えるのはこの組み合わせで起きた回数なので、初めて記録する回も 1 になる。
         const key = opts.reasonKey ?? ""
-        const prev = yield* db.meta("cycle:reason_key")
-        const seen = key === "" ? 0 : (key === prev ? Number((yield* db.meta("cycle:repeat")) ?? 0) : 0) + 1
-        yield* db.setMeta("cycle:reason_key", key)
-        yield* db.setMeta("cycle:repeat", String(seen))
+        const prev = meta("cycle:reason_key")
+        const seen = key === "" ? 0 : (key === prev ? Number(meta("cycle:repeat") ?? 0) : 0) + 1
+        setMeta("cycle:reason_key", key)
+        setMeta("cycle:repeat", String(seen))
       })
 
     return {

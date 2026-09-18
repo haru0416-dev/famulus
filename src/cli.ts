@@ -6,9 +6,8 @@ import { resolve } from "node:path"
  *
  * コマンドの一覧と説明は下の USAGE が正。
  *
- * 承認しても実行はされない。approved を自動実行する経路が無いので「承認済み・未実行」で
- * 止まる。ここを実行したことにするのが一番大きい嘘なので、そうしない。実行の道具
- * (calendar_add など)は承認フローの外 — ユーザーが対話で頼んだ回にモデルが直接呼ぶ。
+ * 承認そのものは実行しない。Sandboxの公開通信だけは、承認後の同一コマンド・workspaceの
+ * 再呼び出しで単回の許可を消費する。一般の提案は承認記録で止まる。
  */
 import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
@@ -61,7 +60,7 @@ const USAGE = `fam — famulus の承認 CLI
   fam unwatch <id>          watch を閉じる
   fam list [status]         提案一覧。status は proposed(既定)/approved/denied/expired/all
   fam show <id>             承認カード全文(id は前方一致可)
-  fam approve <id>          承認(実行はされない — 実行の仕組みはまだ無い)
+  fam approve <id>          承認。Sandbox公開通信は同じ操作の再呼び出しで1回だけ実行可能
   fam deny <id> <理由>      却下。理由は必須
   fam recall <語>           DB を全文検索
   fam dossier [id]          調査dossier一覧。idを渡すと引用・hash・実験check・限界を表示
@@ -92,7 +91,7 @@ const USAGE = `fam — famulus の承認 CLI
 
 const STATUS_LABEL: Record<string, string> = {
   proposed: "承認待ち",
-  approved: "承認済み(未実行)",
+  approved: "承認済み",
   denied: "却下",
   expired: "期限切れ",
 }
@@ -375,7 +374,13 @@ const program = (argv: readonly string[]) =>
 
       case "show": {
         if (!rest[0]) return yield* Effect.fail(new Error("id が要る: fam show <id>"))
-        return card(yield* proposals.get(rest[0]))
+        const p = yield* proposals.get(rest[0])
+        const db = yield* Db
+        const used = yield* db.get("SELECT used_at FROM sandbox_network_uses WHERE proposal_id=?", p.id)
+        return [
+          card(p),
+          ...(used ? [`公開通信の承認: 使用済み(${used.used_at})。起動失敗・中断でも再利用不可。`] : []),
+        ].join("\n")
       }
 
       case "approve": {
@@ -385,8 +390,8 @@ const program = (argv: readonly string[]) =>
           `承認した: ${short(r.id)}`,
           `payload 指紋: ${r.payloadHash.slice(0, 16)}…(承認後に中身が変われば実行させない)`,
           "",
-          "注意: **まだ実行はされていない**。コネクタが無いので実行はされない。",
-          "      状態は「承認済み・未実行」で止まっている。",
+          "承認操作そのものはコマンドを起動しない。",
+          "Sandbox公開通信の提案は同じ操作の再呼び出しで1回だけ使える。一般の提案は承認記録のみ。",
         ].join("\n")
       }
 

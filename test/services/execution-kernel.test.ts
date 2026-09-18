@@ -8,6 +8,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime"
 import * as v from "valibot"
 import { test } from "vitest"
 import { KEEPER_SCHEMA, keep } from "../../src/agent/keeper.ts"
+import { withCycleContext } from "../../src/core/cycle-context.ts"
 import { profileRefForModel, resultContractRef, ZERO_SKILL_PLAN_JSON } from "../../src/model/kernel-spec.ts"
 import { Runner } from "../../src/model/Runner.ts"
 import { rs } from "../../src/model/schema.ts"
@@ -415,105 +416,169 @@ test("予約超過でも実使用量を保存してattemptを終端化する", (
     ],
   ))
 
-test("死亡確認できた旧incarnationだけを高いfenceで回復する", async () => {
-  const root = mkdtempSync(join(tmpdir(), "fam-execution-recovery-"))
-  const path = join(root, "famulus.db")
-  const first = {
-    hostId: "host",
-    bootId: "boot",
-    pidNamespace: "pid:[1]",
-    pid: 101,
-    startTicks: "1001",
-    hostname: "first",
-  }
-  const second = { ...first, pid: 202, startTicks: "2002", hostname: "second" }
-  const input = {
-    owner: { kind: "test", id: "recover-owner" },
-    stableSlot: "keeper",
-    role: "structurer",
-    profile: profileRefForModel("grok-4.3"),
-    resultContract: resultContractRef("keeper-v1", KEEPER_SCHEMA),
-    taskInput: {},
-    deadlineAtMs: Date.now() + 45_000,
-    budget: { modelCalls: 1, toolCalls: 0, tokens: 1000, costMicrousd: 100_000 },
-    modelTokenAllowance: 1000,
-    modelCostAllowanceMicrousd: 100_000,
-  } as const
-  try {
-    const firstRuntime = ManagedRuntime.make(
-      Layer.provideMerge(ExecutionKernel.layerWith({ current: () => first }), DbLive(path)),
-    )
-    const original = await firstRuntime.runPromise(
-      Effect.flatMap(ExecutionKernel, (kernel) => kernel.openSingleLoop(input)),
-    )
-    assert.equal(original.fence, 1)
-    await firstRuntime.runPromise(
-      Effect.flatMap(ExecutionKernel, (kernel) => kernel.startModelAttempt(original, "probe-request")),
-    )
-    await firstRuntime.dispose()
-
-    const secondRuntime = ManagedRuntime.make(
-      Layer.provideMerge(
-        ExecutionKernel.layerWith({
-          current: () => second,
-          liveness: () => ({ kind: "dead", proof: "start-mismatch" }),
+test("モデル開始後に別のcycleで完了しても開始した回の使用量として残る", () =>
+  withHarness(async (h) => {
+    const context = await h.run(
+      Effect.flatMap(ExecutionKernel, (kernel) =>
+        kernel.openSingleLoop({
+          owner: { kind: "test", id: "cycle-accounting" },
+          stableSlot: "worker",
+          role: "structurer",
+          profile: profileRefForModel("grok-4.3"),
+          resultContract: resultContractRef("keeper-v1", KEEPER_SCHEMA),
+          taskInput: {},
+          deadlineAtMs: Date.now() + 45_000,
+          budget: { modelCalls: 1, toolCalls: 0, tokens: 1000, costMicrousd: 100_000 },
+          modelTokenAllowance: 1000,
+          modelCostAllowanceMicrousd: 100_000,
         }),
-        DbLive(path),
       ),
     )
-    const recovered = await secondRuntime.runPromise(
-      Effect.flatMap(ExecutionKernel, (kernel) => kernel.openSingleLoop(input)),
+    const token = await withCycleContext("started-cycle", () =>
+      h.run(Effect.flatMap(ExecutionKernel, (kernel) => kernel.startModelAttempt(context, "cycle-request"))),
     )
-    assert.equal(recovered.fence, 2)
-    assert.equal(recovered.incarnation.pid, second.pid)
-    const reopened = await secondRuntime.runPromise(
-      Effect.flatMap(ExecutionKernel, (kernel) => kernel.openSingleLoop(input)),
-    )
-    assert.equal(reopened.fence, 2)
-    assert.deepEqual(
-      await secondRuntime.runPromise(
-        Effect.flatMap(Db, (db) => db.all("SELECT ordinal,state,fence FROM loop_attempts ORDER BY ordinal")),
-      ),
-      [
-        { ordinal: 1, state: "unknown", fence: 1 },
-        { ordinal: 2, state: "active", fence: 2 },
-      ],
-    )
-    assert.deepEqual(
-      await secondRuntime.runPromise(
-        Effect.flatMap(Db, (db) =>
-          db.get(
-            `SELECT m.state model_state,b.state reservation_state,b.consumed_tokens,b.consumed_cost_microusd
-               FROM model_attempts m JOIN budget_reservations b ON b.id=m.reservation_id`,
-          ),
+    await withCycleContext("finished-cycle", () =>
+      h.run(
+        Effect.flatMap(ExecutionKernel, (kernel) =>
+          kernel.finishModelAttempt(token, {
+            outcome: "succeeded",
+            tokens: 23,
+            costMicrousd: 1,
+            response: { text: "done" },
+            ledger: {
+              kind: "run",
+              role: "structurer",
+              model: "grok-4.3",
+              inTok: 0,
+              outTok: 23,
+              cacheRead: 0,
+              cacheWrite: 0,
+              provenance: {},
+              at: "2026-08-13T06:00:00Z",
+            },
+          }),
         ),
       ),
-      {
-        model_state: "unknown",
-        reservation_state: "unknown",
-        consumed_tokens: 1000,
-        consumed_cost_microusd: 100_000,
-      },
     )
     assert.deepEqual(
-      await secondRuntime.runPromise(
+      await h.run(
         Effect.flatMap(Db, (db) =>
-          db.get(
-            `SELECT l.kind,l.role,l.model,l.provenance
+          db.get("SELECT cycle_id, out_tok, at FROM ledger WHERE model_attempt_id = ?", token.id),
+        ),
+      ),
+      { cycle_id: "started-cycle", out_tok: 23, at: "2026-08-13T06:00:00Z" },
+    )
+  }))
+
+test.each(["original-cycle", undefined])(
+  "死亡した旧incarnationの回復では開始時の帰属を保つ: %s",
+  async (cycleId) => {
+    const root = mkdtempSync(join(tmpdir(), "fam-execution-recovery-"))
+    const path = join(root, "famulus.db")
+    const first = {
+      hostId: "host",
+      bootId: "boot",
+      pidNamespace: "pid:[1]",
+      pid: 101,
+      startTicks: "1001",
+      hostname: "first",
+    }
+    const second = { ...first, pid: 202, startTicks: "2002", hostname: "second" }
+    const input = {
+      owner: { kind: "test", id: "recover-owner" },
+      stableSlot: "keeper",
+      role: "structurer",
+      profile: profileRefForModel("grok-4.3"),
+      resultContract: resultContractRef("keeper-v1", KEEPER_SCHEMA),
+      taskInput: {},
+      deadlineAtMs: Date.now() + 45_000,
+      budget: { modelCalls: 1, toolCalls: 0, tokens: 1000, costMicrousd: 100_000 },
+      modelTokenAllowance: 1000,
+      modelCostAllowanceMicrousd: 100_000,
+    } as const
+    try {
+      const firstRuntime = ManagedRuntime.make(
+        Layer.provideMerge(ExecutionKernel.layerWith({ current: () => first }), DbLive(path)),
+      )
+      const original = await firstRuntime.runPromise(
+        Effect.flatMap(ExecutionKernel, (kernel) => kernel.openSingleLoop(input)),
+      )
+      assert.equal(original.fence, 1)
+      const start = Effect.flatMap(ExecutionKernel, (kernel) =>
+        kernel.startModelAttempt(original, "probe-request"),
+      )
+      await (cycleId === undefined
+        ? firstRuntime.runPromise(start)
+        : withCycleContext(cycleId, () => firstRuntime.runPromise(start)))
+      await firstRuntime.dispose()
+
+      const secondRuntime = ManagedRuntime.make(
+        Layer.provideMerge(
+          ExecutionKernel.layerWith({
+            current: () => second,
+            liveness: () => ({ kind: "dead", proof: "start-mismatch" }),
+          }),
+          DbLive(path),
+        ),
+      )
+      const recovered = await withCycleContext("recovery-cycle", () =>
+        secondRuntime.runPromise(Effect.flatMap(ExecutionKernel, (kernel) => kernel.openSingleLoop(input))),
+      )
+      assert.equal(recovered.fence, 2)
+      assert.equal(recovered.incarnation.pid, second.pid)
+      const reopened = await secondRuntime.runPromise(
+        Effect.flatMap(ExecutionKernel, (kernel) => kernel.openSingleLoop(input)),
+      )
+      assert.equal(reopened.fence, 2)
+      assert.deepEqual(
+        await secondRuntime.runPromise(
+          Effect.flatMap(Db, (db) =>
+            db.all("SELECT ordinal,state,fence FROM loop_attempts ORDER BY ordinal"),
+          ),
+        ),
+        [
+          { ordinal: 1, state: "unknown", fence: 1 },
+          { ordinal: 2, state: "active", fence: 2 },
+        ],
+      )
+      assert.deepEqual(
+        await secondRuntime.runPromise(
+          Effect.flatMap(Db, (db) =>
+            db.get(
+              `SELECT m.state model_state,b.state reservation_state,b.consumed_tokens,b.consumed_cost_microusd
+               FROM model_attempts m JOIN budget_reservations b ON b.id=m.reservation_id`,
+            ),
+          ),
+        ),
+        {
+          model_state: "unknown",
+          reservation_state: "unknown",
+          consumed_tokens: 1000,
+          consumed_cost_microusd: 100_000,
+        },
+      )
+      assert.deepEqual(
+        await secondRuntime.runPromise(
+          Effect.flatMap(Db, (db) =>
+            db.get(
+              `SELECT l.kind,l.role,l.model,l.provenance,l.cycle_id,l.at=m.started_at original_time
                FROM ledger l JOIN model_attempts m ON m.id=l.model_attempt_id
               WHERE m.state='unknown'`,
+            ),
           ),
         ),
-      ),
-      {
-        kind: "recovered-model-attempt",
-        role: "structurer",
-        model: "grok-4.3",
-        provenance: JSON.stringify({ outcome: "unknown", recovered: true }),
-      },
-    )
-    await secondRuntime.dispose()
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
+        {
+          kind: "recovered-model-attempt",
+          role: "structurer",
+          model: "grok-4.3",
+          provenance: JSON.stringify({ outcome: "unknown", recovered: true }),
+          cycle_id: cycleId ?? null,
+          original_time: 1,
+        },
+      )
+      await secondRuntime.dispose()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  },
+)

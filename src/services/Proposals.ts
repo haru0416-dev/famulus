@@ -1,38 +1,35 @@
 /**
- * 提案と承認。エージェントが実行しないための受け皿。
- *
- * この設計の要点は「実行を伴うことはエージェントが直接やらず、提案として1件書いて止まる」ことなので、
- * 提案を作る側(ツール)と承認する側(CLI)が同じ1本の API を通るようにしておく。
- * ここが2箇所に分かれた瞬間、片方だけが状態機械を守る、という壊れ方をする。
+ * 提案と承認の状態機械。作成と承認を同じAPIに集約し、承認主体とpayloadの指紋を保存する。
  *
  * 状態機械(schema.sql の CHECK と一致):
  *   proposed ─approve→ approved ・・・ここで止まる
  *      │ deny→ denied
  *      └ 期限切れ→ expired
  *
- * 実行状態と旧 `deferred` は型と CHECK から削除した。
- * approved は「承認済み・未実行」で止まり、実際に動かすのはユーザー。
- * ここで実行したことにする方が嘘としては大きいので、止めたままにしてある。
- *
- * `approve` は proposal_actions 行を必ず書く。承認した時点の payload の指紋を残すためで、
- * 実行する側を作るときに「承認後に中身が差し替わっていないか」を照合できるようにしてある。
- * 照合する側はまだ無い。今あるのは記録だけ。
+ * 一般の提案は承認記録で止まる。Sandboxの公開通信だけはSandboxNetworkが指紋を照合し、
+ * 起動前にsandbox_network_usesへ単回の使用を記録する。approved自体は実行成功を意味しない。
  */
 import { createHash, randomUUID } from "node:crypto"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { currentCycleId } from "../core/cycle-context.ts"
 import { Conflict, NotFound } from "../core/errors.ts"
 import { nowIso } from "../core/time.ts"
 import { Db, type Row } from "./Db.ts"
 
-/**
- * 提案の状態。実行の3つ(`executing` `executed` `failed`)は落とした。
- *
- * 承認しても実行する仕組みが無い。到達しない状態を残すと、`fam list` を読んだ側が
- * 「承認すれば動く」と読む。実行を付ける日が来たら、そのときに足す。
- */
+/** 承認判断の状態。Sandbox許可の使用履歴やコマンドの成否とは分ける。 */
 export type ProposalStatus = "proposed" | "approved" | "denied" | "expired"
+
+/** リアクション1つに割り当てる判断。理由を書ける口が無いのは deny 側だけ。 */
+export type ProposalDecision = "approve" | "deny"
+
+/**
+ * リアクションで却下されたときの理由。deny は理由を必須にしてあり(schema の CHECK も同じ)、
+ * 絵文字1つには理由が乗らない。押した事実だけを理由として書く。
+ * 押した後にスレッドへ書かれた文は owner の発言として別に入る。
+ */
+export const REACTION_DENY_REASON = "リアクションで却下(理由なし)"
 
 export interface CreateInput {
   readonly summary: string
@@ -79,7 +76,7 @@ export const MAX_PENDING_DAYS = 7
 const plusDays = (at: string, days: number) =>
   new Date(Date.parse(at) + days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z")
 
-/** 承認した時点の payload の指紋。照合する側を作るまでは、ただの記録。 */
+/** 承認対象の完全なpayloadに対する指紋。Sandbox公開通信の起動時にも照合する。 */
 export const payloadHash = (payload: string): string => createHash("sha256").update(payload).digest("hex")
 
 const DECIDABLE: readonly ProposalStatus[] = ["proposed"]
@@ -131,8 +128,8 @@ const makeProposals = () =>
           `INSERT INTO proposals
              (id, created_at, summary, assessment, ask,
               c_what, c_when, c_who, c_how, c_how_verified,
-              payload, provenance, status, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?)`,
+              payload, provenance, status, expires_at, cycle_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?)`,
           id,
           at,
           input.summary,
@@ -146,6 +143,7 @@ const makeProposals = () =>
           payload,
           provenance,
           plusDays(at, input.pendingDays ?? MAX_PENDING_DAYS),
+          currentCycleId() ?? null,
         )
         return id
       })

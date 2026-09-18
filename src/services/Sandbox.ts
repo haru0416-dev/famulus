@@ -45,11 +45,19 @@ export const PUBLIC_NETWORK_POLICY = "public-only-v1"
 const PUBLIC_NETWORK_BRIDGE = "br-famulus"
 const PUBLIC_NETWORK_READY = `/run/famulus-egress/${PUBLIC_NETWORK_POLICY}.ready`
 
+/** モデルの入力には渡さない。承認済みのDB記録を起動直前に一度だけ消費する。 */
+export interface NetworkApproval {
+  readonly command: string
+  readonly workDir: string
+  readonly consume: () => Promise<void>
+}
+
 export interface RunOptions {
   /** ホストへ書き出す workspace。`runDir()` が返す絶対パスを渡す。 */
   readonly workDir: string
-  /** 外に出るか。既定は出ない。ネットワークが必要な実行だけ true。 */
+  /** 公開通信にはコマンド・workspaceを固定した単回承認が別途必要。 */
   readonly net?: boolean
+  readonly networkApproval?: NetworkApproval
   readonly timeoutMs?: number
   readonly image?: string
   readonly signal?: AbortSignal
@@ -307,11 +315,22 @@ export async function runInSandbox(
 ): Promise<RunResult> {
   opts.signal?.throwIfAborted()
   if (!isAbsolute(opts.workDir)) throw new Error(`workspace は絶対パスで渡す: ${opts.workDir}`)
+  if (
+    opts.net &&
+    (!opts.networkApproval ||
+      opts.networkApproval.command !== command ||
+      opts.networkApproval.workDir !== opts.workDir)
+  ) {
+    throw new Error("公開通信には、このコマンドとworkspaceに対する単回承認が必要")
+  }
   if (opts.net) await verifyNetwork()
   mkdirSync(cacheRoot(), { recursive: true })
   // image が明示されている場合は、自動ビルドせず指定されたイメージを使う。
   const configuredImage = appConfig().runImage
   const image = opts.image ?? configuredImage ?? (await ensureImage())
+  opts.signal?.throwIfAborted()
+  // 起動前に使用済みを確定する。起動失敗・応答不明でも同じ承認で再送しない。
+  if (opts.net && opts.networkApproval) await opts.networkApproval.consume()
   opts.signal?.throwIfAborted()
   const fellBack = image === BASE_IMAGE && opts.image === undefined && configuredImage === undefined
   const startedAt = Date.now()

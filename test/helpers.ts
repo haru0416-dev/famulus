@@ -61,6 +61,32 @@ export const withFetch = async <T>(impl: unknown, fn: () => Promise<T>): Promise
  */
 export const legacyV4Sql = (schemaSql: string): string =>
   schemaSql
+    .replace(/CREATE TABLE sandbox_network_uses \([\s\S]*?\) STRICT;\n/, "")
+    .replace(/CREATE TRIGGER sandbox_network_uses_no_(?:update|delete)[\s\S]*?END;\n/g, "")
+    .replace(/CREATE INDEX idx_(?:events|ledger|proposals|watch_runs)_cycle[^;]+;\n/g, "")
+    .replace(/CREATE TRIGGER events_cycle_immutable[\s\S]*?END;\n/, "")
+    .replace(
+      "model_attempt_id TEXT REFERENCES model_attempts(id),\n  cycle_id TEXT",
+      "model_attempt_id TEXT REFERENCES model_attempts(id)",
+    )
+    .replace("result    TEXT NOT NULL,\n  cycle_id TEXT", "result    TEXT NOT NULL")
+    .replace(/^ {2}cycle_id TEXT,\n/gm, "")
+    .replace(
+      /CREATE TRIGGER events_immutable_except_redact[\s\S]*?END;/,
+      `CREATE TRIGGER events_immutable_except_redact
+BEFORE UPDATE ON events
+WHEN
+  NEW.seq IS NOT OLD.seq OR NEW.id IS NOT OLD.id OR NEW.at IS NOT OLD.at OR NEW.kind IS NOT OLD.kind
+  OR NEW.source IS NOT OLD.source OR NEW.taint IS NOT OLD.taint OR NEW.exposure IS NOT OLD.exposure
+  OR NEW.supersedes IS NOT OLD.supersedes OR NEW.provenance IS NOT OLD.provenance
+  OR NEW.origin_kind IS NOT OLD.origin_kind OR NEW.origin_id IS NOT OLD.origin_id
+  OR NEW.belief_slot IS NOT OLD.belief_slot OR NEW.valid_from IS NOT OLD.valid_from
+  OR NEW.invalidated_reason IS NOT OLD.invalidated_reason OR NEW.evidence_event_id IS NOT OLD.evidence_event_id
+  OR NEW.evidence_quote IS NOT OLD.evidence_quote OR NEW.content IS NOT NULL OR NEW.search_text IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only: only content/search_text redaction is permitted');
+END;`,
+    )
     .replace(
       "kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction','ack')),",
       "kind        TEXT NOT NULL CHECK (kind IN ('open_dm','message','thread','reaction')),",

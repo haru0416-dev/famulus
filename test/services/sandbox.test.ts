@@ -11,9 +11,11 @@ import assert from "node:assert/strict"
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
+import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import { configureApp } from "../../src/core/config.ts"
 import { timeZone } from "../../src/core/time.ts"
+import { Proposals } from "../../src/services/Proposals.ts"
 import {
   cacheRoot,
   dockerArgs,
@@ -24,6 +26,8 @@ import {
   runsRoot,
   sweepOrphans,
 } from "../../src/services/Sandbox.ts"
+import { prepareSandboxNetwork } from "../../src/services/SandboxNetwork.ts"
+import { withHarness } from "../helpers.ts"
 
 const withRoot = (fn: () => void): void => {
   const prev = process.env.FAMULUS_RUNS
@@ -144,27 +148,50 @@ test("相対の workDir は走らせる前に弾く", async () => {
   await assert.rejects(() => runInSandbox("echo x", { workDir: "rel/path" }), /絶対パス/)
 })
 
-test("public network policyを確認できなければdockerを起動しない", async () => {
+test("承認なし・操作変更は拒否し、policy不備では承認を消費しない", async () => {
   await withFakeDocker(async ({ log, workDir }) => {
-    await assert.rejects(
-      () =>
-        runInSandbox("echo x", { workDir, image: FAKE_IMAGE, net: true }, async () => {
-          throw new Error("policy missing")
-        }),
-      /policy missing/,
-    )
-    assert.equal(readFileSync(log, "utf8"), "")
+    await withHarness(async (h) => {
+      await assert.rejects(
+        () => runInSandbox("echo x", { workDir, image: FAKE_IMAGE, net: true }),
+        /単回承認/,
+      )
+      const request = await h.run(prepareSandboxNetwork("echo x", workDir))
+      if (request.approved) throw new Error("unexpected approval")
+      await h.run(Effect.flatMap(Proposals, (p) => p.approve(request.id)))
+      const permission = await h.run(prepareSandboxNetwork("echo x", workDir))
+      if (!permission.approved) throw new Error("missing approval")
+      const opts = { workDir, image: FAKE_IMAGE, net: true, networkApproval: permission.approval }
+      await assert.rejects(() => runInSandbox("echo changed", opts), /単回承認/)
+      await assert.rejects(() => runInSandbox("echo x", { ...opts, workDir: `${workDir}/other` }), /単回承認/)
+      await assert.rejects(
+        () =>
+          runInSandbox("echo x", opts, async () => {
+            throw new Error("policy missing")
+          }),
+        /policy missing/,
+      )
+      assert.equal(readFileSync(log, "utf8"), "")
+      const result = await runInSandbox("echo x", opts, async () => {})
+      assert.equal(result.exitCode, 0)
+      assert.match(result.output, /FAKE-OK/)
+      await assert.rejects(() => runInSandbox("echo x", opts, async () => {}))
+    })
   })
 })
 
-test("policy確認後のnet走行だけ専用networkで起動する", async () => {
+test("ネット走行が失敗しても同じ承認を再利用できない", async () => {
   await withFakeDocker(async ({ workDir }) => {
-    let verified = 0
-    const result = await runInSandbox("echo x", { workDir, image: FAKE_IMAGE, net: true }, async () => {
-      verified++
+    await withHarness(async (h) => {
+      const request = await h.run(prepareSandboxNetwork("exit 3", workDir))
+      if (request.approved) throw new Error("unexpected approval")
+      await h.run(Effect.flatMap(Proposals, (p) => p.approve(request.id)))
+      const permission = await h.run(prepareSandboxNetwork("exit 3", workDir))
+      if (!permission.approved) throw new Error("missing approval")
+      const opts = { workDir, image: FAKE_IMAGE, net: true, networkApproval: permission.approval }
+      process.env.FAKE_RUN_MODE = "fail"
+      assert.equal((await runInSandbox("exit 3", opts, async () => {})).exitCode, 3)
+      await assert.rejects(() => runInSandbox("exit 3", opts, async () => {}))
     })
-    assert.equal(verified, 1)
-    assert.equal(result.exitCode, 0)
   })
 })
 

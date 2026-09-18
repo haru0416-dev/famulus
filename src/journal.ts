@@ -6,12 +6,11 @@
  * ここが読むのは3つの別々の記録で、どれも報告文とは独立に残っている:
  *
  *   1. 呼ばれた道具の並び(`content.tools`)…AI SDK の `onStepFinish` が数えた実際の呼び出し
- *   2. その回の窓に残ったもの…提案・下書き・通知・コンテナ実行・確定した事実の行数
- *   3. モデル使用量(`ledger`)…run 数、出力トークン数
+ *   2. その回に帰属する行…提案・下書き・通知・コンテナ実行・確定した事実
+ *   3. モデル使用量(`ledger`)…role を持つ run 数、出力トークン数
  *
- * 窓は `[content.cycle, event.at]`。前者は planCycle を取った時刻、後者は記録を書いた時刻で、
- * その間がこの回の実働。窓の外で起きたことは数えない — 数えると、15分前の poll が入れた
- * ユーザー発言まで「この回の成果」として並ぶ。
+ * 実行IDで結び付ける。時刻の窓では、同時に動いた対話や別の回を区別できない。
+ * 実行IDを記録する前の履歴は帰属不明のまま読み、時刻から成果や使用量を推測しない。
  *
  * 1と2はずれてよい。一致させるためではなく、ずれ方を読むために並べている
  * (道具を呼んでも中身が残らない回はある。propose せずに終えた回、shell が失敗した回)。
@@ -25,6 +24,8 @@ import { Db } from "./services/Db.ts"
 export interface Entry {
   /** digest を取った時刻(この回の起点)。 */
   readonly at: string
+  /** 実行ごとのID。旧記録は未帰属で、数量も不明として返す。 */
+  readonly cycleId: string | undefined
   /** 起きた理由。digest が付けた文言そのまま。 */
   readonly reasons: readonly string[]
   /** 呼ばれた道具の並び。古い回は記録が無いので undefined。 */
@@ -39,15 +40,15 @@ export interface Entry {
   readonly said: string
   /** 指示や仕組みへの戸惑い(自己申告)。fam journal でだけ出す — Discord のログには出さない。 */
   readonly confusion?: string
-  /** この回の窓に残ったもの。数えたのは行数で、報告文とは関係が無い。 */
-  readonly left: Left
-  /** モデルを呼んだ回数。 */
-  readonly runs: number
-  /** 出力側だけを取る。入力はキャッシュの当たり外れで桁ごと動き、回どうしを比べにくい。 */
-  readonly outTok: number
+  /** この回に帰属する行数。報告文とは関係が無く、未帰属の回は undefined。 */
+  readonly left: Left | undefined
+  /** role を持つモデル呼び出しの回数。未帰属の回は undefined。 */
+  readonly runs: number | undefined
+  /** 出力側だけを取る。未帰属の回は undefined。 */
+  readonly outTok: number | undefined
 }
 
-/** 窓の中に増えた行。0 も 0 と書く — 「何も残らなかった回」を読めるようにするため。 */
+/** 実行IDが一致する行。0 と未帰属を混ぜない。 */
 export interface Left {
   readonly proposals: number
   readonly drafts: number
@@ -76,7 +77,7 @@ const strMap = (v: unknown): Record<string, string> | undefined => {
 /**
  * 直近 n 回。実際に動いた回だけ返す(idle の回は cycle の記録を書かない)。
  *
- * 窓ごとに数える問い合わせを投げるので、n を大きくすると SQL の本数がそのぶん増える。
+ * 回ごとに数える問い合わせを投げるので、n を大きくすると SQL の本数がそのぶん増える。
  * 読むのは人なので、既定は画面に収まる程度にしてある。
  */
 export const readJournal = (n = 10): Effect.Effect<readonly Entry[], DbFailed, Db> =>
@@ -130,15 +131,16 @@ const entriesOf = (rows: readonly Record<string, unknown>[]): Effect.Effect<read
       }
       // 旧イベントの tick は履歴データとして読む。新しい記録は cycle だけを書く。
       const at = str(c.cycle) ?? str(c.tick) ?? wroteAt
-      // 窓の終わりは記録を書いた時刻。書く前に出したものまで入れる。
-      // 起点だけで切って「以降ぜんぶ」にすると、次の回のぶんが混ざる。
-      const left = yield* countLeft(at, wroteAt)
-      const burn = yield* db.get(
-        `SELECT COUNT(*)runs, COALESCE(SUM(out_tok), 0)out_tok
-           FROM ledger WHERE at >= ?AND at <= ?`,
-        at,
-        wroteAt,
-      )
+      const cycleId = str(c.cycleId)
+      const left = cycleId === undefined ? undefined : yield* countLeft(cycleId)
+      const burn =
+        cycleId === undefined
+          ? undefined
+          : yield* db.get(
+              `SELECT COUNT(*)runs, COALESCE(SUM(out_tok), 0)out_tok
+           FROM ledger WHERE cycle_id = ? AND role IS NOT NULL`,
+              cycleId,
+            )
       const tools = arr(c.tools)
       const toolTargets = strMap(c.toolTargets)
       const steps = num(c.steps)
@@ -147,6 +149,7 @@ const entriesOf = (rows: readonly Record<string, unknown>[]): Effect.Effect<read
       const confusion = str(c.confusion)
       out.push({
         at,
+        cycleId,
         reasons: arr(c.reasons) ?? [],
         ...(tools ? { tools } : {}),
         ...(toolTargets ? { toolTargets } : {}),
@@ -156,19 +159,19 @@ const entriesOf = (rows: readonly Record<string, unknown>[]): Effect.Effect<read
         said: str(c.said) ?? "",
         ...(confusion ? { confusion } : {}),
         left,
-        runs: Number(burn?.runs ?? 0),
-        outTok: Number(burn?.out_tok ?? 0),
+        runs: cycleId === undefined ? undefined : Number(burn?.runs ?? 0),
+        outTok: cycleId === undefined ? undefined : Number(burn?.out_tok ?? 0),
       })
     }
     return out
   })
 
 /**
- * 窓の中に増えた行を数える。cycle の報告は読まない。
+ * 同じ実行IDの行を数える。cycle の報告は読まない。
  *
  * watch実行はwatch_runsへ追記されるため、後の実行で古い回から消えない。
  */
-const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed, Db> =>
+const countLeft = (cycleId: string): Effect.Effect<Left, DbFailed, Db> =>
   Effect.gen(function* () {
     const db = yield* Db
     const ev = yield* db.get(
@@ -178,21 +181,12 @@ const countLeft = (fromIso: string, toIso: string): Effect.Effect<Left, DbFailed
          SUM(json_extract(content, '$.ran')    IS NOT NULL)shells
        FROM events
         WHERE source = 'system' AND kind = 'observe' AND content IS NOT NULL
-          AND at >= ?AND at <= ?`,
-      fromIso,
-      toIso,
+          AND cycle_id = ?`,
+      cycleId,
     )
-    const bl = yield* db.get(
-      "SELECT COUNT(*)n FROM events WHERE kind = 'belief' AND at >= ?AND at <= ?",
-      fromIso,
-      toIso,
-    )
-    const pr = yield* db.get(
-      "SELECT COUNT(*)n FROM proposals WHERE created_at >= ?AND created_at <= ?",
-      fromIso,
-      toIso,
-    )
-    const wr = yield* db.get("SELECT COUNT(*)n FROM watch_runs WHERE at >= ?AND at <= ?", fromIso, toIso)
+    const bl = yield* db.get("SELECT COUNT(*)n FROM events WHERE kind = 'belief' AND cycle_id = ?", cycleId)
+    const pr = yield* db.get("SELECT COUNT(*)n FROM proposals WHERE cycle_id = ?", cycleId)
+    const wr = yield* db.get("SELECT COUNT(*)n FROM watch_runs WHERE cycle_id = ?", cycleId)
     return {
       proposals: Number(pr?.n ?? 0),
       drafts: Number(ev?.drafts ?? 0),
@@ -274,7 +268,9 @@ const workLine = (e: Entry): string =>
   [
     e.steps === undefined ? "手数の記録なし" : `${e.steps}手`,
     ...(e.ms === undefined ? [] : [took(e.ms)]),
-    `${e.runs}run 出力${tok(e.outTok)}`,
+    e.runs === undefined || e.outTok === undefined
+      ? "使用量不明(未帰属)"
+      : `${e.runs}run 出力${tok(e.outTok)}`,
     ...(e.cutOff ? [`止まった: ${e.cutOff}`] : []),
   ].join(" / ")
 
@@ -298,20 +294,22 @@ const saidLine = (said: string, max = 140): string => {
  *
  * 自己申告(`said`)と対象(`toolTargets`)は載せない — 数えた記録だけを出す。
  */
-export const dailyPost = (entries: readonly Entry[], label: string): string => {
+export const dailyPost = (entries: readonly Entry[], label: string, pending = 0): string => {
   const cut = entries.filter((e) => e.cutOff !== undefined)
   const ms = entries.reduce((a, e) => a + (e.ms ?? 0), 0)
-  const runCount = entries.reduce((a, e) => a + e.runs, 0)
-  const outTok = entries.reduce((a, e) => a + e.outTok, 0)
+  const attributed = entries.filter((e) => e.cycleId !== undefined)
+  const unknown = entries.length - attributed.length
+  const runCount = attributed.reduce((a, e) => a + (e.runs ?? 0), 0)
+  const outTok = attributed.reduce((a, e) => a + (e.outTok ?? 0), 0)
   const tools = entries.flatMap((e) => e.tools ?? [])
-  const left = entries.reduce<Left>(
+  const left = attributed.reduce<Left>(
     (a, e) => ({
-      proposals: a.proposals + e.left.proposals,
-      drafts: a.drafts + e.left.drafts,
-      tells: a.tells + e.left.tells,
-      shells: a.shells + e.left.shells,
-      beliefs: a.beliefs + e.left.beliefs,
-      watchRuns: a.watchRuns + e.left.watchRuns,
+      proposals: a.proposals + (e.left?.proposals ?? 0),
+      drafts: a.drafts + (e.left?.drafts ?? 0),
+      tells: a.tells + (e.left?.tells ?? 0),
+      shells: a.shells + (e.left?.shells ?? 0),
+      beliefs: a.beliefs + (e.left?.beliefs ?? 0),
+      watchRuns: a.watchRuns + (e.left?.watchRuns ?? 0),
     }),
     { proposals: 0, drafts: 0, tells: 0, shells: 0, beliefs: 0, watchRuns: 0 },
   )
@@ -320,9 +318,13 @@ export const dailyPost = (entries: readonly Entry[], label: string): string => {
     // 止まった回はここに出す。下に置くと、上だけ読んで全部走り切った日と見分けが付かない。
     ...(cut.length > 0 ? [`- **止まった ${cut.length}回** ${tally(cut.map((c) => c.cutOff ?? ""))}`] : []),
     `- 動いた ${entries.length}回${ms > 0 ? ` / 計${took(ms)}` : ""}`,
-    `- 推論 ${runCount}run / 出力${tok(outTok)}`,
+    ...(unknown > 0 ? [`- 未帰属 ${unknown}回: 数量不明`] : []),
+    ...(unknown > 0 && attributed.length > 0 ? [`- 集計対象 IDあり ${attributed.length}回`] : []),
+    `- 推論 ${attributed.length > 0 || unknown === 0 ? `${runCount}run / 出力${tok(outTok)}` : "不明(未帰属)"}`,
     `- 道具 ${tools.length > 0 ? tally(tools, {}, 6) : "記録なし"}`,
-    `- 残った ${leftLine(left, "なし")}`,
+    `- 残った ${attributed.length > 0 || unknown === 0 ? leftLine(left, "なし") : "不明(未帰属)"}`,
+    // 他の行は前の日ぶんの集計だが、これだけは出す時点の残数。混ぜて読まれないよう明示する。
+    ...(pending > 0 ? [`- 承認待ち ${pending}件(現在)`] : []),
   ].join("\n")
 }
 
@@ -370,7 +372,7 @@ export const renderJournal = (entries: readonly Entry[]): string => {
       `  条件    ${e.reasons.join(" / ") || "実行条件の記録なし"}`,
       `  実働    ${workLine(e)}`,
       `  道具    ${e.tools?.length ? runs(e.tools, e.toolTargets ?? {}) : "記録なし(この回より前)"}`,
-      `  残った  ${leftLine(e.left)}`,
+      `  残った  ${e.left === undefined ? "不明(未帰属)" : leftLine(e.left)}`,
       `  言った  ${saidLine(e.said)}`,
       ...(e.confusion ? [`  戸惑い  ${e.confusion}`] : []),
     ].join("\n"),

@@ -5,13 +5,16 @@
  */
 
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
+import * as Effect from "effect/Effect"
 import { test } from "vitest"
 import { configureApp, PROJECT_ROOT } from "../../src/core/config.ts"
-import { GATE, repoRoot, SELFDEV, SELFDEV_PURPOSE } from "../../src/core/selfdev.ts"
+import { GATE, repoRoot, SELFDEV, selfdev } from "../../src/core/selfdev.ts"
+import { Proposals } from "../../src/services/Proposals.ts"
 import { runDir } from "../../src/services/Sandbox.ts"
+import { withHarness } from "../helpers.ts"
 
 test("repoRoot はこのリポジトリの根を指す(cwd に依らない)", () => {
   assert.equal(resolve(repoRoot()), PROJECT_ROOT)
@@ -50,9 +53,31 @@ test("SELFDEV は runDir で名前が変わらない(DB の登録名とディレ
   }
 })
 
-test("次の cycle が読む一行に、ゲートの通し方と net の指定が入っている", () => {
-  // 一覧に出るのは名前とこの一行だけ。ここに無い手順は次の回には存在しない。
-  assert.ok(SELFDEV_PURPOSE.includes(GATE))
-  assert.ok(SELFDEV_PURPOSE.includes("net"))
-  assert.ok(SELFDEV_PURPOSE.includes(repoRoot()))
+test("selfdevは公開通信の承認前にcloneを変更せず、取得と検査を別々に申請する", async () => {
+  const prev = process.env.FAMULUS_RUNS
+  const root = mkdtempSync(join(tmpdir(), "fam-selfdev-approval-"))
+  process.env.FAMULUS_RUNS = root
+  try {
+    configureApp()
+    const clone = join(runDir(SELFDEV), "famulus")
+    mkdirSync(clone)
+    const marker = join(clone, "uncommitted")
+    writeFileSync(marker, "keep")
+    await withHarness(async (h) => {
+      await h.run(selfdev({ fresh: true }))
+      assert.equal(readFileSync(marker, "utf8"), "keep")
+      const requests = await h.run(Effect.flatMap(Proposals, (p) => p.list()))
+      assert.equal(requests.length, 2)
+      assert.ok(requests.every((request) => request.status === "proposed"))
+      assert.deepEqual(
+        new Set(requests.map((request) => JSON.parse(request.payload).operation)),
+        new Set(["selfdev-install", "selfdev-gate"]),
+      )
+    })
+  } finally {
+    if (prev === undefined) delete process.env.FAMULUS_RUNS
+    else process.env.FAMULUS_RUNS = prev
+    configureApp()
+    rmSync(root, { recursive: true, force: true })
+  }
 })

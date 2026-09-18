@@ -116,6 +116,64 @@ test("completeCycle は cycle 自身の書き込みも消費する(同じ入力�
   })
 })
 
+test("締めの時刻保存に失敗した回は位置も冷却も進めず、再試行でまとめて確定する", async () => {
+  await withHarness(async (h) => {
+    const before = await h.run(
+      Effect.gen(function* () {
+        const db = yield* Db
+        const att = yield* Attention
+        const mem = yield* Memory
+        yield* att.completeCycle({ active: true, at: "2026-08-08T08:00:00Z", reasonKey: "previous" })
+        yield* mem.remember({ source: "owner", content: "まだ処理していない" })
+        const state = yield* db.all("SELECT key,value FROM schema_meta WHERE key LIKE 'cycle:%' ORDER BY key")
+        yield* db.run(`CREATE TRIGGER fail_cycle_last BEFORE INSERT ON schema_meta
+          WHEN NEW.key='cycle:last' BEGIN SELECT RAISE(ABORT,'cycle last failure'); END`)
+        return { state, plan: yield* att.planCycle(T0) }
+      }),
+    )
+    const upto = before.plan.newEvents.at(-1)?.rowid ?? before.plan.cursor
+    const complete = Effect.flatMap(Attention, (att) =>
+      att.completeCycle({ active: true, at: "2026-08-08T09:00:00Z", reasonKey: "new-input", upto }),
+    )
+    assert.equal((await h.fail(complete))._tag, "DbFailed")
+    assert.deepEqual(
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.all("SELECT key,value FROM schema_meta WHERE key LIKE 'cycle:%' ORDER BY key"),
+        ),
+      ),
+      before.state,
+    )
+    assert.deepEqual((await h.run(planAt(T0))).newEvents, before.plan.newEvents)
+    await h.run(Effect.flatMap(Db, (db) => db.run("DROP TRIGGER fail_cycle_last")))
+    await h.run(complete)
+    assert.equal((await h.run(planAt(T0))).newEvents.length, 0)
+    assert.deepEqual(
+      await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.all("SELECT key,value FROM schema_meta WHERE key LIKE 'cycle:%' ORDER BY key"),
+        ),
+      ),
+      [
+        { key: "cycle:cursor", value: String(upto) },
+        { key: "cycle:last", value: "2026-08-08T09:00:00Z" },
+        { key: "cycle:last_active", value: "2026-08-08T09:00:00Z" },
+        { key: "cycle:reason_key", value: "new-input" },
+        { key: "cycle:repeat", value: "1" },
+      ],
+    )
+    // 古い判定が後から締まっても、処理済み入力と冷却の起点を戻さない。
+    await h.run(
+      Effect.flatMap(Attention, (att) =>
+        att.completeCycle({ active: true, upto: 0, at: "2026-08-08T08:30:00Z" }),
+      ),
+    )
+    const stale = await h.run(planAt(T0))
+    assert.equal(stale.newEvents.length, 0)
+    assert.equal(stale.sinceLastActiveHours, 0)
+  })
+})
+
 test("自分が動く番の watch は実行条件になる — ただしcooldown中は実行しない", async () => {
   await withHarness(async (h) => {
     await h.run(

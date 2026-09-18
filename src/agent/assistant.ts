@@ -4,9 +4,8 @@
  *   統治        … モデル呼び出し1回ごとのゲートは src/model/governed.ts の middleware が持つ。
  *                 ここには置かない — 道具ループは1回のターンで何度もモデルを呼ぶので、
  *                 開始時に1回の位置に置くと検査が最初の1回きりになる。
- *   propose     … 外に出る行為は提案を1件書くだけ。その提案を実行する経路は無い。
- *                 ユーザーが自分で動かす。
- *                 隔離したコンテナの中で完結する `shell` はこの制限に掛からない。
+ *   propose     … 一般の外部操作は提案止まり。Sandboxの公開通信だけは専用payloadの単回承認を照合して実行する。
+ *                 オフラインの `shell` はコンテナ内で実行する。
  *   respond()   … 今答えている入力そのものを observe イベントとして DB に落としてから走る。
  *
  * 道具は `createAssistant()` が1ターンぶんの状態をクロージャで保持して作る。
@@ -45,7 +44,7 @@ import { run } from "../runtime.ts"
 import { Attention } from "../services/Attention.ts"
 import { CycleLease, type CycleLeaseToken } from "../services/CycleLease.ts"
 import { Db } from "../services/Db.ts"
-import { Discord } from "../services/Discord.ts"
+import { Discord, type Enqueue } from "../services/Discord.ts"
 import { Drafts, deliveryKey } from "../services/Drafts.ts"
 import { ExecutionKernel } from "../services/ExecutionKernel.ts"
 import { buildFencedPrompt, currentLane, Governance } from "../services/Governance.ts"
@@ -54,6 +53,7 @@ import { Memory, renderRecall } from "../services/Memory.ts"
 import { Proposals } from "../services/Proposals.ts"
 import { Research } from "../services/Research.ts"
 import { type RunResult, runDir, runInSandbox } from "../services/Sandbox.ts"
+import { prepareSandboxNetwork } from "../services/SandboxNetwork.ts"
 import { defaultSources, renderHits, SOURCE_MENU, searchSources } from "../services/Search.ts"
 import { fetchPage } from "../services/Web.ts"
 import {
@@ -711,6 +711,48 @@ const sendFigure = async (
   return `図を出した(${name})。返信と一緒に届く。本文で図に触れてよい。`
 }
 
+/** 承認カードに載せる中身。`propose` の入力そのもの(完全性ゲート5要素を含む)。 */
+export interface ProposalCard {
+  readonly summary: string
+  readonly assessment: string
+  readonly ask: string
+  readonly what: string
+  readonly when: string
+  readonly who: "famulus" | "human"
+  readonly how: string
+  readonly howVerified: string
+}
+
+/**
+ * 提案を押せる形で出す1通。チャンネル側は判断に要る2行だけにして、根拠と5要素はスレッドへ置く。
+ *
+ * 却下の理由もスレッドに書ける — 絵文字1つには理由が乗らず、`deny` は理由を必須にしてある。
+ * 押した時点では `REACTION_DENY_REASON` が入り、スレッドの文は owner の発言として別に届く。
+ */
+export const proposalCard = (id: string, data: ProposalCard): Enqueue => ({
+  purpose: "proposal",
+  dedupeKey: id,
+  text: `**${data.summary}**\n${data.ask}\n✅ 承認 / 🛑 却下(理由はスレッドへ)`,
+  // 押してもらわないと止まったままなので、ミュートしてある場所でも呼ぶ。
+  ping: true,
+  thread: data.summary,
+  threadNotes: [
+    `${data.assessment}\n\n何を: ${data.what}\nいつ: ${data.when}\n誰が: ${data.who}\nどう: ${data.how}\n確認: ${data.howVerified}`,
+  ],
+  taps: [
+    {
+      emoji: "✅",
+      reply: `提案 ${id.slice(0, 8)}「${data.summary}」→ 承認`,
+      proposal: { id, decision: "approve" },
+    },
+    {
+      emoji: "🛑",
+      reply: `提案 ${id.slice(0, 8)}「${data.summary}」→ 却下`,
+      proposal: { id, decision: "deny" },
+    },
+  ],
+})
+
 export const gateTools = <T extends Record<string, unknown>>(tools: T, gate: ToolGate): T => {
   if (!gate) return tools
   return Object.fromEntries(
@@ -735,6 +777,16 @@ export const gateTools = <T extends Record<string, unknown>>(tools: T, gate: Too
     }),
   ) as T
 }
+
+const requestSandboxNetwork = (...args: Parameters<typeof prepareSandboxNetwork>) =>
+  Effect.gen(function* () {
+    const permission = yield* prepareSandboxNetwork(...args)
+    if (!permission.approved) {
+      const discord = yield* Discord
+      yield* discord.enqueue(proposalCard(permission.id, permission.proposal))
+    }
+    return permission
+  })
 
 function buildTools(state: TurnState, gate: ToolGate) {
   const tools = {
@@ -1166,8 +1218,14 @@ function buildTools(state: TurnState, gate: ToolGate) {
             // 完全性ゲート5要素(what/when/who/how/howVerified)は入力スキーマが強制している。
             // 名指しできない案を提案にしない規律を、指示ではなく schema 側に置いてある。
             const proposals = yield* Proposals
+            const discord = yield* Discord
             const id = yield* proposals.create(data)
-            return `提案 ${id.slice(0, 8)} を登録した。実行はしていない — 承認(fam approve)を待つ。`
+            const outbound = yield* discord.enqueue(proposalCard(id, data))
+            // 承認しても実行はされない。ここで「承認を待つ」以上を書くと、押した後に何か動くと読める。
+            const short = id.slice(0, 8)
+            return outbound
+              ? `提案 ${short} を登録し、✅ 承認 / 🛑 却下 を押せる形で出した。実行はしていない。`
+              : `提案 ${short} を登録した。Discord の出し先が無いので、承認は fam approve から。実行はしていない。`
           }),
         ),
     }),
@@ -1363,7 +1421,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
         "取得したコードや手順を実際に動かし、停止した処理段階・失敗した実行経路・要った時間を記録するのに使う。" +
         "隔離されたコンテナ(docker)の中で走るので、**ユーザーのファイルにも DB にも触れない**。" +
         "書けるのは永続作業ディレクトリ(workspace)だけで、コンテナは毎回捨てられる — 残るのは workspace に置いたファイルだけ。" +
-        "既定では外部ネットワークへ接続できない。clone や install が要るときだけ net を true にする。trueでも接続先は公開IPだけで、ホスト・LAN・private addressには届かない。" +
+        "既定はオフライン。net=true は公開通信の単回承認を申請し、未承認なら実行しない。同じコマンドとworkspaceで呼び直すと承認を1回消費する。通信先は公開IPだけで、ホスト・LANには届かない。" +
         "入っているもの: node / npm / npx / python3 / pip / venv / uv / git / curl / jq / rg / make / gcc。" +
         "**apt は通らない**(非 root)。python は uv か pip、それ以外は npx で足りる範囲でやる。" +
         "取得したパッケージのキャッシュ(npm / pip / uv)は workspace 間で共有されるので、二度目は取得し直さない。" +
@@ -1393,7 +1451,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
             v.pipe(
               v.boolean(),
               v.description(
-                "外部ネットワークへの接続を許可するか。clone / install が要るときだけ true。既定は false。",
+                "公開通信を必要とするか。true はコマンド・workspaceを固定した単回承認が必要。承認待ちなら実行せず返る。既定は false。",
               ),
             ),
           ),
@@ -1417,6 +1475,8 @@ function buildTools(state: TurnState, gate: ToolGate) {
             }
             const mem = yield* Memory
             const dir = runDir(workspace)
+            const permission = net ? yield* requestSandboxNetwork(command, dir) : undefined
+            if (permission && !permission.approved) return permission.message
             // DB に載せる名前は正規化後のほう。モデルが書いた綴りをそのまま入れると、
             // 一覧の名前で `shell` を呼び直したときに別のディレクトリが作成される。
             const name = basename(dir)
@@ -1427,6 +1487,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
                 workDir: dir,
                 ...(abortSignal ? { signal: abortSignal } : {}),
                 ...(net ? { net } : {}),
+                ...(permission?.approved ? { networkApproval: permission.approval } : {}),
                 // コンテナの上限より締切のほうが近いなら、締切に合わせる。コンテナの中で時間切れになれば
                 // 出力は返るが、cycle ごと切られると走った跡が1行も残らない。
                 ...(Number.isFinite(left) ? { timeoutMs: left - RUN_RESERVE_MS } : {}),
@@ -1458,7 +1519,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
       description:
         "仮説をSandboxで検証し、commandとcheckを別々に実行してresearch dossierへ固定する。" +
         "commandの終了コード0だけではverifiedにならず、checkが終了コード0のときだけverifiedになる。" +
-        "記事や公開判断の根拠に実験を使うときはshellではなくこれを使う。",
+        "記事や公開判断の根拠に実験を使うときはshellではなくこれを使う。net=true はcommandとcheckそれぞれの単回承認が揃うまで実行しない。",
       inputSchema: vs(
         v.object({
           question: v.pipe(v.string(), v.description("この実験で答える問い。")),
@@ -1491,11 +1552,26 @@ function buildTools(state: TurnState, gate: ToolGate) {
             if (left < RUN_RESERVE_MS + MIN_RUN_MS * 2) {
               return `実験しなかった: ${remainingLabel()}`
             }
+            const commandPermission = net
+              ? yield* requestSandboxNetwork(command, dir, "experiment-command")
+              : undefined
+            const checkPermission = net
+              ? yield* requestSandboxNetwork(checkCommand, dir, "experiment-check")
+              : undefined
+            if (
+              (commandPermission && !commandPermission.approved) ||
+              (checkPermission && !checkPermission.approved)
+            ) {
+              return [commandPermission, checkPermission]
+                .flatMap((permission) => (permission && !permission.approved ? [permission.message] : []))
+                .join("\n")
+            }
             const commandRun = yield* Effect.promise(() =>
               runInSandbox(command, {
                 workDir: dir,
                 ...(abortSignal ? { signal: abortSignal } : {}),
                 ...(net ? { net } : {}),
+                ...(commandPermission?.approved ? { networkApproval: commandPermission.approval } : {}),
                 ...(Number.isFinite(left) ? { timeoutMs: Math.max(MIN_RUN_MS, left / 2) } : {}),
               }),
             )
@@ -1507,6 +1583,7 @@ function buildTools(state: TurnState, gate: ToolGate) {
                   workDir: dir,
                   ...(abortSignal ? { signal: abortSignal } : {}),
                   ...(net ? { net } : {}),
+                  ...(checkPermission?.approved ? { networkApproval: checkPermission.approval } : {}),
                   ...(Number.isFinite(afterCommand)
                     ? { timeoutMs: Math.max(MIN_RUN_MS, afterCommand - RUN_RESERVE_MS) }
                     : {}),

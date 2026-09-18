@@ -19,6 +19,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import * as Effect from "effect/Effect"
 import { runDir, runInSandbox } from "../services/Sandbox.ts"
+import { prepareSandboxNetwork } from "../services/SandboxNetwork.ts"
 import { keepWorkspace } from "./workspaces.ts"
 
 /** workspace の名前。プロンプトにもこの名前で出る。 */
@@ -52,7 +53,7 @@ export const GATE = `cd ${CLONE} && ${BUN} run gate`
 
 export const SELFDEV_PURPOSE =
   `famulus のソース(${repoRoot()} の clone)。famulus の不具合はここで修正する。` +
-  `ゲートは \`${GATE}\`。**net を true にする** — 検査のうち数件が名前解決を要る。` +
+  `ゲートは \`${GATE}\`。net=true はコマンドとworkspaceごとの単回承認が必要。` +
   `直したものは \`git -C ${CLONE} diff\` で取り出してユーザーに渡す — ` +
   `**ここでの変更は動いている本体には入らない。**`
 
@@ -77,6 +78,14 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
     const ws = runDir(SELFDEV)
     const clone = join(ws, CLONE)
     const lines: string[] = []
+    const installCommand = `cd ${CLONE} && ${INSTALL}`
+    const installPermission = yield* prepareSandboxNetwork(installCommand, ws, "selfdev-install")
+    const gatePermission = opts?.skipGate ? undefined : yield* prepareSandboxNetwork(GATE, ws, "selfdev-gate")
+    if (!installPermission.approved || (gatePermission && !gatePermission.approved)) {
+      return [installPermission, gatePermission]
+        .flatMap((permission) => (permission && !permission.approved ? [permission.message] : []))
+        .join("\n")
+    }
 
     if (opts?.fresh === true && existsSync(clone)) {
       rmSync(clone, { recursive: true, force: true })
@@ -110,7 +119,12 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
     // reset で package.json / bun.lock が変わり得る。node_modules の有無だけでは新しい依存を検知できない。
     // bun の install は lockfile と既存 tree が一致していれば差分だけを見るので、毎回同期する。
     const install = yield* Effect.promise(() =>
-      runInSandbox(`cd ${CLONE} && ${INSTALL}`, { workDir: ws, net: true, timeoutMs: INSTALL_MS }),
+      runInSandbox(installCommand, {
+        workDir: ws,
+        net: true,
+        networkApproval: installPermission.approval,
+        timeoutMs: INSTALL_MS,
+      }),
     )
     lines.push(`依存の取得: 終了コード ${install.exitCode}(${Math.round(install.elapsedMs / 1000)}秒)`)
     if (install.exitCode !== 0) return [...lines, "", install.output].join("\n")
@@ -127,7 +141,12 @@ export const selfdev = (opts?: { fresh?: boolean; skipGate?: boolean }) =>
     // 「ゲート: 終了コード 0」と出しながら検査が 3 件落ちている状態を作った。
     // 長さは runInSandbox が末尾 12,000 字で切る。
     const gate = yield* Effect.promise(() =>
-      runInSandbox(GATE, { workDir: ws, net: true, timeoutMs: INSTALL_MS }),
+      runInSandbox(GATE, {
+        workDir: ws,
+        net: true,
+        ...(gatePermission?.approved ? { networkApproval: gatePermission.approval } : {}),
+        timeoutMs: INSTALL_MS,
+      }),
     )
     lines.push(`ゲート: 終了コード ${gate.exitCode}(${Math.round(gate.elapsedMs / 1000)}秒)`)
     return [...lines, "", gate.output].join("\n")

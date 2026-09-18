@@ -26,6 +26,13 @@ const MIGRATIONS: readonly Migration[] = [
   migration(2, "discord-ack", new URL("./migrations/0002-discord-ack.sql", import.meta.url)),
   migration(3, "recall-vec", new URL("./migrations/0003-recall-vec.sql", import.meta.url)),
   migration(4, "draft-delivery-key", new URL("./migrations/0004-draft-delivery-key.sql", import.meta.url)),
+  migration(5, "redaction-quotes", new URL("./migrations/0005-redaction-quotes.sql", import.meta.url)),
+  migration(6, "cycle-attribution", new URL("./migrations/0006-cycle-attribution.sql", import.meta.url)),
+  migration(
+    7,
+    "sandbox-network-approval",
+    new URL("./migrations/0007-sandbox-network-approval.sql", import.meta.url),
+  ),
 ]
 
 const sqlString = (value: string): string => `'${value.replaceAll("'", "''")}'`

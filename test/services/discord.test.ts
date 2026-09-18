@@ -11,12 +11,14 @@ import { createServer, type IncomingMessage, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import * as Effect from "effect/Effect"
 import { test } from "vitest"
+import { type ProposalCard, proposalCard } from "../../src/agent/assistant.ts"
 import { drainInbox } from "../../src/inbox.ts"
 import { Attention } from "../../src/services/Attention.ts"
 import { Db } from "../../src/services/Db.ts"
 import { Discord, type Enqueue } from "../../src/services/Discord.ts"
 import { Drafts, deliveryKey } from "../../src/services/Drafts.ts"
 import { Memory } from "../../src/services/Memory.ts"
+import { Proposals, REACTION_DENY_REASON } from "../../src/services/Proposals.ts"
 import { Research } from "../../src/services/Research.ts"
 import { withHarness } from "../helpers.ts"
 
@@ -1972,4 +1974,124 @@ test("添付つきの投稿は multipart で送り、参照切れの添付は落
     else process.env.FAMULUS_DATA = savedData
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+const PROPOSAL = {
+  summary: "8/24 10:00 病院をカレンダーに入れる",
+  assessment: "本人が入れろと言っている",
+  ask: "入れてよいか",
+  what: "primary へ1件入れる",
+  when: "承認の次の回",
+  who: "famulus" as const,
+  how: "calendar_add に渡す",
+  howVerified: "calendar で読み直す",
+}
+
+/** 出した1通の messageId。押されたことにするために要る。 */
+const postedMessageId = (id: string, data: ProposalCard = PROPOSAL) =>
+  Effect.gen(function* () {
+    const discord = yield* Discord
+    const outbound = yield* discord.enqueue(proposalCard(id, data))
+    assert.ok(outbound)
+    yield* discord.flushQueued()
+    const done = yield* discord.getOutbound(outbound.id)
+    const receipt = done?.actions.find((a) => a.kind === "message")?.receipt as
+      | { messageId?: unknown }
+      | undefined
+    return String(receipt?.messageId)
+  })
+
+const press = (dc: Awaited<ReturnType<typeof fakeDiscord>>, messageId: string, emoji: string): void => {
+  const hit = dc.msgs.find((m) => m.id === messageId)?.reactions?.find((r) => r.emoji.name === emoji)
+  assert.ok(hit, `付いていない絵文字を押そうとした: ${emoji}`)
+  hit.count = 2
+}
+
+test("提案のリアクションは承認と却下をそのまま提案へ適用する", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, undefined, async () => {
+    await withHarness(async (h) => {
+      const { okId, ngId, okMsg, ngMsg } = await h.run(
+        Effect.gen(function* () {
+          const proposals = yield* Proposals
+          const other = { ...PROPOSAL, summary: "別の件" }
+          const okId = yield* proposals.create(PROPOSAL)
+          const ngId = yield* proposals.create(other)
+          return {
+            okId,
+            ngId,
+            okMsg: yield* postedMessageId(okId),
+            ngMsg: yield* postedMessageId(ngId, other),
+          }
+        }),
+      )
+      // 判断に要るものがチャンネル側の1通に載り、根拠と5要素はスレッドへ落ちる。
+      const posted = dc.msgs.find((m) => m.id === okMsg)?.content ?? ""
+      assert.match(posted, /^\*\*8\/24 10:00 病院をカレンダーに入れる\*\*$/m)
+      assert.match(posted, /^入れてよいか$/m)
+      assert.match(posted, /^✅ 承認 \/ 🛑 却下\(理由はスレッドへ\)$/m)
+      const note = dc.hits.find(
+        (hit) => hit.method === "POST" && String(hit.body?.content ?? "").includes("何を: "),
+      )
+      assert.match(String(note?.body?.content), /いつ: 承認の次の回/)
+      assert.match(String(note?.body?.content), /確認: calendar で読み直す/)
+
+      press(dc, okMsg, "✅")
+      press(dc, ngMsg, "🛑")
+      assert.equal(await h.run(drainInbox), 2)
+
+      const [ok, ng] = await h.run(
+        Effect.flatMap(Proposals, (proposals) => Effect.all([proposals.get(okId), proposals.get(ngId)])),
+      )
+      assert.equal(ok?.status, "approved")
+      assert.equal(ng?.status, "denied")
+      // deny は理由が必須。絵文字1つには乗らないので、押した事実そのものを理由に置く。
+      assert.equal(ng?.deny_reason, REACTION_DENY_REASON)
+      const actions = await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.all("SELECT proposal_id, action, actor_ref FROM proposal_actions ORDER BY action"),
+        ),
+      )
+      assert.deepEqual(
+        actions.map((a) => [a.proposal_id, a.action, a.actor_ref]),
+        [
+          [okId, "approve", "owner-discord"],
+          [ngId, "deny", null],
+        ],
+      )
+    })
+  })
+})
+
+test("決定済みの提案を押しても受信は止まらない — 適用できなかったことだけ残る", async () => {
+  const dc = await fakeDiscord()
+  await wired(dc, undefined, async () => {
+    await withHarness(async (h) => {
+      const { id, messageId } = await h.run(
+        Effect.gen(function* () {
+          const proposals = yield* Proposals
+          const id = yield* proposals.create(PROPOSAL)
+          const messageId = yield* postedMessageId(id)
+          yield* proposals.deny(id, "先に CLI で却下した")
+          return { id, messageId }
+        }),
+      )
+      press(dc, messageId, "✅")
+      // 押した文(owner 発言)は入る。落ちると、同じ回に読んだ他の発言まで消える。
+      assert.equal(await h.run(drainInbox), 1)
+
+      const after = await h.run(Effect.flatMap(Proposals, (proposals) => proposals.get(id)))
+      assert.equal(after?.status, "denied")
+      assert.equal(after?.deny_reason, "先に CLI で却下した")
+      const noted = await h.run(
+        Effect.flatMap(Db, (db) =>
+          db.all(
+            "SELECT search_text FROM events WHERE source='system' AND search_text LIKE '%適用できなかった%'",
+          ),
+        ),
+      )
+      assert.equal(noted.length, 1)
+      assert.match(String(noted[0]?.search_text), /承認は適用できなかった/)
+    })
+  })
 })
